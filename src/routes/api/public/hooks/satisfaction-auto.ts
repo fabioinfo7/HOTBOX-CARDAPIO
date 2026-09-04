@@ -1,5 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { sendSatisfactionForOrder } from "@/lib/satisfaction.functions";
 
 // Chamado pelo pg_cron a cada minuto. Envia automaticamente o convite de
 // avaliação quando já se passaram pelo menos 10 minutos desde a entrega.
@@ -60,6 +59,8 @@ export const Route = createFileRoute("/api/public/hooks/satisfaction-auto")({
         const done = new Set((feedbackRows ?? [])
           .filter((f: any) => f.order_id && (f.sent_at || f.submitted_at))
           .map((f: any) => f.order_id));
+
+        const { sendSatisfactionForOrder } = await import("@/lib/satisfaction.server");
 
         let sent = 0;
         let failed = 0;
