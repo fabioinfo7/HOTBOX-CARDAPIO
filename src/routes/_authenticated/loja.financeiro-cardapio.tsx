@@ -120,3 +120,4 @@ function DigitalMenuFinancePage() {
       <DialogFooter className="border-t px-6 py-4 sm:justify-between sm:px-8"><Button variant="ghost" className="gap-2 text-destructive" onClick={hideRecord} disabled={saving}><Trash2 className="size-4" /> Excluir da lista</Button><Button variant="outline" onClick={() => setSelected(null)}>Fechar</Button></DialogFooter></>}</DialogContent></Dialog>
   </div>;
 }
+//
