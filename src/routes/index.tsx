@@ -298,7 +298,11 @@ function CustomerHome() {
       const data = storeResult?.data;
       if (data) {
         setStoreName(data.store_name ?? "HotBox Delivery");
-        setDeliveryFee(Number(data.default_delivery_fee ?? 0));
+        // Não sobrescreve uma taxa de entrega já validada nesta aba ao atualizar a página.
+        // A validação por CEP/bairro salva a taxa em sessionStorage; o carregamento das
+        // configurações acontece depois e antes acabava trocando essa taxa pela taxa padrão.
+        const savedArea = readAreaAccess();
+        setDeliveryFee(savedArea ? Number(savedArea.deliveryFee || 0) : Number(data.default_delivery_fee ?? 0));
         setDeliveryTime(data.estimated_delivery_time_minutes ?? null);
         setBannerUrl(data.banner_image_url ?? null);
         setInfinitepayEnabled((data as any).infinitepay_enabled === true);
@@ -345,6 +349,40 @@ function CustomerHome() {
       setConfigLoaded(true);
     });
   }, []);
+
+  // Após o refresh, reconfirma a taxa salva usando a configuração ATUAL da loja.
+  // Isso mantém o valor correto no banner e, ao mesmo tempo, atualiza a taxa caso o
+  // administrador tenha alterado o preço do bairro/faixa de km desde a última consulta.
+  useEffect(() => {
+    if (!configLoaded) return;
+    const saved = readAreaAccess();
+    if (!saved?.neighborhood) return;
+
+    let cancelled = false;
+    void quoteSiteDelivery({
+      data: {
+        neighborhood: saved.neighborhood,
+        street: saved.street || null,
+        number: saved.number || null,
+        city: saved.city || null,
+      },
+    })
+      .then((quote: any) => {
+        if (cancelled || !quote?.supported || quote?.quoteUnavailable || quote?.fee == null) return;
+        const fee = Number(quote.fee);
+        if (!Number.isFinite(fee)) return;
+        setDeliveryFee(fee);
+        setDeliveryPricingMode(quote?.pricingMode === "distance" ? "distance" : "neighborhood");
+        setDeliveryDistanceKm(quote?.distanceKm == null ? null : Number(quote.distanceKm));
+        const neighborhood = String(quote.neighborhood || saved.neighborhood);
+        setValidatedNeighborhood(neighborhood);
+        setForm((current) => ({ ...current, neighborhood }));
+        saveAreaAccess({ ...saved, neighborhood, deliveryFee: fee, savedAt: Date.now() });
+      })
+      .catch((error) => console.error("[cardapio] falha ao reconfirmar taxa após refresh", error));
+
+    return () => { cancelled = true; };
+  }, [configLoaded]);
 
   useEffect(() => {
     if (form.payment !== paymentProvider) setForm((current) => ({ ...current, payment: paymentProvider }));
