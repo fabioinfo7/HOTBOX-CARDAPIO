@@ -115,6 +115,7 @@ type PaymentChoice = "online" | "delivery_card" | "delivery_pix";
 type AreaStatus = "idle" | "checking" | "needs_number" | "supported" | "unsupported" | "error";
 
 import hotboxLogoUrl from "@/assets/logo-hotbox.jpeg";
+import { MetaPixelInjector } from "@/components/meta-pixel-injector";
 
 const HOTBOX_LOGO_URL = hotboxLogoUrl;
 const WHATSAPP_URL = "https://wa.me/5521984296288?text=" + encodeURIComponent("Olá! Preciso de ajuda com meu pedido no cardápio digital da Hotbox.");
@@ -1740,7 +1741,9 @@ function CustomerHome() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f7f7f7] pb-28">
+    <>
+      <MetaPixelInjector placement="menu" />
+      <div className="min-h-screen bg-[#f7f7f7] pb-28">
       <div className="sticky top-0 z-50 border-b border-black/5 bg-white/95 px-4 py-3 backdrop-blur">
         <div className="mx-auto flex max-w-2xl items-center gap-3">
           <Link to="/" className="flex min-w-0 items-center gap-2.5">
@@ -1982,5 +1985,6 @@ function CustomerHome() {
         </div>
       </nav>
     </div>
+    </>
   );
 }
