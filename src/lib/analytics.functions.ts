@@ -102,41 +102,82 @@ export const trackAnalyticsEvent = createServerFn({ method: "POST" })
       const { error: sessionInsertError } = await (supabaseAdmin as any)
         .from("analytics_sessions")
         .insert(sessionPayload);
-      if (sessionInsertError && String(sessionInsertError.code) === "23505") {
-        const updatePayload = { ...sessionPayload };
-        delete updatePayload.id;
-        delete updatePayload.visitor_id;
-        delete updatePayload.entry_path;
-        delete updatePayload.landing_referrer;
-        delete updatePayload.source;
-        delete updatePayload.medium;
-        delete updatePayload.campaign;
-        delete updatePayload.term;
-        delete updatePayload.content;
-        delete updatePayload.click_id;
-        await (supabaseAdmin as any).from("analytics_sessions").update(updatePayload).eq("id", sessionId);
+
+      if (sessionInsertError) {
+        if (String(sessionInsertError.code) === "23505") {
+          const updatePayload = { ...sessionPayload };
+          delete updatePayload.id;
+          delete updatePayload.visitor_id;
+          delete updatePayload.entry_path;
+          delete updatePayload.landing_referrer;
+          delete updatePayload.source;
+          delete updatePayload.medium;
+          delete updatePayload.campaign;
+          delete updatePayload.term;
+          delete updatePayload.content;
+          delete updatePayload.click_id;
+
+          const { error: sessionUpdateError } = await (supabaseAdmin as any)
+            .from("analytics_sessions")
+            .update(updatePayload)
+            .eq("id", sessionId);
+
+          if (sessionUpdateError) {
+            console.error("[analytics] session update failed", {
+              code: sessionUpdateError.code,
+              message: sessionUpdateError.message,
+              details: sessionUpdateError.details,
+              hint: sessionUpdateError.hint,
+            });
+            return { ok: false, stage: "session_update", error: sessionUpdateError.message } as const;
+          }
+        } else {
+          console.error("[analytics] session insert failed", {
+            code: sessionInsertError.code,
+            message: sessionInsertError.message,
+            details: sessionInsertError.details,
+            hint: sessionInsertError.hint,
+          });
+          return { ok: false, stage: "session_insert", error: sessionInsertError.message } as const;
+        }
       }
 
-      await (supabaseAdmin as any).from("analytics_events").insert({
-        session_id: sessionId,
-        visitor_id: visitorId,
-        event_name: eventName,
-        event_category: trim(data.event_category, 100) || "engagement",
-        page_path: trim(data.page_path, 500),
-        page_title: trim(data.page_title, 500),
-        product_id: trim(data.product_id, 100),
-        product_name: trim(data.product_name, 300),
-        checkout_id: trim(data.checkout_id, 100),
-        order_id: trim(data.order_id, 100),
-        payment_method: trim(data.payment_method, 100),
-        value: data.value == null ? null : Number(data.value),
-        quantity: data.quantity == null ? null : Number(data.quantity),
-        properties: data.properties && typeof data.properties === "object" ? data.properties : {},
-      });
+      const { error: eventInsertError } = await (supabaseAdmin as any)
+        .from("analytics_events")
+        .insert({
+          session_id: sessionId,
+          visitor_id: visitorId,
+          event_name: eventName,
+          event_category: trim(data.event_category, 100) || "engagement",
+          page_path: trim(data.page_path, 500),
+          page_title: trim(data.page_title, 500),
+          product_id: trim(data.product_id, 100),
+          product_name: trim(data.product_name, 300),
+          checkout_id: trim(data.checkout_id, 100),
+          order_id: trim(data.order_id, 100),
+          payment_method: trim(data.payment_method, 100),
+          value: data.value == null ? null : Number(data.value),
+          quantity: data.quantity == null ? null : Number(data.quantity),
+          properties: data.properties && typeof data.properties === "object" ? data.properties : {},
+        });
+
+      if (eventInsertError) {
+        console.error("[analytics] event insert failed", {
+          code: eventInsertError.code,
+          message: eventInsertError.message,
+          details: eventInsertError.details,
+          hint: eventInsertError.hint,
+        });
+        return { ok: false, stage: "event_insert", error: eventInsertError.message } as const;
+      }
+
       return { ok: true } as const;
-    } catch (error) {
-      console.error("[analytics] track failed", error);
+    } catch (error: any) {
+      console.error("[analytics] track failed", {
+        message: error?.message || String(error),
+        stack: error?.stack,
+      });
       // Analytics must never break checkout/customer experience.
-      return { ok: false } as const;
+      return { ok: false, stage: "exception", error: error?.message || String(error) } as const;
     }
   });
