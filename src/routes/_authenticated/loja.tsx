@@ -44,6 +44,7 @@ import {
 } from "lucide-react";
 import { FreightApprovalPopup } from "@/components/freight-approval-popup";
 import { AutoPrintReceipt } from "@/components/auto-print-receipt";
+import { PwaInstallButton } from "@/components/pwa-install";
 
 import hotboxLogoUrl from "@/assets/logo-hotbox.jpeg";
 
@@ -137,6 +138,20 @@ function AdminLayout() {
   const [userId, setUserId] = useState<string>("");
   const [wide, setWide] = useState(getWideMode());
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(false);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const sync = () => setIsDesktop(mq.matches);
+    sync();
+    mq.addEventListener?.("change", sync);
+    return () => mq.removeEventListener?.("change", sync);
+  }, []);
+
+  useEffect(() => {
+    document.body.classList.add("hb-admin-active");
+    return () => document.body.classList.remove("hb-admin-active");
+  }, []);
 
   useEffect(() => {
     const handler = (e: any) => setWide(!!e.detail);
@@ -357,7 +372,19 @@ function AdminLayout() {
   }
 
   const isChatPage = loc.pathname.startsWith("/loja/chat");
-  const horizontal = wide || isChatPage;
+  const horizontal = isDesktop && (wide || isChatPage);
+
+  const mobileNav = [
+    { to: "/loja", label: "Pedidos", icon: ClipboardList, exact: true },
+    { to: "/loja/chat", label: "Chat", icon: MessageCircle },
+    { to: "/loja/produtos", label: "Cardápio", icon: Pizza },
+    { to: "/loja/financeiro-cardapio", label: "Financeiro", icon: WalletCards },
+    { to: "/loja/config", label: "Ajustes", icon: Settings },
+  ];
+
+  const mobileTitle =
+    mobileNav.find((item) => item.exact ? loc.pathname === item.to : loc.pathname.startsWith(item.to))?.label ||
+    (loc.pathname.includes("/pedido/") ? "Pedido" : "HOTBOX DELIVERY");
 
   return (
     <div className="min-h-screen bg-background lg:flex lg:flex-col">
@@ -365,7 +392,7 @@ function AdminLayout() {
       <AutoPrintReceipt />
       {/* botões de tela larga / tela cheia — fixos, aparecem em qualquer página */}
 
-      <div className="fixed right-3 top-3 z-50 flex gap-1.5">
+      <div className="fixed right-3 top-3 z-50 hidden gap-1.5 lg:flex">
         <Button
           variant="outline"
           size="icon"
@@ -499,26 +526,47 @@ function AdminLayout() {
             </Button>
           </aside>
 
-          <header className="sticky top-0 z-30 flex items-center justify-between border-b bg-foreground px-4 py-3 lg:hidden">
-            <Link to="/loja/dashboard" className="flex items-center gap-2">
-              <img src={HOTBOX_LOGO_URL} alt="HotBox Delivery" className="h-11 w-11 rounded-lg object-contain" />
-              <span className="font-display font-bold text-background">
-                HOT<span className="text-primary">BOX</span>
-              </span>
-            </Link>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={signOut}
-              className="text-background/70 hover:bg-background/10 hover:text-background"
-            >
-              <LogOut className="size-4" />
-            </Button>
+          <header className="hb-mobile-app-header sticky top-0 z-40 lg:hidden">
+            <div className="flex min-h-16 items-center gap-3 px-4">
+              <img src={HOTBOX_LOGO_URL} alt="HotBox Delivery" className="size-10 rounded-xl object-cover shadow-sm" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[10px] font-black uppercase tracking-[0.18em] text-white/55">HOTBOX DELIVERY</p>
+                <h1 className="truncate text-base font-black text-white">{mobileTitle}</h1>
+              </div>
+              <PwaInstallButton compact />
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={signOut}
+                className="size-9 rounded-full text-white/75 hover:bg-white/10 hover:text-white"
+                title="Sair"
+              >
+                <LogOut className="size-4" />
+              </Button>
+            </div>
           </header>
 
-          <main className="mx-auto max-w-7xl flex-1 px-4 py-6 lg:px-8">
+          <main className={`hb-admin-mobile-main mx-auto max-w-7xl flex-1 lg:px-8 lg:py-6 ${isChatPage ? "hb-admin-chat-main" : ""}`}>
             <Outlet />
           </main>
+
+          <nav className="hb-mobile-bottom-nav lg:hidden" aria-label="Navegação principal">
+            {mobileNav.map((item) => {
+              const Icon = item.icon;
+              const active = item.exact ? loc.pathname === item.to : loc.pathname.startsWith(item.to);
+              const isChat = item.to === "/loja/chat";
+              const count = isChat ? unreadChats : 0;
+              return (
+                <Link key={item.to} to={item.to} className={`hb-mobile-nav-item ${active ? "is-active" : ""}`}>
+                  <span className="relative">
+                    <Icon className="size-5" strokeWidth={active ? 2.6 : 2} />
+                    {count > 0 && <span className="hb-mobile-nav-badge">{count > 99 ? "99+" : count}</span>}
+                  </span>
+                  <span>{item.label}</span>
+                </Link>
+              );
+            })}
+          </nav>
         </div>
       )}
 
