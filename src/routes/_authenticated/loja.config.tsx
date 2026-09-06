@@ -1,158 +1,3120 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { brasiliaDateDaysAgo, brasiliaDateISO, brasiliaMonthStart } from "@/lib/brasilia-date";
+import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
-  ArrowLeft, CalendarDays, ChevronLeft, ChevronRight, CircleDollarSign, CreditCard,
-  Edit3, ExternalLink, Loader2, QrCode, RefreshCw, RotateCcw, Trash2, WalletCards,
+  Save,
+  Upload,
+  Volume2,
+  Zap,
+  Plus,
+  Trash2,
+  AlertTriangle,
+  RefreshCw,
+  FlaskConical,
+  CheckCircle2,
+  Bell,
+  ScrollText,
+  Info,
+  Pencil,
+  Check,
+  X,
 } from "lucide-react";
-import {
-  hideDigitalMenuFinanceRecordFn,
-  listDigitalMenuFinanceFn,
-  refundMercadoPagoFn,
-  updateDigitalMenuFinanceMetaFn,
-} from "@/lib/digital-menu-finance.functions";
+import { geocodeStoreAddressFn } from "@/lib/geocode.functions";
+import { wipeDataFn, type WipeCategory } from "@/lib/wipe-data.functions";
+import { runPaymentDiagnosticsFn } from "@/lib/payment-diagnostics.functions";
+import { testAlertFn } from "@/lib/test-alert.functions";
+import { usePopulateZonas } from "@/lib/use-populate-zonas";
+import wallpaperTeal from "@/assets/wallpapers/wallpaper-teal.jpg";
+import wallpaperBeige from "@/assets/wallpapers/wallpaper-beige.jpg";
 
-export const Route = createFileRoute("/_authenticated/loja/financeiro-cardapio")({ component: DigitalMenuFinancePage });
+const WIPE_OPTIONS: { value: WipeCategory; label: string }[] = [
+  { value: "pedidos", label: "Pedidos ativos e itens" },
+  { value: "historico", label: "Histórico (entregues, cancelados, com falha)" },
+  { value: "leads", label: "Leads" },
+  { value: "insumos", label: "Insumos (ficha técnica)" },
+  { value: "produtos", label: "Produtos (cardápio)" },
+  { value: "entregadores", label: "Entregadores" },
+  { value: "chat", label: "Conversas do chat" },
+];
 
-type PaymentFilter = "all" | "pix" | "card";
-type ProviderFilter = "all" | "mercadopago" | "infinitepay";
-type Summary = { transactions?: number; sales_total?: number; pix_total?: number; pix_count?: number; card_total?: number; card_count?: number; refund_total?: number; net_total?: number };
-type Tx = {
-  id: string; status: string; payment_provider: string | null; payment_kind: string;
-  customer_name: string; customer_phone: string; subtotal: number; delivery_fee: number;
-  coupon_code: string | null; coupon_discount: number; total: number; order_id: string | null;
-  paid_at: string | null; created_at: string; updated_at: string;
-  infinitepay_receipt_url: string | null; infinitepay_amount_cents: number | null;
-  infinitepay_paid_amount_cents: number | null; infinitepay_installments: number | null;
-  mercadopago_order_id: string | null; mercadopago_payment_id: string | null; mercadopago_order_status: string | null; mercadopago_order_status_detail: string | null;
-  mercadopago_status: string | null; mercadopago_status_detail: string | null;
-  mercadopago_payment_method_id: string | null; mercadopago_payment_type_id: string | null;
-  mercadopago_installments: number | null; mercadopago_transaction_amount: number | null;
-  mercadopago_net_received_amount: number | null; mercadopago_fee_amount: number | null;
-  mercadopago_refunded_amount: number | null; mercadopago_refund_status: string | null; mercadopago_refunded_at: string | null;
-  refunds?: Array<{ id:string; mercadopago_refund_id:string|null; refund_type:"total"|"partial"; amount:number; reason:string; status:string; requested_at:string; processed_at:string|null; error_message:string|null }>;
-  finance_reference: string | null; finance_note: string | null; order: any | null;
-};
-
-const PAGE_SIZE = 15;
-const brl = (value: unknown) => Number(value || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-const dtFmt = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
-const formatDate = (iso?: string | null) => iso ? dtFmt.format(new Date(iso)) : "—";
-
-function providerOf(tx: Tx): "mercadopago" | "infinitepay" {
-  return tx.payment_provider === "mercadopago" || tx.payment_kind.startsWith("mercadopago") ? "mercadopago" : "infinitepay";
-}
-function providerLabel(tx: Tx) { return providerOf(tx) === "mercadopago" ? "Mercado Pago" : "InfinitePay"; }
-function paymentLabel(tx: Tx) { return tx.payment_kind.endsWith("_pix") || tx.mercadopago_payment_method_id === "pix" ? "Pix" : "Cartão"; }
-function installments(tx: Tx) { return providerOf(tx) === "mercadopago" ? Number(tx.mercadopago_installments || 1) : Number(tx.infinitepay_installments || 1); }
-function grossAmount(tx: Tx) { return providerOf(tx) === "mercadopago" ? Number(tx.mercadopago_transaction_amount ?? tx.total) : Number(tx.infinitepay_amount_cents == null ? tx.total : tx.infinitepay_amount_cents / 100); }
-function customerPaid(tx: Tx) { return providerOf(tx) === "mercadopago" ? grossAmount(tx) : Number(tx.infinitepay_paid_amount_cents == null ? tx.total : tx.infinitepay_paid_amount_cents / 100); }
-function orderRef(tx: Tx) { const v = tx.order?.external_display_id || tx.order?.order_number; return v ? `#${String(v).replace(/^#/, "")}` : "Sem nº"; }
-
-function SummaryCard({ icon: Icon, label, value, helper }: { icon: any; label: string; value: string; helper: string }) {
-  return <Card className="overflow-hidden border-0 bg-card p-5 shadow-sm ring-1 ring-black/5"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.14em] text-muted-foreground">{label}</p><p className="mt-2 text-2xl font-black tracking-tight sm:text-3xl">{value}</p><p className="mt-1 text-xs text-muted-foreground">{helper}</p></div><div className="grid size-11 place-items-center rounded-2xl bg-primary/10 text-primary"><Icon className="size-5" /></div></div></Card>;
+/** Mesmo componente de dica usado em loja.zonas-entrega.tsx e
+ *  loja.precificacao.tsx — ícone "?" que explica o termo em palavras simples. */
+function InfoTip({ text }: { text: string }) {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button type="button" className="align-middle text-muted-foreground/70 hover:text-foreground" tabIndex={-1}>
+            <Info className="inline size-3.5" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-64 text-xs leading-relaxed">{text}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
 }
 
-function DigitalMenuFinancePage() {
-  const [from, setFrom] = useState(brasiliaMonthStart());
-  const [to, setTo] = useState(brasiliaDateISO());
-  const [payment, setPayment] = useState<PaymentFilter>("all");
-  const [provider, setProvider] = useState<ProviderFilter>("all");
-  const [page, setPage] = useState(1);
-  const [rows, setRows] = useState<Tx[]>([]);
-  const [count, setCount] = useState(0);
-  const [periodSummary, setPeriodSummary] = useState<Summary>({});
-  const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<Tx | null>(null);
-  const [editing, setEditing] = useState(false);
+export const Route = createFileRoute("/_authenticated/loja/config")({
+  component: ConfigPage,
+});
+
+function ConfigPage() {
+  const [c, setC] = useState<any>({});
   const [saving, setSaving] = useState(false);
-  const [reference, setReference] = useState("");
-  const [note, setNote] = useState("");
-  const [refundOpen, setRefundOpen] = useState(false);
-  const [refundType, setRefundType] = useState<"total" | "partial">("total");
-  const [refundAmount, setRefundAmount] = useState("");
-  const [refundReason, setRefundReason] = useState("");
-  const [refunding, setRefunding] = useState(false);
-  const totalPages = Math.max(1, Math.ceil(count / PAGE_SIZE));
-  const rangeStart = count ? (page - 1) * PAGE_SIZE + 1 : 0;
-  const rangeEnd = Math.min(page * PAGE_SIZE, count);
+  const [uploadingAdmin, setUploadingAdmin] = useState(false);
+  const [wipeSelected, setWipeSelected] = useState<WipeCategory[]>([]);
+  const [wipeConfirmText, setWipeConfirmText] = useState("");
+  const [wiping, setWiping] = useState(false);
+  const [ifoodMap, setIfoodMap] = useState<any[]>([]);
+  const [products, setProducts] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState("geral");
 
-  async function load(nextPage = page) {
-    setLoading(true);
-    try {
-      const res = await listDigitalMenuFinanceFn({ data: { from, to, payment, provider, page: nextPage, pageSize: PAGE_SIZE } });
-      if (!res?.ok) throw new Error(res?.error || "Não foi possível carregar os recebimentos.");
-      setRows((res.rows || []) as Tx[]); setCount(Number(res.count || 0)); setPeriodSummary((res.periodSummary || {}) as Summary); setPage(Number(res.page || nextPage));
-    } catch (e: any) { toast.error(String(e?.message || "Não foi possível carregar os recebimentos.")); }
-    finally { setLoading(false); }
-  }
-  useEffect(() => { void load(1); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [from, to, payment, provider]);
-  useEffect(() => { if (page > totalPages) void load(totalPages); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [totalPages]);
+  useEffect(() => {
+    supabase
+      .from("ifood_product_map")
+      .select("*")
+      .order("ifood_item_name")
+      .then(({ data }) => setIfoodMap(data ?? []));
+    supabase
+      .from("products")
+      .select("id,name")
+      .order("name")
+      .then(({ data }) => setProducts(data ?? []));
+  }, []);
 
-  function openTx(tx: Tx) { setSelected(tx); setEditing(false); setRefundOpen(false); setRefundType("total"); setRefundAmount(""); setRefundReason(""); setReference(tx.finance_reference || ""); setNote(tx.finance_note || ""); }
-  async function saveMeta() {
-    if (!selected) return; setSaving(true);
-    try { const r = await updateDigitalMenuFinanceMetaFn({ data: { checkoutId: selected.id, reference, note } }); if (!r?.ok) throw new Error(r?.error || "Falha ao salvar."); toast.success("Informações internas atualizadas."); setEditing(false); await load(page); setSelected(cur => cur ? { ...cur, finance_reference: reference.trim() || null, finance_note: note.trim() || null } : cur); }
-    catch (e: any) { toast.error(String(e?.message || "Não foi possível salvar.")); } finally { setSaving(false); }
-  }
-  async function hideRecord() {
-    if (!selected || !window.confirm("Remover este registro somente desta tela?\n\nO pagamento, o pedido e o lançamento do Financeiro Geral NÃO serão apagados.")) return;
-    setSaving(true); try { const r = await hideDigitalMenuFinanceRecordFn({ data: { checkoutId: selected.id } }); if (!r?.ok) throw new Error(r?.error || "Falha ao remover."); setSelected(null); await load(page); toast.success("Registro removido desta lista."); } catch (e: any) { toast.error(String(e?.message || "Não foi possível remover.")); } finally { setSaving(false); }
-  }
-  async function doRefund() {
-    if (!selected || refunding) return;
-    const already = Number(selected.mercadopago_refunded_amount || 0);
-    const available = Math.max(0, Number(selected.total || 0) - already);
-    const amount = refundType === "total" ? available : Number(String(refundAmount).replace(",", "."));
-    if (refundType === "partial" && (!Number.isFinite(amount) || amount <= 0 || amount > available)) {
-      toast.error(`Informe um valor entre R$ 0,01 e ${brl(available)}.`); return;
+  async function updateIfoodMap(ifoodItemId: string, productId: string | null) {
+    const { error } = await supabase
+      .from("ifood_product_map")
+      .update({ product_id: productId })
+      .eq("ifood_item_id", ifoodItemId);
+    if (error) {
+      toast.error(error.message);
+      return;
     }
-    if (refundReason.trim().length < 3) { toast.error("Informe o motivo do estorno."); return; }
-    const label = refundType === "total" ? `estornar ${brl(available)}` : `estornar ${brl(amount)}`;
-    if (!window.confirm(`Confirmar ${label} para ${selected.customer_name}?\n\nEssa ação envia o estorno REAL ao Mercado Pago e não deve ser repetida.`)) return;
-    setRefunding(true);
-    try {
-      const r = await refundMercadoPagoFn({ data: { checkoutId: selected.id, refundType, amount: refundType === "partial" ? amount : null, reason: refundReason.trim() } });
-      if (!r?.ok) throw new Error(r?.error || "Não foi possível concluir o estorno.");
-      toast.success(`Estorno de ${brl(r.amount)} solicitado ao Mercado Pago.`);
-      setRefundOpen(false); setRefundAmount(""); setRefundReason("");
-      await load(page);
-      const refreshed = await listDigitalMenuFinanceFn({ data: { from, to, payment, provider, page, pageSize: PAGE_SIZE } });
-      const found = refreshed?.ok ? (refreshed.rows || []).find((x: any) => x.id === selected.id) : null;
-      if (found) setSelected(found as Tx);
-    } catch (e: any) { toast.error(String(e?.message || "Não foi possível estornar.")); }
-    finally { setRefunding(false); }
+    setIfoodMap((prev) => prev.map((r) => (r.ifood_item_id === ifoodItemId ? { ...r, product_id: productId } : r)));
+    toast.success("Vínculo atualizado");
   }
-  function quickRange(k: "today" | "7" | "30" | "month") { if (k === "today") { setFrom(brasiliaDateISO()); setTo(brasiliaDateISO()); } else if (k === "7") { setFrom(brasiliaDateDaysAgo(6)); setTo(brasiliaDateISO()); } else if (k === "30") { setFrom(brasiliaDateDaysAgo(29)); setTo(brasiliaDateISO()); } else { setFrom(brasiliaMonthStart()); setTo(brasiliaDateISO()); } }
-  const periodCaption = useMemo(() => from === to ? `Movimentações de ${from.split("-").reverse().join("/")}` : `${from.split("-").reverse().join("/")} até ${to.split("-").reverse().join("/")}`, [from, to]);
 
-  return <div className="mx-auto w-full max-w-[1500px] space-y-6 px-4 py-5 sm:px-6 lg:px-8">
-    <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end"><div><Link to="/loja/financeiro" className="mb-3 inline-flex items-center gap-1.5 text-xs font-bold text-muted-foreground hover:text-foreground"><ArrowLeft className="size-3.5" /> Financeiro geral</Link><div className="flex items-center gap-3"><div className="grid size-12 place-items-center rounded-2xl bg-primary text-primary-foreground"><WalletCards className="size-6" /></div><div><h1 className="text-2xl font-black tracking-tight sm:text-3xl">Recebimentos do Cardápio Digital</h1><p className="mt-1 text-sm text-muted-foreground">Mercado Pago e InfinitePay em uma única conciliação, sem duplicar o Financeiro Geral.</p></div></div></div><Button variant="outline" className="gap-2 rounded-xl" onClick={() => load(page)} disabled={loading}><RefreshCw className={`size-4 ${loading ? "animate-spin" : ""}`} /> Atualizar</Button></div>
+  async function rescheduleIfoodPolling() {
+    await save();
+    const { error } = await supabase.rpc("reschedule_ifood_polling");
+    if (error) toast.error("Falha ao (re)agendar: " + error.message);
+    else toast.success(c.ifood_polling_enabled ? "Polling ativado!" : "Polling desativado.");
+  }
 
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5"><SummaryCard icon={CircleDollarSign} label="Total confirmado" value={brl(periodSummary.sales_total)} helper={`${Number(periodSummary.transactions || 0)} transações no período`} /><SummaryCard icon={QrCode} label="Pix" value={brl(periodSummary.pix_total)} helper={`${Number(periodSummary.pix_count || 0)} pagamentos`} /><SummaryCard icon={CreditCard} label="Cartão" value={brl(periodSummary.card_total)} helper={`${Number(periodSummary.card_count || 0)} pagamentos`} /><SummaryCard icon={RotateCcw} label="Estornos" value={brl(periodSummary.refund_total)} helper="Saídas registradas no período" /><SummaryCard icon={WalletCards} label="Líquido após estornos" value={brl(periodSummary.net_total ?? Number(periodSummary.sales_total || 0) - Number(periodSummary.refund_total || 0))} helper="Vendas confirmadas menos estornos" /></div>
+  const [diagnosticsRunning, setDiagnosticsRunning] = useState(false);
+  const [diagnosticsResults, setDiagnosticsResults] = useState<{ name: string; ok: boolean; detail?: string }[] | null>(
+    null,
+  );
+  const [testingAlert, setTestingAlert] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [changingPassword, setChangingPassword] = useState(false);
 
-    <Card className="border-0 p-4 shadow-sm ring-1 ring-black/5 sm:p-5"><div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between"><div><div className="flex items-center gap-2"><CalendarDays className="size-4 text-primary" /><p className="text-sm font-black">Período e filtros</p></div><p className="mt-1 text-xs text-muted-foreground">{periodCaption} · Horário de Brasília</p></div><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><div><Label className="text-xs">De</Label><Input type="date" value={from} onChange={e => setFrom(e.target.value)} /></div><div><Label className="text-xs">Até</Label><Input type="date" value={to} onChange={e => setTo(e.target.value)} /></div><div><Label className="text-xs">Pagamento</Label><Select value={payment} onValueChange={v => setPayment(v as PaymentFilter)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Pix + cartão</SelectItem><SelectItem value="pix">Somente Pix</SelectItem><SelectItem value="card">Somente cartão</SelectItem></SelectContent></Select></div><div><Label className="text-xs">Provedor</Label><Select value={provider} onValueChange={v => setProvider(v as ProviderFilter)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Todos</SelectItem><SelectItem value="mercadopago">Mercado Pago</SelectItem><SelectItem value="infinitepay">InfinitePay</SelectItem></SelectContent></Select></div></div></div><div className="mt-4 flex flex-wrap gap-2">{[["today","Hoje"],["7","7 dias"],["30","30 dias"],["month","Este mês"]].map(([k,l]) => <Button key={k} variant="outline" size="sm" className="rounded-xl" onClick={() => quickRange(k as any)}>{l}</Button>)}</div></Card>
+  async function changePassword() {
+    if (newPassword.length < 6) return toast.error("A senha precisa ter pelo menos 6 caracteres");
+    if (newPassword !== confirmPassword) return toast.error("As senhas não coincidem");
+    setChangingPassword(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+      toast.success("Senha alterada com sucesso!");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch (err: any) {
+      toast.error(err.message ?? "Falha ao trocar senha");
+    } finally {
+      setChangingPassword(false);
+    }
+  }
 
-    <Card className="overflow-hidden border-0 shadow-sm ring-1 ring-black/5">
-      {loading ? <div className="grid min-h-64 place-items-center"><div className="text-center"><Loader2 className="mx-auto size-7 animate-spin text-primary" /><p className="mt-2 text-sm text-muted-foreground">Carregando recebimentos...</p></div></div> : !rows.length ? <div className="grid min-h-64 place-items-center p-8 text-center"><div><CircleDollarSign className="mx-auto size-9 text-muted-foreground" /><p className="mt-3 font-black">Nenhum recebimento neste filtro</p><p className="mt-1 text-sm text-muted-foreground">Altere o período, a forma ou o provedor.</p></div></div> : <><div className="hidden overflow-x-auto md:block"><table className="w-full text-left"><thead className="border-b bg-muted/30 text-xs uppercase tracking-wider text-muted-foreground"><tr><th className="px-5 py-3">Data</th><th className="px-5 py-3">Pedido / Cliente</th><th className="px-5 py-3">Pagamento</th><th className="px-5 py-3 text-right">Valor</th></tr></thead><tbody className="divide-y">{rows.map(tx => <tr key={tx.id} onClick={() => openTx(tx)} className="cursor-pointer hover:bg-muted/25"><td className="px-5 py-4 text-sm font-semibold">{formatDate(tx.paid_at)}</td><td className="px-5 py-4"><p className="font-black">{orderRef(tx)} · {tx.customer_name}</p><p className="text-xs text-muted-foreground">{tx.customer_phone}</p></td><td className="px-5 py-4"><div className="flex items-center gap-2"><span className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold">{paymentLabel(tx) === "Pix" ? <QrCode className="size-3.5" /> : <CreditCard className="size-3.5" />}{paymentLabel(tx)}</span><span className="text-xs font-bold text-muted-foreground">{providerLabel(tx)}</span></div></td><td className="px-5 py-4 text-right"><p className="text-base font-black">{brl(grossAmount(tx))}</p>{installments(tx) > 1 && <p className="text-[11px] text-muted-foreground">{installments(tx)}x</p>}</td></tr>)}</tbody></table></div><div className="divide-y md:hidden">{rows.map(tx => <button key={tx.id} type="button" onClick={() => openTx(tx)} className="w-full p-4 text-left"><div className="flex justify-between gap-3"><div><p className="text-xs font-bold text-muted-foreground">{formatDate(tx.paid_at)}</p><p className="mt-1 font-black">{orderRef(tx)} · {tx.customer_name}</p></div><p className="font-black">{brl(grossAmount(tx))}</p></div><div className="mt-3 flex items-center justify-between"><span className="text-xs font-bold">{paymentLabel(tx)} · {providerLabel(tx)}</span><ChevronRight className="size-4 text-muted-foreground" /></div></button>)}</div></>}
-      <div className="flex flex-col gap-3 border-t px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5"><p className="text-xs text-muted-foreground">Mostrando <b>{rangeStart}</b>–<b>{rangeEnd}</b> de <b>{count}</b></p><div className="flex items-center gap-2"><Button variant="outline" size="sm" className="rounded-xl" disabled={page <= 1 || loading} onClick={() => load(page - 1)}><ChevronLeft className="mr-1 size-4" /> Anterior</Button><span className="min-w-20 text-center text-xs font-black">{page} / {totalPages}</span><Button variant="outline" size="sm" className="rounded-xl" disabled={page >= totalPages || loading} onClick={() => load(page + 1)}>Próxima <ChevronRight className="ml-1 size-4" /></Button></div></div>
+  async function testAlert() {
+    setTestingAlert(true);
+    try {
+      const res = await testAlertFn();
+      if (!res.ok) throw new Error(res.error);
+      toast.success("Alerta de teste enviado! Confere seu WhatsApp em alguns segundos.");
+    } catch (err: any) {
+      toast.error(err.message ?? "Falha ao testar alerta");
+    } finally {
+      setTestingAlert(false);
+    }
+  }
+
+  async function runDiagnostics() {
+    setDiagnosticsRunning(true);
+    setDiagnosticsResults(null);
+    try {
+      const res = await runPaymentDiagnosticsFn();
+      setDiagnosticsResults(res.results);
+      const failed = res.results.filter((r) => !r.ok).length;
+      if (failed) toast.error(`${failed} cenário(s) falharam — confira abaixo`);
+      else toast.success("Todos os cenários de pagamento passaram!");
+    } catch (err: any) {
+      toast.error(err.message ?? "Falha ao rodar diagnóstico");
+    } finally {
+      setDiagnosticsRunning(false);
+    }
+  }
+
+  function toggleWipe(v: WipeCategory) {
+    setWipeSelected((prev) => (prev.includes(v) ? prev.filter((x) => x !== v) : [...prev, v]));
+  }
+
+  async function runWipe() {
+    if (wipeConfirmText !== "APAGAR" || !wipeSelected.length) return;
+    if (
+      !window.confirm(`Tem certeza? Isso vai apagar permanentemente: ${wipeSelected.join(", ")}. Não dá pra desfazer.`)
+    )
+      return;
+    setWiping(true);
+    try {
+      const res = await wipeDataFn({ data: { categories: wipeSelected } });
+      if (!res.ok) throw new Error(res.error);
+      toast.success("Dados apagados com sucesso!");
+      setWipeSelected([]);
+      setWipeConfirmText("");
+    } catch (err: any) {
+      toast.error(err.message ?? "Falha ao apagar dados");
+    } finally {
+      setWiping(false);
+    }
+  }
+
+  const [uploadingDeliverer, setUploadingDeliverer] = useState(false);
+  const [uploadingHandoff, setUploadingHandoff] = useState(false);
+  const adminFileRef = useRef<HTMLInputElement | null>(null);
+  const handoffFileRef = useRef<HTMLInputElement | null>(null);
+  const bannerFileRef = useRef<HTMLInputElement | null>(null);
+  const [uploadingBanner, setUploadingBanner] = useState(false);
+
+  async function uploadBanner(file: File) {
+    setUploadingBanner(true);
+    try {
+      const ext = file.name.split(".").pop() || "jpg";
+      const path = `banner-${Date.now()}.${ext}`;
+      const { error } = await supabase.storage.from("product-images").upload(path, file, { upsert: true });
+      if (error) throw error;
+      const { data: pub } = supabase.storage.from("product-images").getPublicUrl(path);
+      setC((prev: any) => ({ ...prev, banner_image_url: pub.publicUrl }));
+      toast.success("Banner enviado!");
+    } catch (err: any) {
+      toast.error(err.message ?? "Falha ao enviar banner");
+    } finally {
+      setUploadingBanner(false);
+    }
+  }
+  const delivererFileRef = useRef<HTMLInputElement | null>(null);
+  const [geocodingStore, setGeocodingStore] = useState(false);
+  const populateZonas = usePopulateZonas();
+
+  async function geocodeStore() {
+    if (!c.store_address?.trim()) {
+      toast.error("Preencha o endereço da loja primeiro");
+      return;
+    }
+    setGeocodingStore(true);
+    try {
+      const res = await geocodeStoreAddressFn({
+        data: { address: c.store_address, googleMapsApiKey: c.google_maps_api_key },
+      });
+      if ("error" in res && res.error) throw new Error(res.error);
+      setC({ ...c, store_lat: res.lat, store_lng: res.lng });
+      toast.success("Coordenadas encontradas!");
+
+      // Salva as coordenadas já de cara (sem esperar o botão "Salvar" geral)
+      // porque a varredura de ruas abaixo lê store_lat/store_lng direto do
+      // banco — se não salvar antes, ela buscaria a coordenada antiga (ou
+      // nenhuma, na primeira vez).
+      await supabase.from("store_config").update({ store_lat: res.lat, store_lng: res.lng }).eq("id", 1);
+
+      // Dispara a varredura automática de ruas ao redor do novo endereço.
+      // Roda em segundo plano (com toasts de progresso) — não trava a tela.
+      populateZonas.run();
+    } catch (err: any) {
+      toast.error(err.message ?? "Falha ao buscar coordenadas");
+    } finally {
+      setGeocodingStore(false);
+    }
+  }
+
+  function addTier() {
+    const tiers = c.delivery_fee_tiers || [];
+    const last = tiers[tiers.length - 1];
+    setC({
+      ...c,
+      delivery_fee_tiers: [...tiers, { km_from: last ? last.km_to : 0, km_to: (last ? last.km_to : 0) + 3, fee: 0 }],
+    });
+  }
+  function updateTier(idx: number, field: "km_from" | "km_to" | "fee", value: string) {
+    const tiers = [...(c.delivery_fee_tiers || [])];
+    tiers[idx] = { ...tiers[idx], [field]: Number(value) };
+    setC({ ...c, delivery_fee_tiers: tiers });
+  }
+  function removeTier(idx: number) {
+    setC({
+      ...c,
+      delivery_fee_tiers: (c.delivery_fee_tiers || []).filter((_: any, i: number) => i !== idx),
+    });
+  }
+
+  useEffect(() => {
+    supabase
+      .from("store_config")
+      .select("*")
+      .maybeSingle()
+      .then(({ data }) => setC(data ?? { id: 1, pix_mode: "static" }));
+  }, []);
+
+
+
+  async function save() {
+    const provider = c.digital_payment_provider === "mercadopago" ? "mercadopago" : "infinitepay";
+    const onlinePaymentEnabled = c.digital_menu_pix_enabled !== false || c.digital_menu_card_enabled !== false;
+    const payOnDeliveryEnabled = c.digital_menu_pay_on_delivery_enabled === true;
+
+    if (onlinePaymentEnabled && provider === "mercadopago") {
+      if (c.mercadopago_enabled !== true) return toast.error("Ative o Mercado Pago antes de defini-lo como provedor principal.");
+      if (!String(c.mercadopago_public_key || "").trim()) return toast.error("Informe a Public Key do Mercado Pago.");
+      if (!String(c.mercadopago_access_token || "").trim()) return toast.error("Informe o Access Token do Mercado Pago.");
+    } else if (onlinePaymentEnabled) {
+      if (c.infinitepay_enabled !== true) return toast.error("Ative a InfinitePay antes de defini-la como provedor principal.");
+      if (!String(c.infinitepay_handle || "").trim()) return toast.error("Informe a InfiniteTag / Handle da InfinitePay.");
+    }
+
+    if (payOnDeliveryEnabled && c.digital_menu_pay_on_delivery_card_enabled !== true && c.digital_menu_pay_on_delivery_pix_enabled !== true) {
+      return toast.error("Habilite pelo menos uma forma de pagamento na entrega: cartão ou Pix.");
+    }
+    if (!onlinePaymentEnabled && !payOnDeliveryEnabled) {
+      return toast.error("Habilite pelo menos uma forma de pagamento no cardápio digital.");
+    }
+
+    setSaving(true);
+    const payload = stripCardOwnedFields({
+      ...c,
+      id: 1,
+      digital_payment_provider: provider,
+      mercadopago_environment: c.mercadopago_environment === "production" ? "production" : "test",
+      mercadopago_max_installments: Math.min(12, Math.max(1, Number(c.mercadopago_max_installments || 1))),
+      default_delivery_fee: Number(c.default_delivery_fee || 0),
+      delivery_cost_per_km: Number(c.delivery_cost_per_km ?? 0.9),
+    });
+    const { error } = await supabase.from("store_config").upsert(payload);
+    setSaving(false);
+    if (error) toast.error(error.message);
+    else toast.success(`Configurações salvas. ${provider === "mercadopago" ? "Mercado Pago" : "InfinitePay"} está ativo para novos checkouts.`);
+  }
+
+
+  async function uploadAlarm(
+    file: File,
+    target: "alarm_sound_url" | "deliverer_alarm_sound_url" | "handoff_alarm_sound_url",
+  ) {
+    const setUploading =
+      target === "alarm_sound_url" ? setUploadingAdmin : target === "deliverer_alarm_sound_url" ? setUploadingDeliverer : setUploadingHandoff;
+    setUploading(true);
+    try {
+      const ext = file.name.split(".").pop() || "mp3";
+      const path = `${target}/${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage.from("alarm-sounds").upload(path, file, { upsert: true });
+      if (upErr) throw upErr;
+      const { data: pub } = supabase.storage.from("alarm-sounds").getPublicUrl(path);
+      const payload = stripCardOwnedFields({
+        ...c,
+        id: 1,
+        [target]: pub.publicUrl,
+        default_delivery_fee: Number(c.default_delivery_fee || 0),
+      });
+      const { error } = await supabase.from("store_config").upsert(payload);
+
+      if (error) throw error;
+      setC(payload);
+      toast.success("Som de alarme enviado e salvo");
+    } catch (err: any) {
+      toast.error(err.message ?? "Falha ao enviar o áudio");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  const CONFIG_TABS = [
+    { key: "geral", label: "Geral" },
+    { key: "entrega", label: "Entrega" },
+    { key: "pagamentos", label: "Pagamentos" },
+    { key: "integracoes", label: "Integrações" },
+    { key: "ia", label: "IA & Atendimento" },
+    { key: "atendimento", label: "Horário de atendimento" },
+    { key: "notificacoes", label: "Notificações" },
+    { key: "sistema", label: "Sistema" },
+  ];
+  /** Mantém o card montado (sem perder o que já foi digitado) e só esconde
+   *  visualmente quando a aba não é a ativa — mais simples e seguro do que
+   *  mover os blocos de código de lugar. */
+  function tabStyle(key: string) {
+    return activeTab === key ? {} : { display: "none" as const };
+  }
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-4">
+      <h1 className="text-2xl font-bold">Configurações da loja</h1>
+
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList className="h-auto flex-wrap justify-start gap-1 bg-transparent p-0">
+          {CONFIG_TABS.map((t) => (
+            <TabsTrigger key={t.key} value={t.key} className="rounded-full border data-[state=active]:shadow-sm">
+              {t.label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
+
+      <Card className="space-y-3 p-5" style={tabStyle("geral")}>
+        <h2 className="font-semibold">Loja</h2>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label>Nome da loja</Label>
+            <Input value={c.store_name || ""} onChange={(e) => setC({ ...c, store_name: e.target.value })} />
+          </div>
+          <div>
+            <Label>E-mail de contato (política de privacidade)</Label>
+            <Input
+              type="email"
+              value={c.privacy_contact_email || ""}
+              onChange={(e) => setC({ ...c, privacy_contact_email: e.target.value })}
+              placeholder="opcional — se vazio, mostra só o WhatsApp"
+            />
+          </div>
+          <div>
+            <Label>Taxa padrão de segurança / fallback (R$)</Label>
+            <Input
+              type="number"
+              step="0.01"
+              value={c.default_delivery_fee ?? 0}
+              onChange={(e) => setC({ ...c, default_delivery_fee: e.target.value })}
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">Usada apenas como reserva em situações antigas/compatibilidade. A regra principal é escolhida na aba Entrega.</p>
+          </div>
+          <div>
+            <Label>Tempo estimado de entrega (minutos)</Label>
+            <Input
+              type="number"
+              step="1"
+              value={c.estimated_delivery_time_minutes ?? ""}
+              onChange={(e) =>
+                setC({
+                  ...c,
+                  estimated_delivery_time_minutes: e.target.value ? Number(e.target.value) : null,
+                })
+              }
+              placeholder="Ex: 40"
+            />
+          </div>
+          <div>
+            <Label>Cidade das entregas</Label>
+            <Input
+              value={c.fixed_delivery_city || ""}
+              onChange={(e) => setC({ ...c, fixed_delivery_city: e.target.value })}
+              placeholder="Ex: Duque de Caxias"
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Como só entrega nessa cidade, a IA não pergunta isso ao cliente — já preenche sozinha.
+            </p>
+          </div>
+        </div>
+      </Card>
+
+      <Card className="space-y-3 p-5" style={tabStyle("geral")}>
+        <h2 className="font-semibold">Banner da loja (topo do site do cliente)</h2>
+        <div>
+          <Label>Imagem do banner</Label>
+          <div className="flex gap-2">
+            <Input
+              className="flex-1"
+              value={c.banner_image_url || ""}
+              onChange={(e) => setC({ ...c, banner_image_url: e.target.value })}
+              placeholder="Cole uma URL ou envie um arquivo →"
+            />
+            <input
+              ref={bannerFileRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) uploadBanner(f);
+              }}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => bannerFileRef.current?.click()}
+              disabled={uploadingBanner}
+            >
+              <Upload className="size-4" /> {uploadingBanner ? "Enviando..." : "Upload"}
+            </Button>
+          </div>
+          {c.banner_image_url && (
+            <img
+              src={c.banner_image_url}
+              alt="Prévia do banner"
+              className="mt-2 h-28 w-full rounded-lg border object-cover"
+            />
+          )}
+          <p className="mt-1 text-xs text-muted-foreground">Se deixar em branco, usa o degradê padrão da marca.</p>
+        </div>
+        <div>
+          <Label>Texto abaixo do título (opcional)</Label>
+          <Input
+            value={c.banner_tagline || ""}
+            onChange={(e) => setC({ ...c, banner_tagline: e.target.value })}
+            placeholder="Ex: Batatas recheadas, hambúrgueres artesanais..."
+          />
+        </div>
+      </Card>
+
+      <Card className="space-y-4 p-5" style={tabStyle("entrega")}>
+        <div>
+          <h2 className="font-semibold">Como calcular a taxa de entrega?</h2>
+          <p className="mt-1 text-xs text-muted-foreground">Escolha uma única regra ativa. O cardápio digital usa exatamente esta configuração ao validar o CEP e recalcula no backend antes de cobrar.</p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => setC({ ...c, delivery_pricing_mode: "flat" })}
+            className={`rounded-2xl border-2 p-4 text-left transition ${c.delivery_pricing_mode !== "distance" ? "border-primary bg-primary/5 shadow-sm" : "border-border hover:bg-muted/40"}`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-bold">📍 Por bairro</span>
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${c.delivery_pricing_mode !== "distance" ? "bg-emerald-100 text-emerald-700" : "bg-muted text-muted-foreground"}`}>{c.delivery_pricing_mode !== "distance" ? "ATIVO" : "INATIVO"}</span>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">Cada bairro atendido recebe sua própria taxa. Ao consultar o CEP, o cardápio identifica o bairro e mostra o valor configurado.</p>
+          </button>
+          <button
+            type="button"
+            onClick={() => setC({ ...c, delivery_pricing_mode: "distance" })}
+            className={`rounded-2xl border-2 p-4 text-left transition ${c.delivery_pricing_mode === "distance" ? "border-primary bg-primary/5 shadow-sm" : "border-border hover:bg-muted/40"}`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-bold">🛵 Por quilometragem</span>
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${c.delivery_pricing_mode === "distance" ? "bg-emerald-100 text-emerald-700" : "bg-muted text-muted-foreground"}`}>{c.delivery_pricing_mode === "distance" ? "ATIVO" : "INATIVO"}</span>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">O CEP identifica a região e o cliente informa o número. O sistema mede a rota e aplica a faixa de km cadastrada em Zonas de entrega.</p>
+          </button>
+        </div>
+        <div className="rounded-xl border bg-muted/30 p-3 text-xs text-muted-foreground">
+          <strong className="text-foreground">Regra de segurança:</strong> o navegador nunca define a taxa final. Antes de criar o pagamento, o backend valida novamente bairro/endereço e recalcula a taxa pelo modo ativo.
+        </div>
+        <div className={c.delivery_pricing_mode === "distance" ? "space-y-3" : "hidden"}>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label>Endereço da loja (ponto de partida)</Label>
+            <div className="flex gap-2">
+              <Input
+                value={c.store_address || ""}
+                onChange={(e) => setC({ ...c, store_address: e.target.value })}
+                placeholder="Rua, número, bairro, cidade"
+              />
+              <Button type="button" variant="outline" size="sm" disabled={geocodingStore} onClick={geocodeStore}>
+                {geocodingStore ? "Buscando..." : "Buscar coordenadas"}
+              </Button>
+            </div>
+            {c.store_lat && c.store_lng && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                📍 Coordenadas: {Number(c.store_lat).toFixed(5)}, {Number(c.store_lng).toFixed(5)}
+              </p>
+            )}
+            {populateZonas.running && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                🔎 Varrendo as ruas da região
+                {populateZonas.progress
+                  ? ` (${populateZonas.progress.processed}/${populateZonas.progress.total})`
+                  : "..."}{" "}
+                — pode levar alguns minutos, você pode continuar navegando.
+              </p>
+            )}
+          </div>
+          <div>
+            <Label>Chave da API do Google Maps (opcional)</Label>
+            <Input
+              type="password"
+              value={c.google_maps_api_key || ""}
+              onChange={(e) => setC({ ...c, google_maps_api_key: e.target.value })}
+              placeholder="AIza..."
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Sem chave, o sistema usa um serviço gratuito (OpenStreetMap) — funciona, mas é mais lento e menos preciso.
+            </p>
+          </div>
+          <div>
+            <Label>
+              Custo por km rodado (R$){" "}
+              <InfoTip text="Digite o custo de 1 km rodado (o que você paga ao entregador por km, ou o gasto de combustível do seu carro por km). NÃO precisa dobrar pra ida e volta aqui — o sistema já faz isso sozinho em todo lugar que mostra custo/margem (popup de aprovação e tela de Zonas de entrega)." />
+            </Label>
+            <Input
+              type="number"
+              step="0.01"
+              value={c.delivery_cost_per_km ?? 0.9}
+              onChange={(e) => setC({ ...c, delivery_cost_per_km: e.target.value })}
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Valor de 1 km rodado (o que você paga ao entregador por km, ou o custo de combustível do seu carro por
+              km). Usado pra calcular o custo real de cada entrega e a margem em Zonas de entrega — o sistema já soma
+              ida e volta sozinho, não precisa dobrar esse número aqui.
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-dashed p-3 sm:col-span-2">
+            <Label className="text-xs text-muted-foreground">
+              Prefere calcular pelo gasto de combustível em vez de digitar um valor fixo?{" "}
+              <InfoTip text="O sistema calcula o custo de 1 km rodado (preço do litro ÷ consumo do carro). A ida e volta é somada automaticamente depois, em todo lugar que mostra custo — não precisa fazer essa conta aqui." />
+            </Label>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <div>
+                <Label className="text-xs">Preço do litro (R$)</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={c.combustivel_preco_litro ?? ""}
+                  onChange={(e) => setC({ ...c, combustivel_preco_litro: e.target.value })}
+                  placeholder="6,50"
+                />
+              </div>
+              <div>
+                <Label className="text-xs">Consumo do veículo (km por litro)</Label>
+                <Input
+                  type="number"
+                  step="0.1"
+                  value={c.veiculo_consumo_kml ?? ""}
+                  onChange={(e) => setC({ ...c, veiculo_consumo_kml: e.target.value })}
+                  placeholder="8,9"
+                />
+              </div>
+            </div>
+            {Number(c.combustivel_preco_litro) > 0 && Number(c.veiculo_consumo_kml) > 0 ? (
+              (() => {
+                // Aqui é só o custo de 1 km rodado (preço do litro ÷ consumo).
+                // NÃO dobra pra ida e volta aqui — quem faz essa conta agora é
+                // o próprio sistema, em todo lugar que mostra custo/margem, pra
+                // nunca depender de alguém lembrar de dobrar manualmente.
+                const custoPorKmRodado = Number(c.combustivel_preco_litro) / Number(c.veiculo_consumo_kml);
+                return (
+                  <div className="mt-2 flex items-center justify-between rounded-md bg-muted px-3 py-2">
+                    <p className="text-xs text-muted-foreground">
+                      Custo por km rodado:{" "}
+                      <span className="font-semibold text-foreground">
+                        R$ {custoPorKmRodado.toLocaleString("pt-BR", { minimumFractionDigits: 4 })}
+                      </span>
+                      <br />
+                      <span className="text-[11px]">
+                        (o sistema já calcula ida e volta sozinho ao usar esse valor — não precisa fazer essa conta você
+                        mesmo)
+                      </span>
+                    </p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setC({ ...c, delivery_cost_per_km: custoPorKmRodado.toFixed(4) })}
+                    >
+                      Usar esse valor
+                    </Button>
+                  </div>
+                );
+              })()
+            ) : (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Preencha os dois campos acima pra calcular o custo por km automaticamente. O sistema já soma a volta
+                sozinho depois — aqui é só o valor de 1 km.
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <p className="text-sm font-semibold text-amber-800">Faixas de km e valor mudaram de lugar</p>
+          <p className="mt-1 text-xs text-amber-700">
+            Pra evitar ter dois lugares diferentes controlando a mesma coisa, as faixas de distância e valor agora só
+            são configuradas na página <b>Zonas de entrega</b> — é lá também que você vê a margem de cada faixa em tempo
+            real.
+          </p>
+          <Button asChild type="button" size="sm" variant="outline" className="mt-2">
+            <Link to="/loja/zonas-entrega">Ir para Zonas de entrega</Link>
+          </Button>
+        </div>
+        </div>
+      </Card>
+
+      <Card className="space-y-3 p-5" style={tabStyle("notificacoes")}>
+        <h2 className="font-semibold">Som de alarme</h2>
+        <p className="text-xs text-muted-foreground">
+          Envie um arquivo .mp3. Por padrão o alarme já vem <b>ativado</b> tanto no painel quanto no app do entregador —
+          toca sozinho enquanto houver pedidos aguardando. Dá pra desativar aqui ou clicando no sininho na tela.
+        </p>
+
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div className="rounded-lg border p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <Label>Alarme do painel (admin)</Label>
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={c.admin_alarm_default_on ?? true}
+                  onCheckedChange={(v) => setC({ ...c, admin_alarm_default_on: v })}
+                />
+                <span className="text-xs text-muted-foreground">
+                  {(c.admin_alarm_default_on ?? true) ? "Ativado" : "Desativado"}
+                </span>
+              </div>
+            </div>
+            <input
+              ref={adminFileRef}
+              type="file"
+              accept="audio/mpeg,audio/mp3,.mp3"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) uploadAlarm(f, "alarm_sound_url");
+              }}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={() => adminFileRef.current?.click()}
+              disabled={uploadingAdmin}
+            >
+              <Upload className="size-4" /> {uploadingAdmin ? "Enviando..." : "Enviar .mp3"}
+            </Button>
+            {c.alarm_sound_url && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                <Volume2 className="size-3.5" /> <audio src={c.alarm_sound_url} controls className="h-8 w-full" />
+              </div>
+            )}
+          </div>
+          <div className="rounded-lg border p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <Label>Alarme do app do entregador</Label>
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={c.deliverer_alarm_default_on ?? true}
+                  onCheckedChange={(v) => setC({ ...c, deliverer_alarm_default_on: v })}
+                />
+                <span className="text-xs text-muted-foreground">
+                  {(c.deliverer_alarm_default_on ?? true) ? "Ativado" : "Desativado"}
+                </span>
+              </div>
+            </div>
+            <input
+              ref={delivererFileRef}
+              type="file"
+              accept="audio/mpeg,audio/mp3,.mp3"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) uploadAlarm(f, "deliverer_alarm_sound_url");
+              }}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={() => delivererFileRef.current?.click()}
+              disabled={uploadingDeliverer}
+            >
+              <Upload className="size-4" /> {uploadingDeliverer ? "Enviando..." : "Enviar .mp3"}
+            </Button>
+            {c.deliverer_alarm_sound_url && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                <Volume2 className="size-3.5" />{" "}
+                <audio src={c.deliverer_alarm_sound_url} controls className="h-8 w-full" />
+              </div>
+            )}
+          </div>
+          <div className="rounded-lg border p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <Label>IA pediu atendimento humano</Label>
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={c.handoff_alarm_default_on ?? true}
+                  onCheckedChange={(v) => setC({ ...c, handoff_alarm_default_on: v })}
+                />
+                <span className="text-xs text-muted-foreground">
+                  {(c.handoff_alarm_default_on ?? true) ? "Ativado" : "Desativado"}
+                </span>
+              </div>
+            </div>
+            <p className="mb-2 text-xs text-muted-foreground">
+              Toca continuamente sempre que a IA não souber responder um cliente com segurança e pedir pra um
+              atendente assumir a conversa. Som próprio, diferente do alarme de pedidos — assim dá pra diferenciar
+              qual alerta está tocando.
+            </p>
+            <input
+              ref={handoffFileRef}
+              type="file"
+              accept="audio/mpeg,audio/mp3,.mp3"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) uploadAlarm(f, "handoff_alarm_sound_url");
+              }}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={() => handoffFileRef.current?.click()}
+              disabled={uploadingHandoff}
+            >
+              <Upload className="size-4" /> {uploadingHandoff ? "Enviando..." : "Enviar .mp3"}
+            </Button>
+            {c.handoff_alarm_sound_url && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                <Volume2 className="size-3.5" />{" "}
+                <audio src={c.handoff_alarm_sound_url} controls className="h-8 w-full" />
+              </div>
+            )}
+          </div>
+        </div>
+      </Card>
+
+      <Card className="space-y-3 p-5" style={tabStyle("pagamentos")}>
+        <h2 className="font-semibold">Pix da loja</h2>
+        <p className="text-xs text-muted-foreground">Esta chave continua disponível para os fluxos atuais do WhatsApp/manual. No cardápio digital, Pix e cartão usam o provedor online selecionado abaixo e são confirmados automaticamente antes de o pedido entrar na operação.</p>
+        <div>
+          <Label>Modo</Label>
+          <Select value={c.pix_mode || "static"} onValueChange={(v) => setC({ ...c, pix_mode: v })}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="static">Estático (chave copia-e-cola fixa)</SelectItem>
+              <SelectItem value="dynamic">Dinâmico (gera código por pedido — em breve)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label>Chave Pix</Label>
+          <Input value={c.pix_key || ""} onChange={(e) => setC({ ...c, pix_key: e.target.value })} />
+        </div>
+        <div>
+          <Label>Código Pix Copia-e-Cola</Label>
+          <Textarea
+            rows={3}
+            value={c.pix_copia_cola || ""}
+            onChange={(e) => setC({ ...c, pix_copia_cola: e.target.value })}
+          />
+        </div>
+      </Card>
+
+      <Card className="space-y-4 border-2 border-primary/20 p-5" style={tabStyle("pagamentos")}>
+        <div>
+          <p className="text-[11px] font-black uppercase tracking-[0.18em] text-primary">Continuidade da operação</p>
+          <h2 className="mt-1 text-lg font-black">Provedor ativo do cardápio digital</h2>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">O cliente nunca escolhe a empresa de pagamento: ele vê apenas Pix ou cartão. A troca abaixo afeta somente novos checkouts. Pagamentos já iniciados continuam vinculados ao provedor original.</p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {[
+            { key: "mercadopago", name: "Mercado Pago", ready: c.mercadopago_enabled === true && !!String(c.mercadopago_public_key || "").trim() && !!String(c.mercadopago_access_token || "").trim(), detail: "Checkout transparente: Pix e cartão dentro da HotBox." },
+            { key: "infinitepay", name: "InfinitePay", ready: c.infinitepay_enabled === true && !!String(c.infinitepay_handle || "").trim(), detail: "Checkout externo mantido como contingência." },
+          ].map((item) => {
+            const active = (c.digital_payment_provider || "infinitepay") === item.key;
+            return (
+              <button
+                type="button"
+                key={item.key}
+                onClick={() => setC({ ...c, digital_payment_provider: item.key })}
+                className={`rounded-2xl border-2 p-4 text-left transition ${active ? "border-primary bg-primary/5 shadow-sm" : "border-border hover:border-primary/40"}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-black">{item.name}</span>
+                  <span className={`rounded-full px-2 py-1 text-[10px] font-black ${item.ready ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-900"}`}>{item.ready ? "CONFIGURADO" : "CONFIGURAR"}</span>
+                </div>
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{item.detail}</p>
+                {active && <p className="mt-3 text-xs font-black text-primary">● Ativo para novos pagamentos</p>}
+              </button>
+            );
+          })}
+        </div>
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold leading-relaxed text-amber-950">
+          Troca manual é intencional. O sistema não muda automaticamente de empresa após timeout ou recusa, evitando duas cobranças para o mesmo checkout.
+        </div>
+      </Card>
+
+      <Card className="space-y-4 p-5" style={tabStyle("pagamentos")}>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="font-semibold">Mercado Pago — checkout transparente</h2>
+            <p className="mt-1 text-xs text-muted-foreground">Orders API: Pix com QR Code dentro da HotBox e cartão pelo Payment Brick. O Access Token fica restrito ao backend.</p>
+          </div>
+          <Switch checked={c.mercadopago_enabled === true} onCheckedChange={(v) => setC({ ...c, mercadopago_enabled: v })} />
+        </div>
+        <div className="space-y-2">
+          <Label>Ambiente do Mercado Pago</Label>
+          <Select
+            value={c.mercadopago_environment === "production" ? "production" : "test"}
+            onValueChange={(v) => setC({ ...c, mercadopago_environment: v })}
+          >
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="test">🧪 Teste — usar credenciais de teste</SelectItem>
+              <SelectItem value="production">🟢 Produção — cobranças reais</SelectItem>
+            </SelectContent>
+          </Select>
+          {c.mercadopago_environment === "production" ? (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-950">
+              Produção ativa: use somente Public Key e Access Token de produção. As cobranças serão reais.
+            </div>
+          ) : (
+            <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs font-semibold text-amber-950">
+              Modo teste ativo: use Public Key e Access Token da tela “Credenciais de teste”. Para Pix e cartão, a HotBox aplica automaticamente os dados de comprador exigidos pelo Mercado Pago.
+            </div>
+          )}
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label>Public Key</Label>
+            <Input value={c.mercadopago_public_key || ""} onChange={(e) => setC({ ...c, mercadopago_public_key: e.target.value.trim() })} placeholder="APP_USR-..." autoComplete="off" />
+          </div>
+          <div>
+            <Label>Access Token</Label>
+            <Input type="password" value={c.mercadopago_access_token || ""} onChange={(e) => setC({ ...c, mercadopago_access_token: e.target.value.trim() })} placeholder="APP_USR-..." autoComplete="new-password" />
+          </div>
+        </div>
+        <div>
+          <Label>Máximo de parcelas no cartão</Label>
+          <Select value={String(c.mercadopago_max_installments || 1)} onValueChange={(v) => setC({ ...c, mercadopago_max_installments: Number(v) })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="1">Somente 1x — recomendado para delivery</SelectItem>
+              <SelectItem value="2">Até 2x</SelectItem>
+              <SelectItem value="3">Até 3x</SelectItem>
+              <SelectItem value="6">Até 6x</SelectItem>
+              <SelectItem value="12">Até 12x</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="rounded-xl border bg-muted/30 p-3 text-xs leading-relaxed text-muted-foreground">
+          Webhook da Orders API em <code>{typeof window !== "undefined" ? `${window.location.origin}/api/public/webhooks/mercadopago` : "/api/public/webhooks/mercadopago"}</code>. A HotBox consulta a Order diretamente no Mercado Pago e confere status, valor, moeda e referência antes de criar o pedido.
+        </div>
+      </Card>
+
+      <Card className="space-y-4 p-5" style={tabStyle("pagamentos")}>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="font-semibold">InfinitePay — contingência do cardápio digital</h2>
+            <p className="mt-1 text-xs text-muted-foreground">O cliente paga no checkout seguro da InfinitePay. O pedido só é criado depois da confirmação real do pagamento.</p>
+          </div>
+          <Switch checked={c.infinitepay_enabled === true} onCheckedChange={(v) => setC({ ...c, infinitepay_enabled: v })} />
+        </div>
+        <div>
+          <Label>InfiniteTag / Handle</Label>
+          <Input value={c.infinitepay_handle || ""} onChange={(e) => setC({ ...c, infinitepay_handle: e.target.value.replace(/^\$/, "") })} placeholder="Ex.: hotboxdelivery" />
+          <p className="mt-1 text-[11px] text-muted-foreground">Use sua InfiniteTag sem o símbolo $. A integração oficial do Checkout Integrado usa a InfiniteTag para identificar sua conta.</p>
+        </div>
+        <div className="rounded-xl border bg-muted/30 p-3 text-xs leading-relaxed text-muted-foreground">
+          Webhook configurado automaticamente em <code>{typeof window !== "undefined" ? `${window.location.origin}/api/public/webhooks/infinitepay` : "/api/public/webhooks/infinitepay"}</code>. O sistema também consulta a InfinitePay para confirmar valor e status antes de criar o pedido.
+        </div>
+      </Card>
+
+      <Card className="space-y-3 p-5" style={tabStyle("geral")}>
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold">Cardápio digital (site do cliente)</h2>
+          <div className="flex items-center gap-2">
+            <Switch
+              checked={c.digital_menu_enabled !== false}
+              onCheckedChange={(v) => setC({ ...c, digital_menu_enabled: v })}
+            />
+            <span className="text-xs text-muted-foreground">
+              {c.digital_menu_enabled !== false ? "Ativo" : "Desativado"}
+            </span>
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Quando ativo, o cliente monta o pedido sozinho pela página pública e o pedido cai no sistema marcado como{" "}
+          <b>cardápio digital</b>. Quando desativado, a página mostra um aviso pedindo pra chamar no WhatsApp.
+        </p>
+        <div className="space-y-4">
+          <div>
+            <Label>Pagamento online</Label>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              {[
+                ["digital_menu_pix_enabled", "Pix online"],
+                ["digital_menu_card_enabled", "Cartão de crédito online"],
+              ].map(([field, label]) => (
+                <label key={field} className="flex items-center justify-between gap-3 rounded-xl border p-3 text-sm font-medium">
+                  {label}
+                  <Switch checked={c[field] !== false} onCheckedChange={(v) => setC({ ...c, [field]: v })} />
+                </label>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">Pix e cartão online são processados pelo gateway ativo acima. O pedido só entra na operação depois da confirmação real do pagamento.</p>
+          </div>
+
+          <div className="rounded-2xl border-2 border-amber-300 bg-amber-50/70 p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-black text-amber-950">Pagamento na entrega</p>
+                <p className="mt-1 text-xs leading-relaxed text-amber-900/80">Quando habilitado, o cliente pode concluir o pedido sem pagamento online. O pedido entra imediatamente no sistema com um aviso destacado de <b>PAGAMENTO NA ENTREGA</b> e fica pendente de recebimento.</p>
+              </div>
+              <Switch
+                checked={c.digital_menu_pay_on_delivery_enabled === true}
+                onCheckedChange={(v) => setC({ ...c, digital_menu_pay_on_delivery_enabled: v })}
+              />
+            </div>
+            {c.digital_menu_pay_on_delivery_enabled === true && (
+              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                <label className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-white p-3 text-sm font-bold">
+                  Cartão na entrega
+                  <Switch
+                    checked={c.digital_menu_pay_on_delivery_card_enabled !== false}
+                    onCheckedChange={(v) => setC({ ...c, digital_menu_pay_on_delivery_card_enabled: v })}
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-white p-3 text-sm font-bold">
+                  Pix na entrega
+                  <Switch
+                    checked={c.digital_menu_pay_on_delivery_pix_enabled !== false}
+                    onCheckedChange={(v) => setC({ ...c, digital_menu_pay_on_delivery_pix_enabled: v })}
+                  />
+                </label>
+              </div>
+            )}
+            <p className="mt-3 text-[11px] font-semibold text-amber-900/75">Dinheiro em espécie não é oferecido pelo cardápio. Pix na entrega pode ser recebido pelo QR Code da loja e cartão pela maquininha.</p>
+          </div>
+        </div>
+      </Card>
+
+      <Card className="space-y-3 p-5" style={tabStyle("notificacoes")}>
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold">Impressão</h2>
+          <div className="flex items-center gap-2">
+            <Switch
+              checked={c.auto_print_on_accept === true}
+              onCheckedChange={(v) => setC({ ...c, auto_print_on_accept: v })}
+            />
+            <span className="text-xs text-muted-foreground">
+              {c.auto_print_on_accept === true ? "Ativa" : "Desativada"}
+            </span>
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Quando ativa, a nota do cliente imprime sozinha assim que você clicar em <b>"Aceitar"</b> num pedido (tanto na
+          fila quanto na tela do pedido).
+        </p>
+        <p className="text-xs text-muted-foreground">
+          ⚠️ Navegador não tem permissão do tipo câmera/microfone pra impressora — então mesmo com isso ativo, o Chrome
+          ainda abre a caixinha de impressão do sistema (é uma proteção do próprio navegador, nenhum site consegue pular
+          isso). Na primeira vez que você entrar na loja com essa opção ligada, aparece um aviso explicando isso. Pra
+          imprimir sem essa caixa aparecer (impressão silenciosa de verdade), configure o computador da loja pra abrir o
+          Chrome em modo kiosk, apontando pra impressora térmica — me chama que eu te passo o comando exato pro seu
+          sistema operacional.
+        </p>
+      </Card>
+
+      <Card className="space-y-3 p-5" style={tabStyle("integracoes")}>
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold">WhatsApp (Evolution API)</h2>
+        </div>
+        <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/5 p-3">
+          <div>
+            <Label className="text-destructive">🚨 Desabilitar Evolution por completo</Label>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Botão de emergência — desliga QUALQUER ligação com a Evolution API, tanto envio quanto recebimento de
+              mensagem, sem precisar apagar as credenciais nem mexer no seletor de provedor abaixo. Use se a instância
+              travar, ficar instável, ou correndo risco de bloqueio. Enquanto estiver ligado, nenhuma mensagem sai nem
+              entra pela Evolution — o canal da Meta (se configurado) continua funcionando normalmente.
+            </p>
+          </div>
+          <Switch
+            checked={c.evolution_disabled === true}
+            onCheckedChange={(v) => setC({ ...c, evolution_disabled: v })}
+          />
+        </div>
+        <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+          <div>
+            <Label>Atendimento automático (IA) ativo globalmente</Label>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Desligue aqui se por algum motivo o robô parar de funcionar direito, ou se quiser assumir tudo na mão. Com
+              isso desligado, as mensagens continuam chegando normalmente no chat — só que a IA não responde mais
+              nenhuma conversa automaticamente, você quem responde. Pra pausar só um cliente específico sem afetar os
+              outros, use o interruptor dentro da própria conversa em <b>Chat</b>.
+            </p>
+          </div>
+          <Switch
+            checked={c.bot_global_active !== false}
+            onCheckedChange={(v) => setC({ ...c, bot_global_active: v })}
+          />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Configure sua instância Evolution API (hospede no Railway) e cole a URL abaixo como webhook.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          ⚠️ Para a IA ler comprovantes de Pix enviados por foto, ative a opção <b>"Webhook Base64"</b> na sua instância
+          Evolution (envia a imagem já em base64 no payload).
+        </p>
+        <div className="rounded-md bg-muted p-3 text-xs">
+          <p className="mb-1 font-semibold">URL do webhook (cole na Evolution):</p>
+          <code className="break-all">
+            {typeof window !== "undefined" ? `${window.location.origin}/api/public/webhooks/evolution` : ""}
+          </code>
+        </div>
+        <div>
+          <Label>Número do WhatsApp da loja</Label>
+          <Input
+            value={c.whatsapp_number || ""}
+            onChange={(e) => setC({ ...c, whatsapp_number: e.target.value })}
+            placeholder="5511999999999"
+          />
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label>URL Evolution API</Label>
+            <Input
+              value={c.evolution_api_url || ""}
+              onChange={(e) => setC({ ...c, evolution_api_url: e.target.value })}
+              placeholder="https://evolution.railway.app"
+            />
+          </div>
+          <div>
+            <Label>Instância</Label>
+            <Input
+              value={c.evolution_instance || ""}
+              onChange={(e) => setC({ ...c, evolution_instance: e.target.value })}
+            />
+          </div>
+        </div>
+        <div>
+          <Label>Token Evolution</Label>
+          <Input
+            type="password"
+            value={c.evolution_api_token || ""}
+            onChange={(e) => setC({ ...c, evolution_api_token: e.target.value })}
+          />
+        </div>
+      </Card>
+
+      <Card className="space-y-3 p-5" style={tabStyle("integracoes")}>
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold">WhatsApp — API oficial da Meta (Cloud API)</h2>
+          <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
+            Sem risco de bloqueio
+          </span>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Alternativa oficial à Evolution API — usa diretamente a API do WhatsApp mantida pela própria Meta, sem simular
+          um celular conectado. Preencha as credenciais do seu App (Meta for Developers) abaixo.
+        </p>
+
+        <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+          <div>
+            <Label>Provedor ativo</Label>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Decide por onde TODA mensagem sai e entra — respostas automáticas da IA, respostas manuais do Chat, e
+              transmissões. Só uma pode estar ativa por vez.
+            </p>
+          </div>
+          <Select
+            value={c.whatsapp_provider || "evolution"}
+            onValueChange={(v) => setC({ ...c, whatsapp_provider: v })}
+          >
+            <SelectTrigger className="w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="evolution">Evolution API</SelectItem>
+              <SelectItem value="meta">Meta Cloud API (oficial)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="rounded-md bg-muted p-3 text-xs">
+          <p className="mb-1 font-semibold">URL do webhook (cole no App da Meta → WhatsApp → Configuration):</p>
+          <code className="break-all">
+            {typeof window !== "undefined" ? `${window.location.origin}/api/public/webhooks/meta` : ""}
+          </code>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <Label>Token de Acesso Permanente</Label>
+            <Input
+              type="password"
+              value={c.meta_access_token || ""}
+              onChange={(e) => setC({ ...c, meta_access_token: e.target.value })}
+              placeholder="EAAO..."
+            />
+          </div>
+          <div>
+            <Label>Phone Number ID</Label>
+            <Input
+              value={c.meta_phone_number_id || ""}
+              onChange={(e) => setC({ ...c, meta_phone_number_id: e.target.value })}
+            />
+          </div>
+          <div>
+            <Label>WABA ID (Conta WhatsApp)</Label>
+            <Input value={c.meta_waba_id || ""} onChange={(e) => setC({ ...c, meta_waba_id: e.target.value })} />
+          </div>
+          <div>
+            <Label>App ID</Label>
+            <Input value={c.meta_app_id || ""} onChange={(e) => setC({ ...c, meta_app_id: e.target.value })} />
+          </div>
+          <div>
+            <Label>App Secret</Label>
+            <Input
+              type="password"
+              value={c.meta_app_secret || ""}
+              onChange={(e) => setC({ ...c, meta_app_secret: e.target.value })}
+              placeholder="Meta for Developers → seu App → Configurações básicas"
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <Label>Verify Token</Label>
+            <Input
+              value={c.meta_verify_token || ""}
+              onChange={(e) => setC({ ...c, meta_verify_token: e.target.value })}
+              placeholder="crie uma palavra/senha qualquer — é só pra confirmar o webhook com a Meta"
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Esse valor você inventa aqui e cola de novo no campo "Verify token" ao cadastrar o webhook no App da Meta
+              — os dois precisam ser idênticos.
+            </p>
+          </div>
+        </div>
+
+        {/* ── Conversions API (CAPI) ── */}
+        <div className="mt-4 border-t pt-4">
+          <p className="mb-3 text-sm font-semibold">Rastreamento de Campanhas (Conversions API)</p>
+          <p className="mb-3 text-[11px] text-muted-foreground">
+            Permite enviar eventos de Lead e Compra para o Facebook quando um cliente chega pelo anúncio Click-to-WhatsApp.
+            Configure no <strong>Events Manager → Conjuntos de dados → Definições → API de Conversões</strong>.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <Label>Pixel ID (ID do conjunto de dados)</Label>
+              <Input
+                value={(c as any).meta_pixel_id || ""}
+                onChange={(e) => setC({ ...c, meta_pixel_id: e.target.value } as any)}
+                placeholder="Ex: 1774242074004447"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Events Manager → Conjuntos de dados → Identificação
+              </p>
+            </div>
+            <div>
+              <Label>Token de Acesso do CAPI</Label>
+              <Input
+                type="password"
+                value={(c as any).meta_capi_access_token || ""}
+                onChange={(e) => setC({ ...c, meta_capi_access_token: e.target.value } as any)}
+                placeholder="Token gerado em Definições → API de Conversões"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Diferente do token do WhatsApp — gerado especificamente para o CAPI
+              </p>
+            </div>
+            <div className="sm:col-span-2">
+              <Label>Código de Evento de Teste <span className="font-normal text-muted-foreground">(opcional — só durante testes)</span></Label>
+              <Input
+                value={(c as any).meta_test_event_code || ""}
+                onChange={(e) => setC({ ...c, meta_test_event_code: e.target.value } as any)}
+                placeholder="Ex: TEST12345 — deixe vazio em produção"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Events Manager → Testar eventos → código TEST... — apague após validar que os eventos chegam
+              </p>
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      <Card className="space-y-3 p-5" style={tabStyle("integracoes")}>
+        <h2 className="font-semibold">99Food (Open Delivery)</h2>
+        <p className="text-xs text-muted-foreground">
+          A 99Food usa o padrão aberto <b>Open Delivery</b> (o mesmo da Keeta) em vez de uma API própria só dela. Peça
+          as credenciais abaixo pra 99Food depois do seu cadastro (portal{" "}
+          <span className="font-mono">developer-food.99app.com</span> ou{" "}
+          <span className="font-mono">99FoodTechSupport@didiglobal.com</span>). Essa integração é totalmente
+          independente da do iFood — desligar ou errar algo aqui não afeta o iFood, e vice-versa.
+        </p>
+        <div className="rounded-md bg-muted p-3 text-xs">
+          <p className="mb-1 font-semibold">URL do webhook (cole no cadastro da 99Food):</p>
+          <code className="break-all">
+            {typeof window !== "undefined" ? `${window.location.origin}/api/public/webhooks/nfood` : ""}
+          </code>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label>Client ID</Label>
+            <Input value={c.nfood_client_id || ""} onChange={(e) => setC({ ...c, nfood_client_id: e.target.value })} />
+          </div>
+          <div>
+            <Label>Client Secret</Label>
+            <Input
+              type="password"
+              value={c.nfood_client_secret || ""}
+              onChange={(e) => setC({ ...c, nfood_client_secret: e.target.value })}
+            />
+          </div>
+          <div>
+            <Label>Merchant ID (AppShopID da loja)</Label>
+            <Input
+              value={c.nfood_merchant_id || ""}
+              onChange={(e) => setC({ ...c, nfood_merchant_id: e.target.value })}
+            />
+          </div>
+          <div>
+            <Label>App ID</Label>
+            <Input value={c.nfood_app_id || ""} onChange={(e) => setC({ ...c, nfood_app_id: e.target.value })} />
+          </div>
+          <div>
+            <Label>URL base da API</Label>
+            <Input
+              value={c.nfood_api_base_url || ""}
+              onChange={(e) => setC({ ...c, nfood_api_base_url: e.target.value })}
+              placeholder="fornecida pelo suporte técnico da 99Food"
+            />
+          </div>
+          <div>
+            <Label>URL de autenticação (OAuth token)</Label>
+            <Input
+              value={c.nfood_oauth_token_url || ""}
+              onChange={(e) => setC({ ...c, nfood_oauth_token_url: e.target.value })}
+              placeholder="fornecida pelo suporte técnico da 99Food"
+            />
+          </div>
+        </div>
+        <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+          <div>
+            <Label>Entrega feita pela própria 99Food</Label>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Ligado: a 99Food usa o entregador dela pra esses pedidos, e eles não aparecem no seu app de entregador —
+              igual já acontece com o iFood. Desligue só se você escolheu o modo "Entrega Estabelecimento" no cadastro
+              da 99Food (você mesmo entrega, pelo HotBox).
+            </p>
+          </div>
+          <Switch
+            checked={c.nfood_own_delivery !== false}
+            onCheckedChange={(v) => setC({ ...c, nfood_own_delivery: v })}
+          />
+        </div>
+      </Card>
+
+      <Card className="space-y-3 p-5" style={tabStyle("notificacoes")}>
+        <h2 className="flex items-center gap-2 font-semibold">
+          <AlertTriangle className="size-4 text-amber-600" /> Monitoramento & alertas
+        </h2>
+        <p className="text-xs text-muted-foreground">
+          A loja envia um alerta pelo WhatsApp quando detecta falhas repetidas (ex: webhook do WhatsApp caindo) e quando
+          pedidos Pix são cancelados automaticamente.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label>WhatsApp para receber alertas</Label>
+            <Input
+              value={c.admin_alert_phone || ""}
+              onChange={(e) => setC({ ...c, admin_alert_phone: e.target.value })}
+              placeholder="5511999999999"
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Só com DDI+DDD, sem espaços. Envio via sua Evolution API.
+            </p>
+          </div>
+          <div>
+            <Label>
+              E-mail para alertas <span className="text-muted-foreground">(opcional)</span>
+            </Label>
+            <Input
+              type="email"
+              value={c.admin_alert_email || ""}
+              onChange={(e) => setC({ ...c, admin_alert_email: e.target.value })}
+              placeholder="voce@sualoja.com"
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">Requer domínio de e-mail configurado no projeto.</p>
+          </div>
+          <div>
+            <Label>Cancelar Pix não pago após (minutos)</Label>
+            <Input
+              type="number"
+              min={5}
+              max={120}
+              value={c.pix_auto_cancel_minutes ?? 15}
+              onChange={(e) => setC({ ...c, pix_auto_cancel_minutes: Number(e.target.value) || 15 })}
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">0 ou vazio desativa o cancelamento automático.</p>
+          </div>
+        </div>
+        <Button type="button" variant="outline" onClick={testAlert} disabled={testingAlert}>
+          <Bell className="size-4" /> {testingAlert ? "Enviando..." : "Testar alerta agora"}
+        </Button>
+        <p className="text-[11px] text-muted-foreground">
+          Manda um alerta de teste de verdade pro seu WhatsApp configurado acima — confirma que a corrente inteira
+          (banco → job → Evolution) está funcionando.
+        </p>
+      </Card>
+
+      <Card className="space-y-3 p-5" style={tabStyle("sistema")}>
+        <h2 className="flex items-center gap-2 font-semibold">
+          <FlaskConical className="size-4 text-violet-600" /> Diagnóstico de pagamentos
+        </h2>
+        <p className="text-xs text-muted-foreground">
+          Cria e apaga pedidos de teste no banco para confirmar que Pix e cartão estão
+          funcionando de verdade — não é simulação, testa o banco real. Roda em segundos e não deixa rastro. Bom pra
+          rodar sempre depois de qualquer atualização do sistema.
+        </p>
+        <Button type="button" variant="outline" onClick={runDiagnostics} disabled={diagnosticsRunning}>
+          <FlaskConical className="size-4" /> {diagnosticsRunning ? "Testando..." : "Rodar diagnóstico agora"}
+        </Button>
+        {diagnosticsResults && (
+          <div className="space-y-1.5 rounded-lg border p-3">
+            {diagnosticsResults.map((r, i) => (
+              <div
+                key={i}
+                className={`flex items-center gap-2 text-sm ${r.ok ? "text-emerald-700" : "text-destructive"}`}
+              >
+                {r.ok ? <CheckCircle2 className="size-4 shrink-0" /> : <AlertTriangle className="size-4 shrink-0" />}
+                <span className="font-medium">{r.name}</span>
+                {!r.ok && r.detail && <span className="text-xs text-muted-foreground">— {r.detail}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <Card className="space-y-3 p-5" style={tabStyle("sistema")}>
+        <h2 className="flex items-center gap-2 font-semibold">
+          <ScrollText className="size-4 text-slate-600" /> Logs de API
+        </h2>
+        <p className="text-xs text-muted-foreground">
+          Tudo que acontece nas integrações externas (iFood, WhatsApp) fica registrado lá — inclusive testes de pedido
+          que não chegaram — e tem uma IA que te ajuda a interpretar o que aconteceu.
+        </p>
+        <Link to="/loja/logs">
+          <Button type="button" variant="outline">
+            <ScrollText className="size-4" /> Ver logs de API
+          </Button>
+        </Link>
+      </Card>
+
+      <Card className="space-y-3 p-5" style={tabStyle("integracoes")}>
+        <h2 className="font-semibold">iFood</h2>
+        <p className="text-xs text-muted-foreground">
+          Cole a URL abaixo no seu integrador/homologação do iFood (Portal do Parceiro). Pedidos chegam automaticamente
+          com status "Aguardando Revisão" para você conferir antes de entrar na fila.
+        </p>
+        <div className="rounded-md bg-muted p-3 text-xs">
+          <p className="mb-1 font-semibold">URL do webhook (homologação/teste):</p>
+          <code className="break-all">
+            {typeof window !== "undefined"
+              ? `${window.location.origin}/api/public/webhooks/ifood?token=${c.ifood_webhook_secret || "SEU_TOKEN"}`
+              : ""}
+          </code>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label>Merchant ID (iFood)</Label>
+            <Input
+              value={c.ifood_merchant_id || ""}
+              onChange={(e) => setC({ ...c, ifood_merchant_id: e.target.value })}
+            />
+          </div>
+          <div>
+            <Label>Token do webhook</Label>
+            <div className="flex gap-2">
+              <Input
+                value={c.ifood_webhook_secret || ""}
+                onChange={(e) => setC({ ...c, ifood_webhook_secret: e.target.value })}
+                placeholder="gere um token seguro"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setC({ ...c, ifood_webhook_secret: crypto.randomUUID().replace(/-/g, "") })}
+              >
+                Gerar
+              </Button>
+            </div>
+          </div>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label>Client ID</Label>
+            <Input value={c.ifood_client_id || ""} onChange={(e) => setC({ ...c, ifood_client_id: e.target.value })} />
+          </div>
+          <div>
+            <Label>Client Secret</Label>
+            <Input
+              type="password"
+              value={c.ifood_client_secret || ""}
+              onChange={(e) => setC({ ...c, ifood_client_secret: e.target.value })}
+            />
+          </div>
+        </div>
+
+        <div className="border-t pt-3">
+          <h3 className="mb-2 text-sm font-semibold">Produção — envio de status e polling</h3>
+          <div>
+            <Label>URL pública do seu site</Label>
+            <Input
+              value={c.app_public_url || ""}
+              onChange={(e) => setC({ ...c, app_public_url: e.target.value })}
+              placeholder="https://seu-dominio.com"
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Necessária pro sistema avisar a iFood quando você mudar o status de um pedido.
+            </p>
+          </div>
+
+          <div className="mt-3 flex items-center justify-between rounded-lg border p-3">
+            <div>
+              <p className="text-sm font-semibold">Polling automático de pedidos</p>
+              <p className="text-[11px] text-muted-foreground">
+                Liga a busca automática de novos pedidos direto na API da iFood, a cada minuto — necessário pra produção
+                real (a URL de webhook sozinha não é suficiente pra homologação oficial).
+              </p>
+            </div>
+            <Switch
+              checked={!!c.ifood_polling_enabled}
+              onCheckedChange={(v) => setC({ ...c, ifood_polling_enabled: v })}
+            />
+          </div>
+
+          <div className="mt-2">
+            <Label>Token de segurança do polling</Label>
+            <div className="flex gap-2">
+              <Input
+                value={c.ifood_polling_token || ""}
+                onChange={(e) => setC({ ...c, ifood_polling_token: e.target.value })}
+                placeholder="gere um token seguro"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setC({ ...c, ifood_polling_token: crypto.randomUUID().replace(/-/g, "") })}
+              >
+                Gerar
+              </Button>
+            </div>
+          </div>
+
+          {c.ifood_last_poll_at && (
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Última busca: {new Date(c.ifood_last_poll_at).toLocaleString("pt-BR")}
+              {c.ifood_last_poll_error && (
+                <span className="ml-2 font-semibold text-destructive">⚠ {c.ifood_last_poll_error}</span>
+              )}
+            </p>
+          )}
+
+          <Button type="button" variant="outline" size="sm" className="mt-3" onClick={rescheduleIfoodPolling}>
+            <RefreshCw className="size-3.5" /> Salvar e (re)ativar polling agora
+          </Button>
+        </div>
+      </Card>
+
+      <Card className="space-y-3 p-5" style={tabStyle("integracoes")}>
+        <h2 className="font-semibold">🚗 Fora da área de entrega — redirecionar pro iFood/99Food</h2>
+        <p className="text-xs text-muted-foreground">
+          Quando um cliente pedir entrega pra um endereço fora da área do seu entregador fixo (bairro/rua não
+          atendidos, ou fora do raio calculado por distância), a IA não vai mais dizer só "não entregamos aí". Se você
+          cadastrar pelo menos um dos links abaixo, ela explica com educação que o pedido pode ser feito pela sua loja
+          no iFood ou na 99Food — que têm entregadores próprios cobrindo essa região — e só envia o link se o cliente
+          confirmar que quer. Sem nenhum link cadastrado aqui, o comportamento volta a ser o antigo (avisa que não
+          entrega, sem mencionar nenhuma plataforma).
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label>Link da loja no iFood</Label>
+            <Input
+              value={c.ifood_store_link || ""}
+              onChange={(e) => setC({ ...c, ifood_store_link: e.target.value })}
+              placeholder="https://www.ifood.com.br/delivery/.../sua-loja"
+            />
+          </div>
+          <div>
+            <Label>Link da loja na 99Food</Label>
+            <Input
+              value={c.nfood_store_link || ""}
+              onChange={(e) => setC({ ...c, nfood_store_link: e.target.value })}
+              placeholder="https://food.99app.com/.../sua-loja"
+            />
+          </div>
+        </div>
+      </Card>
+
+      <Card className="space-y-3 p-5" style={tabStyle("integracoes")}>
+        <h2 className="font-semibold">iFood — mapeamento de cardápio</h2>
+        <p className="text-xs text-muted-foreground">
+          Vincule cada item do cardápio da iFood a um produto seu — sem isso, o desconto automático de estoque e os
+          relatórios de venda não funcionam corretamente pra pedidos da iFood. Itens novos aparecem aqui sozinhos assim
+          que chega um pedido com eles.
+        </p>
+        <div className="max-h-80 space-y-2 overflow-y-auto">
+          {ifoodMap.map((row) => (
+            <div key={row.ifood_item_id} className="grid grid-cols-2 items-center gap-2 rounded-lg border p-2.5">
+              <span className="truncate text-sm font-medium">{row.ifood_item_name || row.ifood_item_id}</span>
+              <Select
+                value={row.product_id || "none"}
+                onValueChange={(v) => updateIfoodMap(row.ifood_item_id, v === "none" ? null : v)}
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue placeholder="Vincular a um produto..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">— não vinculado —</SelectItem>
+                  {products.map((p: any) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ))}
+          {!ifoodMap.length && (
+            <p className="py-4 text-center text-xs text-muted-foreground">Nenhum item da iFood recebido ainda.</p>
+          )}
+        </div>
+      </Card>
+
+      <Card className="space-y-3 p-5" style={tabStyle("pagamentos")}>
+        <h2 className="font-semibold">Taxas das plataformas (pra calcular o lucro real)</h2>
+        <p className="text-xs text-muted-foreground">
+          Cada plataforma cobra um percentual sobre o valor do pedido (comissão + taxa de pagamento online, quando
+          aplicável). Preencha aqui o percentual <b>efetivo</b> que você paga em cada uma — dá pra ver isso no seu
+          extrato/repasse de cada plataforma. Isso é usado só em <b>/loja/financeiro</b>, pra descontar essas taxas do
+          lucro real de cada pedido — sem isso, o financeiro contaria o valor cheio do pedido como se fosse todo seu, o
+          que não é verdade.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <Label>WhatsApp (%)</Label>
+            <Input
+              type="number"
+              step="0.1"
+              min="0"
+              value={c.fee_pct_whatsapp ?? ""}
+              onChange={(e) =>
+                setC({
+                  ...c,
+                  fee_pct_whatsapp: e.target.value === "" ? null : Number(e.target.value),
+                })
+              }
+              placeholder="0"
+            />
+          </div>
+          <div>
+            <Label>Site próprio (%)</Label>
+            <Input
+              type="number"
+              step="0.1"
+              min="0"
+              value={c.fee_pct_site ?? ""}
+              onChange={(e) => setC({ ...c, fee_pct_site: e.target.value === "" ? null : Number(e.target.value) })}
+              placeholder="0"
+            />
+          </div>
+          <div>
+            <Label>iFood (%)</Label>
+            <Input
+              type="number"
+              step="0.1"
+              min="0"
+              value={c.fee_pct_ifood ?? ""}
+              onChange={(e) => setC({ ...c, fee_pct_ifood: e.target.value === "" ? null : Number(e.target.value) })}
+              placeholder="ex: 15.2"
+            />
+          </div>
+          <div>
+            <Label>99Food (%)</Label>
+            <Input
+              type="number"
+              step="0.1"
+              min="0"
+              value={c.fee_pct_99food ?? ""}
+              onChange={(e) =>
+                setC({
+                  ...c,
+                  fee_pct_99food: e.target.value === "" ? null : Number(e.target.value),
+                })
+              }
+              placeholder="ex: 12.1"
+            />
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Dica: se a plataforma cobra comissão + taxa de pagamento separadas (ex: 12% + 3,2%), some as duas aqui — o
+          campo é um percentual único aplicado sobre o valor total de cada pedido dessa origem.
+        </p>
+      </Card>
+
+      <Card className="space-y-3 p-5" style={tabStyle("ia")}>
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold">IA / Failover</h2>
+          <span className="flex items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
+            <Zap className="size-3.5" />
+            Principal: ChatGPT
+          </span>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          O atendimento por IA no WhatsApp usa o <b>ChatGPT (OpenAI)</b> como provedor principal — cole sua chave abaixo
+          pra ativar. Cadastrar também uma chave do Groq cria um <b>backup automático</b>: se o ChatGPT falhar ou ficar
+          sem crédito, o sistema tenta o Groq na mesma conversa, sem o cliente perceber.
+        </p>
+        <div>
+          <Label>Chave do ChatGPT (OpenAI) — principal</Label>
+          <Input
+            type="password"
+            value={c.openai_api_key || ""}
+            onChange={(e) => setC({ ...c, openai_api_key: e.target.value })}
+            placeholder="sk-..."
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            Pegue em <span className="font-mono">platform.openai.com/api-keys</span>. Sem essa chave, o sistema tenta
+            direto o Groq (se cadastrado).
+          </p>
+        </div>
+        <div>
+          <Label>Chave do Groq — reserva</Label>
+          <Input
+            type="password"
+            value={c.groq_api_key || ""}
+            onChange={(e) => setC({ ...c, groq_api_key: e.target.value })}
+            placeholder="gsk_..."
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            Pegue de graça em <span className="font-mono">console.groq.com/keys</span>. Só é usada se o ChatGPT falhar
+            ou não estiver configurado.
+          </p>
+        </div>
+        <div>
+          <Label className="flex items-center gap-1">
+            Temperatura da IA
+            <InfoTip text="Controla o quanto a IA pode 'variar' ou improvisar nas respostas. Quanto mais baixo, mais previsível e fiel ao script ela fica — recomendado para atendimento comercial. Quanto mais alto, mais natural e solta a conversa fica, mas com mais risco de fugir do combinado." />
+          </Label>
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-5">
+            {[
+              { value: 0.1, label: "Muito precisa", desc: "Segue o script à risca" },
+              { value: 0.3, label: "Precisa", desc: "Recomendado" },
+              { value: 0.5, label: "Equilibrada", desc: "Meio-termo" },
+              { value: 0.7, label: "Natural", desc: "Mais solta" },
+              { value: 0.9, label: "Criativa", desc: "Maior risco de fugir do script" },
+            ].map((opt) => {
+              const active = Number(c.ai_temperature ?? 0.3) === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setC({ ...c, ai_temperature: opt.value })}
+                  className={`rounded-lg border p-2.5 text-left text-xs transition-colors ${
+                    active
+                      ? "border-primary bg-primary/10 font-semibold text-primary"
+                      : "border-border hover:bg-muted"
+                  }`}
+                >
+                  <div>{opt.label}</div>
+                  <div className="mt-0.5 text-[10px] font-normal text-muted-foreground">{opt.desc}</div>
+                  <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">{opt.value}</div>
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            <Label className="text-xs text-muted-foreground">Ou defina um valor exato (0 a 1):</Label>
+            <Input
+              type="number"
+              step="0.05"
+              min="0"
+              max="1"
+              className="w-24"
+              value={c.ai_temperature ?? 0.3}
+              onChange={(e) =>
+                setC({
+                  ...c,
+                  ai_temperature: e.target.value === "" ? 0.3 : Math.max(0, Math.min(1, Number(e.target.value))),
+                })
+              }
+            />
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Para atendimento comercial (pedidos, valores, endereços), recomendamos manter em <b>0,1 a 0,3</b> — reduz
+            bastante a chance da IA sair do script ou "inventar" alguma resposta.
+          </p>
+        </div>
+      </Card>
+
+      <div style={tabStyle("ia")}>
+        <MenuImagesCard />
+      </div>
+
+      <div style={tabStyle("ia")}>
+        <AiInstructionsCard />
+      </div>
+
+      <div style={tabStyle("entrega")}>
+        <BairrosAtendidosCard pricingMode={c.delivery_pricing_mode === "distance" ? "distance" : "neighborhood"} />
+      </div>
+
+      <div style={tabStyle("entrega")}>
+        <BairrosNaoAtendidosCard />
+      </div>
+
+      <div style={tabStyle("entrega")}>
+        <RuasNaoAtendidasCard />
+      </div>
+
+      <div style={tabStyle("atendimento")}>
+        <ManualStoreStatusCard />
+      </div>
+
+      <div style={tabStyle("atendimento")}>
+        <BusinessHoursCard />
+      </div>
+
+      <div style={tabStyle("geral")}>
+        <ChatWallpaperCard />
+      </div>
+
+      <Card className="space-y-3 p-5" style={tabStyle("sistema")}>
+        <h2 className="font-semibold">Alterar senha</h2>
+        <p className="text-xs text-muted-foreground">Troca a senha do seu acesso administrativo.</p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label>Nova senha</Label>
+            <Input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="mínimo 6 caracteres"
+            />
+          </div>
+          <div>
+            <Label>Confirmar nova senha</Label>
+            <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+          </div>
+        </div>
+        <Button type="button" variant="outline" onClick={changePassword} disabled={changingPassword}>
+          {changingPassword ? "Trocando..." : "Trocar senha"}
+        </Button>
+      </Card>
+
+      <Card className="space-y-3 border-2 border-destructive p-5" style={tabStyle("sistema")}>
+        <h2 className="flex items-center gap-2 font-semibold text-destructive">
+          <AlertTriangle className="size-4" /> Zona de perigo — limpar dados de teste
+        </h2>
+        <p className="text-xs text-muted-foreground">
+          Use isso antes de entrar em produção, pra tirar os dados de teste sem mexer no restante da configuração.
+          Escolha só o que quiser apagar — cada categoria é independente. <b>Essa ação não pode ser desfeita.</b>
+        </p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {WIPE_OPTIONS.map((opt) => (
+            <label
+              key={opt.value}
+              className="flex cursor-pointer items-center gap-2 rounded-lg border p-2.5 text-sm hover:bg-muted"
+            >
+              <Checkbox checked={wipeSelected.includes(opt.value)} onCheckedChange={() => toggleWipe(opt.value)} />
+              {opt.label}
+            </label>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              setWipeSelected(wipeSelected.length === WIPE_OPTIONS.length ? [] : WIPE_OPTIONS.map((o) => o.value))
+            }
+          >
+            {wipeSelected.length === WIPE_OPTIONS.length ? "Desmarcar tudo" : "Selecionar tudo"}
+          </Button>
+          <Input
+            className="max-w-xs"
+            placeholder='Digite "APAGAR" para confirmar'
+            value={wipeConfirmText}
+            onChange={(e) => setWipeConfirmText(e.target.value)}
+          />
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={!wipeSelected.length || wipeConfirmText !== "APAGAR" || wiping}
+            onClick={runWipe}
+          >
+            <Trash2 className="size-4" /> {wiping ? "Apagando..." : "Apagar selecionados"}
+          </Button>
+        </div>
+      </Card>
+
+      <Button onClick={save} disabled={saving} className="w-full sm:w-auto">
+        <Save className="size-4" /> {saving ? "Salvando..." : "Salvar tudo"}
+      </Button>
+    </div>
+  );
+}
+
+// ============================================================
+// Card de instruções da IA (diárias + globais)
+// ============================================================
+function AiInstructionsCard() {
+  const [instructions, setInstructions] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newText, setNewText] = useState("");
+  const [newType, setNewType] = useState<"daily" | "global">("global");
+  const [adding, setAdding] = useState(false);
+
+  // data de hoje no fuso de Brasília
+  const todayBR = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
+
+  async function load() {
+    setLoading(true);
+    const { data } = await supabase.from("ai_instructions").select("*").order("created_at", { ascending: false });
+    setInstructions(data ?? []);
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function add() {
+    if (!newText.trim()) return;
+    setAdding(true);
+    const { error } = await supabase.from("ai_instructions").insert({
+      type: newType,
+      content: newText.trim(),
+      active: true,
+      valid_date: newType === "daily" ? todayBR : null,
+    });
+    if (error) {
+      toast.error(error.message);
+      setAdding(false);
+      return;
+    }
+    setNewText("");
+    toast.success(newType === "daily" ? "Instrução do dia adicionada!" : "Instrução global adicionada!");
+    setAdding(false);
+    load();
+  }
+
+  async function toggle(id: string, active: boolean) {
+    await supabase.from("ai_instructions").update({ active: !active }).eq("id", id);
+    load();
+  }
+
+  async function remove(id: string) {
+    if (!window.confirm("Remover essa instrução?")) return;
+    await supabase.from("ai_instructions").delete().eq("id", id);
+    load();
+  }
+
+  const globals = instructions.filter((i) => i.type === "global");
+  const todays = instructions.filter((i) => i.type === "daily" && i.valid_date === todayBR);
+  const past = instructions.filter((i) => i.type === "daily" && i.valid_date !== todayBR);
+
+  return (
+    <Card className="space-y-4 p-5">
+      <div>
+        <h2 className="flex items-center gap-2 font-semibold">🧠 Instruções para a IA</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Ensine a IA a seguir regras específicas. <strong>Globais</strong> valem todos os dias. <strong>Do dia</strong>{" "}
+          valem só hoje (fuso Brasília) e somem automaticamente.
+        </p>
+      </div>
+
+      {/* form para adicionar */}
+      <div className="space-y-2 rounded-xl border border-dashed p-3">
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant={newType === "global" ? "default" : "outline"}
+            className="rounded-full"
+            onClick={() => setNewType("global")}
+          >
+            🌍 Global
+          </Button>
+          <Button
+            size="sm"
+            variant={newType === "daily" ? "default" : "outline"}
+            className="rounded-full"
+            onClick={() => setNewType("daily")}
+          >
+            📅 Só hoje
+          </Button>
+        </div>
+        <Textarea
+          rows={2}
+          placeholder={
+            newType === "daily"
+              ? `Ex: Hoje estamos sem batata frita. Se pedirem, avise com educação e ofereça o onion rings como alternativa.`
+              : `Ex: Sempre pergunte se o cliente tem o cartão fidelidade antes de fechar o pedido.`
+          }
+          value={newText}
+          onChange={(e) => setNewText(e.target.value)}
+          className="resize-none rounded-xl text-sm"
+        />
+        <Button size="sm" onClick={add} disabled={adding || !newText.trim()}>
+          {adding ? "Adicionando..." : `Adicionar instrução ${newType === "daily" ? "do dia" : "global"}`}
+        </Button>
+      </div>
+
+      {loading ? (
+        <p className="text-xs text-muted-foreground">Carregando...</p>
+      ) : (
+        <div className="space-y-4">
+          {/* globais */}
+          {globals.length > 0 && (
+            <div>
+              <p className="mb-1.5 text-xs font-bold uppercase tracking-wide text-muted-foreground">
+                🌍 Globais — sempre ativas
+              </p>
+              <div className="space-y-2">
+                {globals.map((i) => (
+                  <div
+                    key={i.id}
+                    className={`flex items-start gap-2 rounded-xl border p-2.5 ${i.active ? "bg-emerald-50 border-emerald-200" : "opacity-50"}`}
+                  >
+                    <Switch
+                      checked={i.active}
+                      onCheckedChange={() => toggle(i.id, i.active)}
+                      className="mt-0.5 shrink-0"
+                    />
+                    <p className="flex-1 text-sm leading-snug">{i.content}</p>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="size-7 shrink-0 text-destructive"
+                      onClick={() => remove(i.id)}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* do dia */}
+          {todays.length > 0 && (
+            <div>
+              <p className="mb-1.5 text-xs font-bold uppercase tracking-wide text-muted-foreground">
+                📅 Hoje — somem à meia-noite
+              </p>
+              <div className="space-y-2">
+                {todays.map((i) => (
+                  <div
+                    key={i.id}
+                    className={`flex items-start gap-2 rounded-xl border p-2.5 ${i.active ? "bg-blue-50 border-blue-200" : "opacity-50"}`}
+                  >
+                    <Switch
+                      checked={i.active}
+                      onCheckedChange={() => toggle(i.id, i.active)}
+                      className="mt-0.5 shrink-0"
+                    />
+                    <p className="flex-1 text-sm leading-snug">{i.content}</p>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="size-7 shrink-0 text-destructive"
+                      onClick={() => remove(i.id)}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* dias anteriores */}
+          {past.length > 0 && (
+            <div>
+              <p className="mb-1.5 text-xs font-bold uppercase tracking-wide text-muted-foreground">
+                🗓️ Dias anteriores (expiradas)
+              </p>
+              <div className="space-y-2">
+                {past.map((i) => (
+                  <div key={i.id} className="flex items-start gap-2 rounded-xl border p-2.5 opacity-40">
+                    <span className="mt-0.5 text-xs text-muted-foreground">{i.valid_date}</span>
+                    <p className="flex-1 text-sm leading-snug line-through">{i.content}</p>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="size-7 shrink-0 text-destructive"
+                      onClick={() => remove(i.id)}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {globals.length === 0 && todays.length === 0 && past.length === 0 && (
+            <p className="text-xs text-muted-foreground">Nenhuma instrução cadastrada ainda.</p>
+          )}
+        </div>
+      )}
     </Card>
+  );
+}
 
-    <Dialog open={!!selected} onOpenChange={open => { if (!open) setSelected(null); }}><DialogContent className="max-h-[90vh] overflow-y-auto p-0 sm:max-w-2xl">{selected && <><div className="border-b bg-muted/20 px-6 pb-5 pt-6 sm:px-8"><DialogHeader className="text-left"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><p className="text-[11px] font-black uppercase tracking-[0.16em] text-primary">{orderRef(selected)} · {providerLabel(selected)}</p><DialogTitle className="mt-1 truncate text-2xl font-black sm:text-3xl">{selected.customer_name || "Cliente"}</DialogTitle><p className="mt-1 text-sm text-muted-foreground">{selected.customer_phone || "Telefone não informado"}</p></div><div className="shrink-0 sm:text-right"><p className="text-[10px] font-black uppercase tracking-[0.14em] text-muted-foreground">Data da transação</p><p className="mt-1 text-sm font-bold">{formatDate(selected.paid_at)}</p></div></div></DialogHeader></div>
-      <div className="space-y-7 px-6 py-6 sm:px-8"><section><div className="mb-3 flex items-center justify-between"><h3 className="text-xs font-black uppercase tracking-[0.16em] text-muted-foreground">Pagamento</h3><span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">Confirmado</span></div><div className="divide-y border-y"><div className="flex justify-between gap-5 py-3.5"><span className="text-sm text-muted-foreground">Provedor</span><span className="text-sm font-bold">{providerLabel(selected)}</span></div><div className="flex justify-between gap-5 py-3.5"><span className="text-sm text-muted-foreground">Forma de pagamento</span><span className="text-sm font-bold">{paymentLabel(selected)}{installments(selected) > 1 ? ` · ${installments(selected)}x` : ""}</span></div><div className="flex justify-between gap-5 py-3.5"><span className="text-sm text-muted-foreground">Valor da venda</span><span className="text-lg font-black">{brl(grossAmount(selected))}</span></div><div className="flex justify-between gap-5 py-3.5"><span className="text-sm text-muted-foreground">Pago pelo cliente</span><span className="text-sm font-bold">{brl(customerPaid(selected))}</span></div>{Number(selected.mercadopago_refunded_amount || 0) > 0 && <><div className="flex justify-between gap-5 py-3.5"><span className="text-sm text-muted-foreground">Total estornado</span><span className="text-sm font-black text-red-600">- {brl(selected.mercadopago_refunded_amount)}</span></div><div className="flex justify-between gap-5 py-3.5"><span className="text-sm text-muted-foreground">Líquido da venda</span><span className="text-sm font-black">{brl(Math.max(0, grossAmount(selected)-Number(selected.mercadopago_refunded_amount||0)))}</span></div></>}{providerOf(selected) === "mercadopago" && Number(selected.mercadopago_fee_amount || 0) > 0 && <><div className="flex justify-between gap-5 py-3.5"><span className="text-sm text-muted-foreground">Taxa do provedor</span><span className="text-sm font-bold">{brl(selected.mercadopago_fee_amount)}</span></div><div className="flex justify-between gap-5 py-3.5"><span className="text-sm text-muted-foreground">Líquido informado pelo provedor</span><span className="text-sm font-black">{brl(selected.mercadopago_net_received_amount ?? grossAmount(selected) - Number(selected.mercadopago_fee_amount || 0))}</span></div></>}</div></section>
-      <section><h3 className="mb-3 text-xs font-black uppercase tracking-[0.16em] text-muted-foreground">Composição do pedido</h3><div className="divide-y border-y"><div className="flex justify-between py-3"><span className="text-sm text-muted-foreground">Subtotal</span><span className="text-sm font-bold">{brl(selected.subtotal)}</span></div><div className="flex justify-between py-3"><span className="text-sm text-muted-foreground">Taxa de entrega</span><span className="text-sm font-bold">{brl(selected.delivery_fee)}</span></div><div className="flex justify-between py-3"><span className="text-sm text-muted-foreground">Desconto</span><span className="text-sm font-bold">{brl(selected.coupon_discount)}</span></div>{selected.coupon_code && <div className="flex justify-between py-3"><span className="text-sm text-muted-foreground">Cupom</span><span className="text-sm font-bold">{selected.coupon_code}</span></div>}</div></section>
-      {selected.infinitepay_receipt_url && <a href={selected.infinitepay_receipt_url} target="_blank" rel="noreferrer" className="flex items-center justify-between border-y py-4 text-sm font-black text-emerald-700">Abrir comprovante da InfinitePay <ExternalLink className="size-4" /></a>}
-      {providerOf(selected) === "mercadopago" && <section className="rounded-2xl border border-red-100 bg-red-50/40 p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h3 className="text-xs font-black uppercase tracking-[0.16em] text-red-700">Estorno Mercado Pago</h3><p className="mt-1 text-xs text-muted-foreground">O estorno é enviado diretamente à Orders API e fica registrado no histórico e no fluxo de caixa.</p></div><Button variant="destructive" className="gap-2 rounded-xl" disabled={!selected.mercadopago_order_id || Number(selected.mercadopago_refunded_amount||0) >= Number(selected.total||0)} onClick={() => { setRefundType("total"); setRefundAmount(""); setRefundReason(""); setRefundOpen(true); }}><RotateCcw className="size-4" /> {Number(selected.mercadopago_refunded_amount||0) >= Number(selected.total||0) ? "Totalmente estornado" : "Estornar pagamento"}</Button></div>{!selected.mercadopago_order_id && <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-900">Pagamento anterior à migração para Orders API: estorno automático indisponível neste registro.</p>}{(selected.refunds || []).length > 0 && <div className="mt-4 space-y-2 border-t border-red-100 pt-4"><p className="text-xs font-black uppercase tracking-wider text-muted-foreground">Histórico de estornos</p>{(selected.refunds || []).map(r => <div key={r.id} className="rounded-xl border bg-white p-3"><div className="flex items-start justify-between gap-3"><div><p className="text-sm font-black">{r.refund_type === "total" ? "Estorno total" : "Estorno parcial"} · {brl(r.amount)}</p><p className="mt-1 text-xs text-muted-foreground">{formatDate(r.requested_at)} · {r.reason}</p>{r.mercadopago_refund_id && <p className="mt-1 text-[11px] text-muted-foreground">Refund ID: {r.mercadopago_refund_id}</p>}</div><span className={`rounded-full px-2.5 py-1 text-[11px] font-black ${r.status === "processed" ? "bg-emerald-100 text-emerald-800" : r.status === "failed" ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-800"}`}>{r.status === "processed" ? "Concluído" : r.status === "failed" ? "Falhou" : "Processando"}</span></div>{r.error_message && <p className="mt-2 text-xs font-semibold text-red-700">{r.error_message}</p>}</div>)}</div>}</section>}
-      <section><div className="flex items-center justify-between gap-3"><div><h3 className="text-xs font-black uppercase tracking-[0.16em] text-muted-foreground">Informações internas</h3><p className="mt-1 text-xs text-muted-foreground">Anotações administrativas. Não alteram o pagamento.</p></div><Button variant="outline" size="sm" className="gap-2 rounded-xl" onClick={() => setEditing(v => !v)}><Edit3 className="size-4" /> {editing ? "Cancelar" : "Editar"}</Button></div>{editing ? <div className="mt-4 space-y-3 border-t pt-4"><div><Label>Referência interna</Label><Input value={reference} onChange={e => setReference(e.target.value)} /></div><div><Label>Observação</Label><textarea className="min-h-28 w-full rounded-xl border bg-background px-3 py-2 text-sm" value={note} onChange={e => setNote(e.target.value)} /></div><Button onClick={saveMeta} disabled={saving}>{saving && <Loader2 className="mr-2 size-4 animate-spin" />}Salvar alterações</Button></div> : <div className="mt-4 divide-y border-y"><div className="grid gap-1 py-3 sm:grid-cols-[150px_1fr]"><span className="text-sm text-muted-foreground">Referência</span><span className="text-sm font-semibold">{selected.finance_reference || "—"}</span></div><div className="grid gap-1 py-3 sm:grid-cols-[150px_1fr]"><span className="text-sm text-muted-foreground">Observação</span><span className="whitespace-pre-wrap text-sm font-semibold">{selected.finance_note || "—"}</span></div></div>}</section></div>
-      <DialogFooter className="border-t px-6 py-4 sm:justify-between sm:px-8"><Button variant="ghost" className="gap-2 text-destructive" onClick={hideRecord} disabled={saving}><Trash2 className="size-4" /> Excluir da lista</Button><Button variant="outline" onClick={() => setSelected(null)}>Fechar</Button></DialogFooter></>}</DialogContent></Dialog>
+// ============================================================
+// Card de bairros atendidos (lista oficial, usada pelo sistema pra decidir
+// área de entrega — tem prioridade sobre o cálculo por distância/km)
+// ============================================================
+function BairrosAtendidosCard({ pricingMode }: { pricingMode: "neighborhood" | "distance" }) {
+  const [bairros, setBairros] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newNome, setNewNome] = useState("");
+  const [newFee, setNewFee] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingNome, setEditingNome] = useState("");
+  const [editingFee, setEditingFee] = useState("");
+  const [saving, setSaving] = useState(false);
 
-    <Dialog open={refundOpen} onOpenChange={setRefundOpen}><DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>Estornar pagamento no Mercado Pago</DialogTitle></DialogHeader>{selected && <div className="space-y-4"><div className="rounded-2xl border bg-muted/25 p-4"><p className="text-sm font-black">{orderRef(selected)} · {selected.customer_name}</p><p className="mt-1 text-sm text-muted-foreground">Pago: {brl(grossAmount(selected))} · Já estornado: {brl(selected.mercadopago_refunded_amount)}</p><p className="mt-1 text-sm font-black">Disponível: {brl(Math.max(0, Number(selected.total||0)-Number(selected.mercadopago_refunded_amount||0)))}</p></div><div><Label>Tipo de estorno</Label><Select value={refundType} onValueChange={v => setRefundType(v as "total"|"partial")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="total">Estorno total do valor restante</SelectItem><SelectItem value="partial">Estorno parcial</SelectItem></SelectContent></Select></div>{refundType === "partial" && <div><Label>Valor a estornar</Label><Input inputMode="decimal" value={refundAmount} onChange={e=>setRefundAmount(e.target.value)} placeholder="Ex.: 10,00" /></div>}<div><Label>Motivo do estorno</Label><textarea className="min-h-24 w-full rounded-xl border bg-background px-3 py-2 text-sm" value={refundReason} onChange={e=>setRefundReason(e.target.value)} placeholder="Ex.: Pedido cancelado pelo cliente" /></div><div className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-900"><b>Atenção:</b> ao confirmar, o sistema envia um estorno real ao Mercado Pago. A venda original permanece registrada e uma saída de estorno é lançada separadamente no financeiro.</div></div>}<DialogFooter><Button variant="outline" onClick={()=>setRefundOpen(false)} disabled={refunding}>Cancelar</Button><Button variant="destructive" onClick={doRefund} disabled={refunding}>{refunding ? <Loader2 className="mr-2 size-4 animate-spin" /> : <RotateCcw className="mr-2 size-4" />}Confirmar estorno</Button></DialogFooter></DialogContent></Dialog>
-  </div>;
+  async function load() {
+    setLoading(true);
+    const { data } = await (supabase as any).from("bairros_atendidos").select("*").order("nome", { ascending: true });
+    setBairros(data ?? []);
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function add() {
+    const nome = newNome.trim();
+    if (!nome) return;
+    setAdding(true);
+    const fee = newFee === "" ? null : Math.max(0, Number(newFee));
+    const { error } = await (supabase as any).from("bairros_atendidos").insert({ nome, ativo: true, delivery_fee: Number.isFinite(fee as number) ? fee : null });
+    if (error) {
+      toast.error(error.message.includes("duplicate") ? "Esse bairro já está cadastrado." : error.message);
+      setAdding(false);
+      return;
+    }
+    setNewNome("");
+    setNewFee("");
+    toast.success("Bairro adicionado!");
+    setAdding(false);
+    load();
+  }
+
+  async function toggle(id: string, ativo: boolean) {
+    await (supabase as any).from("bairros_atendidos").update({ ativo: !ativo }).eq("id", id);
+    load();
+  }
+
+  function startEdit(b: any) {
+    setEditingId(b.id);
+    setEditingNome(b.nome);
+    setEditingFee(b.delivery_fee == null ? "" : String(b.delivery_fee));
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditingNome("");
+    setEditingFee("");
+  }
+
+  async function saveEdit(id: string) {
+    const nome = editingNome.trim();
+    if (!nome) return;
+    setSaving(true);
+    const fee = editingFee === "" ? null : Math.max(0, Number(editingFee));
+    const { error } = await (supabase as any).from("bairros_atendidos").update({ nome, delivery_fee: Number.isFinite(fee as number) ? fee : null }).eq("id", id);
+    if (error) {
+      toast.error(error.message.includes("duplicate") ? "Esse bairro já está cadastrado." : error.message);
+      setSaving(false);
+      return;
+    }
+    setSaving(false);
+    cancelEdit();
+    toast.success("Bairro atualizado!");
+    load();
+  }
+
+  async function remove(id: string) {
+    if (!window.confirm("Remover esse bairro da lista de atendidos?")) return;
+    await (supabase as any).from("bairros_atendidos").delete().eq("id", id);
+    load();
+  }
+
+  return (
+    <Card className="space-y-4 p-5">
+      <div>
+        <h2 className="flex items-center gap-2 font-semibold">📍 Bairros atendidos</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Esta continua sendo a lista oficial de bairros com entrega própria. {pricingMode === "neighborhood" ? (<>Como o modo <strong>Por bairro</strong> está ativo, a taxa cadastrada em cada linha é a taxa que o cardápio mostra ao validar o CEP.</>) : (<>Como o modo <strong>Por quilometragem</strong> está ativo, estes bairros definem a área permitida, mas o valor é calculado pelas faixas de km.</>)}
+        </p>
+      </div>
+
+      {/* form para adicionar */}
+      <div className="grid gap-2 sm:grid-cols-[1fr_150px_auto]">
+        <Input
+          placeholder="Nome do bairro (ex: Vila São Luís)"
+          value={newNome}
+          onChange={(e) => setNewNome(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && add()}
+          className="rounded-xl text-sm"
+        />
+        <div className="relative">
+          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground">R$</span>
+          <Input type="number" min="0" step="0.01" placeholder="Taxa" value={newFee} onChange={(e) => setNewFee(e.target.value)} className="rounded-xl pl-9 text-sm" />
+        </div>
+        <Button size="sm" onClick={add} disabled={adding || !newNome.trim()}>
+          <Plus className="size-4" /> Adicionar
+        </Button>
+      </div>
+
+      {loading ? (
+        <p className="text-xs text-muted-foreground">Carregando...</p>
+      ) : bairros.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          Nenhum bairro cadastrado ainda. Cadastre os bairros onde a HotBox faz entrega própria antes de liberar o cardápio digital.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {bairros.map((b) => (
+            <div
+              key={b.id}
+              className={`flex items-center gap-2 rounded-xl border p-2.5 ${b.ativo ? "bg-emerald-50 border-emerald-200" : "opacity-50"}`}
+            >
+              <Switch checked={b.ativo} onCheckedChange={() => toggle(b.id, b.ativo)} className="shrink-0" />
+              {editingId === b.id ? (
+                <>
+                  <Input
+                    value={editingNome}
+                    onChange={(e) => setEditingNome(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && saveEdit(b.id)}
+                    className="h-8 flex-1 rounded-lg text-sm"
+                    autoFocus
+                  />
+                  <div className="relative w-28 shrink-0">
+                    <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-muted-foreground">R$</span>
+                    <Input type="number" min="0" step="0.01" value={editingFee} onChange={(e) => setEditingFee(e.target.value)} className="h-8 rounded-lg pl-7 text-sm" />
+                  </div>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="size-7 shrink-0 text-emerald-600"
+                    onClick={() => saveEdit(b.id)}
+                    disabled={saving || !editingNome.trim()}
+                  >
+                    <Check className="size-3.5" />
+                  </Button>
+                  <Button size="icon" variant="ghost" className="size-7 shrink-0" onClick={cancelEdit}>
+                    <X className="size-3.5" />
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <div className="min-w-0 flex-1"><p className="text-sm font-semibold leading-snug">{b.nome}</p><p className="mt-0.5 text-[11px] text-muted-foreground">Taxa: <strong className="text-foreground">{b.delivery_fee == null ? "padrão" : `R$ ${Number(b.delivery_fee).toFixed(2).replace(".", ",")}`}</strong>{pricingMode === "distance" ? " • ignorada enquanto km estiver ativo" : ""}</p></div>
+                  <Button size="icon" variant="ghost" className="size-7 shrink-0" onClick={() => startEdit(b)}>
+                    <Pencil className="size-3.5" />
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="size-7 shrink-0 text-destructive"
+                    onClick={() => remove(b.id)}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ============================================================
+// Card de bairros NÃO atendidos (bloqueio explícito — prioridade máxima,
+// vale mais até que a lista de bairros atendidos e que qualquer cálculo
+// por distância/km). Ver applyBairroOverride() em webhooks.evolution.ts.
+// ============================================================
+function BairrosNaoAtendidosCard() {
+  const [bairros, setBairros] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newNome, setNewNome] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingNome, setEditingNome] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    const { data } = await (supabase as any)
+      .from("bairros_nao_atendidos")
+      .select("*")
+      .order("nome", { ascending: true });
+    setBairros(data ?? []);
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function add() {
+    const nome = newNome.trim();
+    if (!nome) return;
+    setAdding(true);
+    const { error } = await (supabase as any).from("bairros_nao_atendidos").insert({ nome, ativo: true });
+    if (error) {
+      toast.error(error.message.includes("duplicate") ? "Esse bairro já está cadastrado." : error.message);
+      setAdding(false);
+      return;
+    }
+    setNewNome("");
+    toast.success("Bairro adicionado à lista de não atendidos!");
+    setAdding(false);
+    load();
+  }
+
+  async function toggle(id: string, ativo: boolean) {
+    await (supabase as any).from("bairros_nao_atendidos").update({ ativo: !ativo }).eq("id", id);
+    load();
+  }
+
+  function startEdit(b: any) {
+    setEditingId(b.id);
+    setEditingNome(b.nome);
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditingNome("");
+  }
+
+  async function saveEdit(id: string) {
+    const nome = editingNome.trim();
+    if (!nome) return;
+    setSaving(true);
+    const { error } = await (supabase as any).from("bairros_nao_atendidos").update({ nome }).eq("id", id);
+    if (error) {
+      toast.error(error.message.includes("duplicate") ? "Esse bairro já está cadastrado." : error.message);
+      setSaving(false);
+      return;
+    }
+    setSaving(false);
+    cancelEdit();
+    toast.success("Bairro atualizado!");
+    load();
+  }
+
+  async function remove(id: string) {
+    if (!window.confirm("Remover esse bairro da lista de não atendidos?")) return;
+    await (supabase as any).from("bairros_nao_atendidos").delete().eq("id", id);
+    load();
+  }
+
+  return (
+    <Card className="space-y-4 p-5">
+      <div>
+        <h2 className="flex items-center gap-2 font-semibold">🚫 Bairros não atendidos</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Bairros onde a loja <strong>nunca</strong> entrega, mesmo que pareçam próximos ou dentro do raio de
+          distância. Um bairro cadastrado aqui tem <strong>prioridade máxima</strong>: a IA nunca vai dizer que
+          entrega nele, mesmo que ele também esteja (por engano) na lista de bairros atendidos, ou que o cálculo por
+          km diga que está dentro da área.
+        </p>
+      </div>
+
+      <div className="flex gap-2">
+        <Input
+          placeholder="Nome do bairro (ex: Parque Fluminense)"
+          value={newNome}
+          onChange={(e) => setNewNome(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && add()}
+          className="rounded-xl text-sm"
+        />
+        <Button size="sm" onClick={add} disabled={adding || !newNome.trim()}>
+          <Plus className="size-4" /> Adicionar
+        </Button>
+      </div>
+
+      {loading ? (
+        <p className="text-xs text-muted-foreground">Carregando...</p>
+      ) : bairros.length === 0 ? (
+        <p className="text-xs text-muted-foreground">Nenhum bairro bloqueado cadastrado ainda.</p>
+      ) : (
+        <div className="space-y-2">
+          {bairros.map((b) => (
+            <div
+              key={b.id}
+              className={`flex items-center gap-2 rounded-xl border p-2.5 ${b.ativo ? "bg-red-50 border-red-200" : "opacity-50"}`}
+            >
+              <Switch checked={b.ativo} onCheckedChange={() => toggle(b.id, b.ativo)} className="shrink-0" />
+              {editingId === b.id ? (
+                <>
+                  <Input
+                    value={editingNome}
+                    onChange={(e) => setEditingNome(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && saveEdit(b.id)}
+                    className="h-8 flex-1 rounded-lg text-sm"
+                    autoFocus
+                  />
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="size-7 shrink-0 text-emerald-600"
+                    onClick={() => saveEdit(b.id)}
+                    disabled={saving || !editingNome.trim()}
+                  >
+                    <Check className="size-3.5" />
+                  </Button>
+                  <Button size="icon" variant="ghost" className="size-7 shrink-0" onClick={cancelEdit}>
+                    <X className="size-3.5" />
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <p className="flex-1 text-sm leading-snug">{b.nome}</p>
+                  <Button size="icon" variant="ghost" className="size-7 shrink-0" onClick={() => startEdit(b)}>
+                    <Pencil className="size-3.5" />
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="size-7 shrink-0 text-destructive"
+                    onClick={() => remove(b.id)}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ============================================================
+// Card de ruas NÃO atendidas (bloqueio explícito por rua específica —
+// mesma prioridade máxima do card de bairros não atendidos, útil quando só
+// um trecho/rua específica de um bairro atendido não pode ser entregue).
+// ============================================================
+function RuasNaoAtendidasCard() {
+  const [ruas, setRuas] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newNome, setNewNome] = useState("");
+  const [newBairro, setNewBairro] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingNome, setEditingNome] = useState("");
+  const [editingBairro, setEditingBairro] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    const { data } = await (supabase as any)
+      .from("ruas_nao_atendidas")
+      .select("*")
+      .order("nome", { ascending: true });
+    setRuas(data ?? []);
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function add() {
+    const nome = newNome.trim();
+    if (!nome) return;
+    setAdding(true);
+    const { error } = await (supabase as any)
+      .from("ruas_nao_atendidas")
+      .insert({ nome, bairro: newBairro.trim() || null, ativo: true });
+    if (error) {
+      toast.error(error.message);
+      setAdding(false);
+      return;
+    }
+    setNewNome("");
+    setNewBairro("");
+    toast.success("Rua adicionada à lista de não atendidas!");
+    setAdding(false);
+    load();
+  }
+
+  async function toggle(id: string, ativo: boolean) {
+    await (supabase as any).from("ruas_nao_atendidas").update({ ativo: !ativo }).eq("id", id);
+    load();
+  }
+
+  function startEdit(r: any) {
+    setEditingId(r.id);
+    setEditingNome(r.nome);
+    setEditingBairro(r.bairro ?? "");
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditingNome("");
+    setEditingBairro("");
+  }
+
+  async function saveEdit(id: string) {
+    const nome = editingNome.trim();
+    if (!nome) return;
+    setSaving(true);
+    const { error } = await (supabase as any)
+      .from("ruas_nao_atendidas")
+      .update({ nome, bairro: editingBairro.trim() || null })
+      .eq("id", id);
+    if (error) {
+      toast.error(error.message);
+      setSaving(false);
+      return;
+    }
+    setSaving(false);
+    cancelEdit();
+    toast.success("Rua atualizada!");
+    load();
+  }
+
+  async function remove(id: string) {
+    if (!window.confirm("Remover essa rua da lista de não atendidas?")) return;
+    await (supabase as any).from("ruas_nao_atendidas").delete().eq("id", id);
+    load();
+  }
+
+  return (
+    <Card className="space-y-4 p-5">
+      <div>
+        <h2 className="flex items-center gap-2 font-semibold">🚫 Ruas não atendidas</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Ruas específicas onde a loja <strong>nunca</strong> entrega — mesma prioridade máxima do card de bairros
+          não atendidos. Use quando o problema é só uma rua/trecho específico, não o bairro inteiro (que pode
+          continuar sendo atendido normalmente). O campo de bairro é opcional, só ajuda a organizar a lista.
+        </p>
+      </div>
+
+      <div className="flex gap-2">
+        <Input
+          placeholder="Nome da rua (ex: Rua das Palmeiras)"
+          value={newNome}
+          onChange={(e) => setNewNome(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && add()}
+          className="rounded-xl text-sm"
+        />
+        <Input
+          placeholder="Bairro (opcional)"
+          value={newBairro}
+          onChange={(e) => setNewBairro(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && add()}
+          className="w-40 rounded-xl text-sm"
+        />
+        <Button size="sm" onClick={add} disabled={adding || !newNome.trim()}>
+          <Plus className="size-4" /> Adicionar
+        </Button>
+      </div>
+
+      {loading ? (
+        <p className="text-xs text-muted-foreground">Carregando...</p>
+      ) : ruas.length === 0 ? (
+        <p className="text-xs text-muted-foreground">Nenhuma rua bloqueada cadastrada ainda.</p>
+      ) : (
+        <div className="space-y-2">
+          {ruas.map((r) => (
+            <div
+              key={r.id}
+              className={`flex items-center gap-2 rounded-xl border p-2.5 ${r.ativo ? "bg-red-50 border-red-200" : "opacity-50"}`}
+            >
+              <Switch checked={r.ativo} onCheckedChange={() => toggle(r.id, r.ativo)} className="shrink-0" />
+              {editingId === r.id ? (
+                <>
+                  <Input
+                    value={editingNome}
+                    onChange={(e) => setEditingNome(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && saveEdit(r.id)}
+                    className="h-8 flex-1 rounded-lg text-sm"
+                    autoFocus
+                  />
+                  <Input
+                    value={editingBairro}
+                    onChange={(e) => setEditingBairro(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && saveEdit(r.id)}
+                    placeholder="Bairro (opcional)"
+                    className="h-8 w-36 rounded-lg text-sm"
+                  />
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="size-7 shrink-0 text-emerald-600"
+                    onClick={() => saveEdit(r.id)}
+                    disabled={saving || !editingNome.trim()}
+                  >
+                    <Check className="size-3.5" />
+                  </Button>
+                  <Button size="icon" variant="ghost" className="size-7 shrink-0" onClick={cancelEdit}>
+                    <X className="size-3.5" />
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <p className="flex-1 text-sm leading-snug">
+                    {r.nome}
+                    {r.bairro ? <span className="text-muted-foreground"> — {r.bairro}</span> : null}
+                  </p>
+                  <Button size="icon" variant="ghost" className="size-7 shrink-0" onClick={() => startEdit(r)}>
+                    <Pencil className="size-3.5" />
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="size-7 shrink-0 text-destructive"
+                    onClick={() => remove(r.id)}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+const WEEKDAYS = [
+  { value: 0, label: "Dom" },
+  { value: 1, label: "Seg" },
+  { value: 2, label: "Ter" },
+  { value: 3, label: "Qua" },
+  { value: 4, label: "Qui" },
+  { value: 5, label: "Sex" },
+  { value: 6, label: "Sáb" },
+];
+
+type BusinessHourRange = { days: number[]; open: string; close: string };
+
+function formatRangeDays(days: number[]): string {
+  const sorted = [...days].sort((a, b) => a - b);
+  const labels = sorted.map((d) => WEEKDAYS.find((w) => w.value === d)?.label ?? "");
+  return labels.join(", ");
+}
+
+/** Botão de abrir/fechar a loja manualmente — sobrepõe o horário automático
+ *  abaixo. Enquanto estiver em "Aberta manualmente" ou "Fechada
+ *  manualmente", o horário configurado no card abaixo é ignorado pela IA. */
+function ManualStoreStatusCard() {
+  const [status, setStatus] = useState<"auto" | "open" | "closed">("auto");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    const { data } = await (supabase as any)
+      .from("store_config")
+      .select("manual_store_status")
+      .eq("id", 1)
+      .maybeSingle();
+    setStatus((data?.manual_store_status as "open" | "closed" | null) || "auto");
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function setManualStatus(next: "auto" | "open" | "closed") {
+    setSaving(true);
+    const { error } = await (supabase as any)
+      .from("store_config")
+      .upsert({ id: 1, manual_store_status: next === "auto" ? null : next });
+    setSaving(false);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+    setStatus(next);
+    toast.success(
+      next === "auto"
+        ? "Voltou a seguir o horário automático."
+        : next === "open"
+          ? "Loja aberta manualmente — a IA atende normalmente, mesmo fora do horário configurado."
+          : "Loja fechada manualmente — a IA vai avisar que está fechada, mesmo dentro do horário configurado.",
+    );
+  }
+
+  const OPTIONS: { value: "auto" | "open" | "closed"; label: string; desc: string }[] = [
+    { value: "auto", label: "Automático", desc: "Segue o horário configurado abaixo" },
+    { value: "open", label: "Forçar aberta", desc: "IA atende, mesmo fora do horário" },
+    { value: "closed", label: "Forçar fechada", desc: "IA informa que está fechada, mesmo no horário" },
+  ];
+
+  return (
+    <Card className="space-y-3 p-5">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="font-semibold">Abrir/fechar loja agora</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Sobrepõe o horário de atendimento configurado abaixo — sempre que você abrir ou fechar a loja por aqui,
+            essa escolha manda na hora, e a IA acata ela.
+          </p>
+        </div>
+        {!loading && status !== "auto" && (
+          <span
+            className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${
+              status === "open" ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"
+            }`}
+          >
+            {status === "open" ? "Aberta manualmente" : "Fechada manualmente"}
+          </span>
+        )}
+      </div>
+
+      {loading ? (
+        <p className="text-xs text-muted-foreground">Carregando...</p>
+      ) : (
+        <>
+          <div className="grid grid-cols-3 gap-2">
+            {OPTIONS.map((opt) => {
+              const active = status === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  disabled={saving}
+                  onClick={() => setManualStatus(opt.value)}
+                  className={`rounded-lg border p-3 text-left text-xs transition-colors disabled:opacity-60 ${
+                    active ? "border-primary bg-primary/10 font-semibold text-primary" : "border-border hover:bg-muted"
+                  }`}
+                >
+                  <div>{opt.label}</div>
+                  <div className="mt-0.5 text-[10px] font-normal text-muted-foreground">{opt.desc}</div>
+                </button>
+              );
+            })}
+          </div>
+          {status === "closed" && (
+            <p className="rounded-lg bg-red-50 p-3 text-xs text-red-700">
+              Enquanto estiver em "Forçar fechada", a IA responde a qualquer contato com: <br />
+              <span className="italic">
+                "Estamos fechados devido a problemas na nossa operação. Amanhã abriremos normalmente."
+              </span>
+            </p>
+          )}
+        </>
+      )}
+    </Card>
+  );
+}
+
+
+function BusinessHoursCard() {
+  const [enabled, setEnabled] = useState(false);
+  const [ranges, setRanges] = useState<BusinessHourRange[]>([]);
+  const [closedMessage, setClosedMessage] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    const { data } = await (supabase as any)
+      .from("store_config")
+      .select("business_hours, business_hours_enabled, business_hours_closed_message")
+      .eq("id", 1)
+      .maybeSingle();
+    setEnabled(!!data?.business_hours_enabled);
+    setRanges(Array.isArray(data?.business_hours) ? data.business_hours : []);
+    setClosedMessage(data?.business_hours_closed_message || "");
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  function addRange() {
+    setRanges((prev) => [...prev, { days: [4, 5, 6, 0], open: "18:00", close: "00:00" }]);
+  }
+
+  function removeRange(idx: number) {
+    setRanges((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  function toggleDay(idx: number, day: number) {
+    setRanges((prev) =>
+      prev.map((r, i) =>
+        i !== idx
+          ? r
+          : {
+              ...r,
+              days: r.days.includes(day) ? r.days.filter((d) => d !== day) : [...r.days, day],
+            },
+      ),
+    );
+  }
+
+  function updateRange(idx: number, field: "open" | "close", value: string) {
+    setRanges((prev) => prev.map((r, i) => (i !== idx ? r : { ...r, [field]: value })));
+  }
+
+  async function save() {
+    setSaving(true);
+    const cleanRanges = ranges.filter((r) => r.days.length > 0 && r.open && r.close);
+    const { error } = await (supabase as any).from("store_config").upsert({
+      id: 1,
+      business_hours_enabled: enabled,
+      business_hours: cleanRanges,
+      business_hours_closed_message: closedMessage.trim() || null,
+    });
+    setSaving(false);
+    if (error) toast.error(error.message);
+    else {
+      setRanges(cleanRanges);
+      toast.success("Horário de atendimento salvo!");
+    }
+  }
+
+  const previewText = ranges.length
+    ? ranges.map((r) => `${formatRangeDays(r.days)} das ${r.open} às ${r.close}`).join(" · ")
+    : "nenhum horário cadastrado ainda";
+
+  return (
+    <Card className="space-y-4 p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="font-semibold">Horário de atendimento</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Configure os dias e horários em que a loja atende. Fora desse horário, a IA avisa automaticamente que a loja
+            está fechada e informa quando volta a atender — sem processar pedido novo enquanto estiver fechada.
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Label className="text-xs">{enabled ? "Ativado" : "Desativado"}</Label>
+          <Switch checked={enabled} onCheckedChange={setEnabled} />
+        </div>
+      </div>
+
+      {loading ? (
+        <p className="text-xs text-muted-foreground">Carregando...</p>
+      ) : (
+        <>
+          <div className="space-y-3">
+            {ranges.map((r, idx) => (
+              <div key={idx} className="space-y-2 rounded-lg border p-3">
+                <div className="flex flex-wrap gap-1.5">
+                  {WEEKDAYS.map((wd) => {
+                    const active = r.days.includes(wd.value);
+                    return (
+                      <button
+                        key={wd.value}
+                        type="button"
+                        onClick={() => toggleDay(idx, wd.value)}
+                        className={`rounded-full border px-2.5 py-1 text-xs font-semibold transition ${
+                          active
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : "border-input bg-background text-muted-foreground hover:bg-muted"
+                        }`}
+                      >
+                        {wd.label}
+                      </button>
+                    );
+                  })}
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="ml-auto size-7 text-destructive"
+                    onClick={() => removeRange(idx)}
+                    title="Remover essa faixa de horário"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label className="text-xs">Abre às</Label>
+                    <Input type="time" value={r.open} onChange={(e) => updateRange(idx, "open", e.target.value)} />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Fecha às</Label>
+                    <Input type="time" value={r.close} onChange={(e) => updateRange(idx, "close", e.target.value)} />
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      Se fechar depois da meia-noite, use 00:00 — o sistema entende que é no dia seguinte.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <Button type="button" variant="outline" size="sm" onClick={addRange} className="gap-1">
+            + Adicionar faixa de horário
+          </Button>
+
+          <div>
+            <Label>Mensagem de fora de horário (opcional)</Label>
+            <Textarea
+              rows={3}
+              value={closedMessage}
+              onChange={(e) => setClosedMessage(e.target.value)}
+              placeholder={`Olá, obrigado pelo seu contato! Nossos dias e horários de funcionamento são: ${previewText}. Assim que abrirmos, respondemos por aqui.`}
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Deixe em branco pra usar a mensagem padrão do sistema, que já cita os dias e horários acima
+              automaticamente.
+            </p>
+          </div>
+
+          <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
+            <span className="font-semibold text-foreground">Horário configurado: </span>
+            {previewText}
+          </div>
+
+          <Button onClick={save} disabled={saving}>
+            {saving ? "Salvando..." : "Salvar horário de atendimento"}
+          </Button>
+        </>
+      )}
+    </Card>
+  );
+}
+
+const WALLPAPER_OPTIONS = [
+  { value: "classic", label: "Bege clássico (cor sólida)", thumb: null as string | null },
+  { value: "whatsapp_teal", label: "Oficial do WhatsApp — verde escuro", thumb: wallpaperTeal },
+  { value: "whatsapp_beige", label: "Oficial do WhatsApp — bege claro", thumb: wallpaperBeige },
+];
+
+/** Card de aparência do chat: escolha do papel de parede da conversa em
+ *  /loja/chat, incluindo os dois papéis de parede oficiais do WhatsApp. */
+function ChatWallpaperCard() {
+  const [wallpaper, setWallpaper] = useState("classic");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    const { data } = await (supabase as any).from("store_config").select("chat_wallpaper").eq("id", 1).maybeSingle();
+    setWallpaper(data?.chat_wallpaper || "classic");
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function save(value: string) {
+    setWallpaper(value);
+    setSaving(true);
+    const { error } = await (supabase as any)
+      .from("store_config")
+      .upsert({ id: 1, chat_wallpaper: value }, { onConflict: "id" });
+    setSaving(false);
+    if (error) toast.error(error.message);
+    else {
+      // avisa a tela de chat (mesma aba) para trocar o fundo na hora
+      window.dispatchEvent(new CustomEvent("hb:chat-wallpaper", { detail: value }));
+      toast.success("Papel de parede do chat atualizado!");
+    }
+  }
+
+  return (
+    <Card className="space-y-4 p-5">
+      <div>
+        <h2 className="font-semibold">Aparência do chat</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Escolha o papel de parede da tela de conversas em /loja/chat — inclui os dois papéis de parede oficiais do
+          WhatsApp.
+        </p>
+      </div>
+
+      {loading ? (
+        <p className="text-xs text-muted-foreground">Carregando...</p>
+      ) : (
+        <div className="grid grid-cols-3 gap-3">
+          {WALLPAPER_OPTIONS.map((opt) => {
+            const active = wallpaper === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                disabled={saving}
+                onClick={() => save(opt.value)}
+                className={`overflow-hidden rounded-lg border-2 text-left transition ${
+                  active ? "border-primary ring-2 ring-primary/30" : "border-input hover:border-primary/50"
+                }`}
+              >
+                <div
+                  className="h-20 w-full"
+                  style={
+                    opt.thumb
+                      ? {
+                          backgroundImage: `url(${opt.thumb})`,
+                          backgroundSize: "cover",
+                          backgroundPosition: "center",
+                        }
+                      : { backgroundColor: "#E5DDD5" }
+                  }
+                />
+                <div className="flex items-center gap-1 p-2">
+                  {active && <Check className="size-3.5 shrink-0 text-primary" />}
+                  <span className="text-[11px] font-medium leading-tight">{opt.label}</span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function MenuImagesCard() {
+  const [images, setImages] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  async function load() {
+    setLoading(true);
+    const { data } = await supabase.from("menu_images").select("*").order("created_at", { ascending: true });
+    setImages(data ?? []);
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function upload(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+        const path = `cardapio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+        const { error: upErr } = await supabase.storage
+          .from("cardapio-imagens")
+          .upload(path, file, { upsert: false, contentType: file.type });
+        if (upErr) throw upErr;
+        const { data: pub } = supabase.storage.from("cardapio-imagens").getPublicUrl(path);
+        const { error: insErr } = await supabase.from("menu_images").insert({
+          url: pub.publicUrl,
+          storage_path: path,
+          filename: file.name,
+        });
+        if (insErr) throw insErr;
+      }
+      toast.success("Imagem(ns) enviada(s)!");
+      if (fileRef.current) fileRef.current.value = "";
+      load();
+    } catch (err: any) {
+      toast.error(err.message ?? "Falha ao enviar imagem");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function remove(img: any) {
+    if (!window.confirm("Remover essa imagem do cardápio?")) return;
+    try {
+      if (img.storage_path) {
+        await supabase.storage.from("cardapio-imagens").remove([img.storage_path]);
+      }
+      await supabase.from("menu_images").delete().eq("id", img.id);
+      load();
+    } catch (err: any) {
+      toast.error(err.message ?? "Falha ao remover imagem");
+    }
+  }
+
+  return (
+    <Card className="space-y-4 p-5">
+      <div>
+        <h2 className="flex items-center gap-2 font-semibold">🖼️ Imagens do cardápio</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Envie fotos ou prints do cardápio. Quando um cliente pedir o cardápio pelo WhatsApp, a IA envia essas imagens
+          automaticamente antes de continuar o atendimento. Você pode adicionar mais de uma (ex: página 1, página 2).
+        </p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => upload(e.target.files)} />
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => fileRef.current?.click()}
+          disabled={uploading}
+          className="gap-2"
+        >
+          <Upload className="size-4" />
+          {uploading ? "Enviando..." : "Enviar imagem(ns)"}
+        </Button>
+        <p className="text-xs text-muted-foreground">JPG ou PNG. Envie na ordem que devem aparecer.</p>
+      </div>
+
+      {loading ? (
+        <p className="text-xs text-muted-foreground">Carregando...</p>
+      ) : images.length === 0 ? (
+        <p className="rounded-xl border border-dashed p-4 text-center text-xs text-muted-foreground">
+          Nenhuma imagem cadastrada ainda.
+        </p>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+          {images.map((img) => (
+            <div key={img.id} className="group relative overflow-hidden rounded-xl border">
+              <img src={img.url} alt={img.filename ?? "cardápio"} className="aspect-square w-full object-cover" />
+              <Button
+                size="icon"
+                variant="destructive"
+                className="absolute right-1.5 top-1.5 size-7 opacity-0 transition-opacity group-hover:opacity-100"
+                onClick={() => remove(img)}
+              >
+                <Trash2 className="size-3.5" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/** Campos que têm card próprio (com salvamento independente). O formulário geral
+ *  carrega a config uma vez ao abrir a tela, então salvar o form depois de mudar
+ *  esses cards regravaria os valores antigos — por isso eles são removidos aqui. */
+const CARD_OWNED_FIELDS = [
+  "business_hours",
+  "business_hours_enabled",
+  "business_hours_closed_message",
+  "manual_store_status",
+  "chat_wallpaper",
+] as const;
+
+function stripCardOwnedFields<T extends Record<string, any>>(payload: T): T {
+  const clone: Record<string, any> = { ...payload };
+  for (const key of CARD_OWNED_FIELDS) delete clone[key];
+  return clone as T;
 }
