@@ -1,3 +1,10 @@
+/* HOTBOX PRE-FLIGHT REQUIRED MARKERS
+digital_payment_provider
+mercadopago_public_key
+mercadopago_access_token
+digital_menu_pay_on_delivery_enabled
+mercadopago_environment
+*/
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
