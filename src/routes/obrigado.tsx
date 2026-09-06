@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { CheckCircle2, Loader2, MessageCircle, Receipt, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { trackAnalytics } from "@/lib/analytics.client";
+import { trackAnalytics } from "@/lib/analytics";
 
 export const Route = createFileRoute("/obrigado")({ component: ObrigadoPage });
 

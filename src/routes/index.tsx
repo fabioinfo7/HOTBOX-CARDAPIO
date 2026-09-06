@@ -38,7 +38,7 @@ import { CustomerLoyaltyClub } from "@/components/customer-loyalty-club";
 import { MercadoPagoPayment } from "@/components/mercadopago-payment";
 import { quoteLoyaltyReward } from "@/lib/loyalty.functions";
 import { quoteSiteDelivery } from "@/lib/site-checkout.functions";
-import { trackAnalytics, analyticsIdentity } from "@/lib/analytics.client";
+import { trackAnalytics, analyticsIdentity } from "@/lib/analytics";
 
 export const Route = createFileRoute("/")({
   component: CustomerHome,

@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { trackAnalytics } from "@/lib/analytics.client";
+import { trackAnalytics } from "@/lib/analytics";
 
 export function AnalyticsTracker() {
   useEffect(() => {
