@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { analyticsHealthFn } from "@/lib/analytics-health.functions";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,15 +22,24 @@ function AnalyticsPage() {
   const [sessions,setSessions] = useState<SessionRow[]>([]);
   const [events,setEvents] = useState<EventRow[]>([]);
   const [search,setSearch] = useState("");
+  const [health,setHealth] = useState<any>(null);
 
   async function load() {
     setLoading(true);
     const since = new Date(Date.now() - days*86400000).toISOString();
-    const [s,e] = await Promise.all([
+    const [s,e,h] = await Promise.all([
       (supabase as any).from("analytics_sessions").select("*").gte("first_seen_at",since).order("first_seen_at",{ascending:false}).limit(10000),
       (supabase as any).from("analytics_events").select("*").gte("created_at",since).order("created_at",{ascending:false}).limit(30000),
+      analyticsHealthFn().catch((error:any)=>({ok:false,exception:error?.message||String(error)})),
     ]);
-    setSessions(s.data || []); setEvents(e.data || []); setLoading(false);
+    setSessions(s.data || []);
+    setEvents(e.data || []);
+    setHealth({
+      ...h,
+      client_sessions_error: s.error?.message || null,
+      client_events_error: e.error?.message || null,
+    });
+    setLoading(false);
   }
   useEffect(()=>{ void load(); },[days]);
 
@@ -78,6 +88,36 @@ function AnalyticsPage() {
       </div>
     </div>
     <div className="hidden print:block"><h1 className="text-2xl font-black">HotBox — Relatório Analytics 360</h1><p>Período: últimos {days} dias • Impresso em {new Date().toLocaleString("pt-BR")}</p></div>
+
+    {!loading && health && (
+      <Card className={`p-4 ${health.ok && !health.client_sessions_error && !health.client_events_error ? "border-emerald-500/30 bg-emerald-500/5" : "border-red-500/40 bg-red-500/5"}`}>
+        <div className="flex flex-wrap items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="font-black">
+              {health.ok && !health.client_sessions_error && !health.client_events_error
+                ? "Analytics conectado"
+                : "Analytics com problema de conexão/gravação"}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Banco: {Number(health.sessions_count || 0)} sessões • {Number(health.events_count || 0)} eventos
+            </p>
+            {(health.sessions_error || health.events_error || health.exception || health.client_sessions_error || health.client_events_error) && (
+              <div className="mt-2 rounded-lg border bg-background p-2 text-xs">
+                <b>Diagnóstico:</b>{" "}
+                {health.sessions_error?.message ||
+                  health.events_error?.message ||
+                  health.exception ||
+                  health.client_sessions_error ||
+                  health.client_events_error}
+              </div>
+            )}
+          </div>
+          <Button size="sm" variant="outline" onClick={()=>void load()}>
+            <RefreshCw className="mr-2 size-4"/>Testar conexão
+          </Button>
+        </div>
+      </Card>
+    )}
 
     {loading ? <Card className="p-10 text-center">Carregando dados...</Card> : <>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
