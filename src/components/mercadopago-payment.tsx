@@ -20,6 +20,7 @@ type Props = {
   publicKey: string;
   maxInstallments?: number;
   customerEmail?: string | null;
+  environment?: "test" | "production";
   origin: string;
   onPaid: (orderId?: string | null) => void;
   onCancel: () => void;
@@ -58,7 +59,7 @@ function loadScript(src: string, attrs?: Record<string, string>) {
   });
 }
 
-export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallments = 1, customerEmail, origin, onPaid, onCancel }: Props) {
+export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallments = 1, customerEmail, environment = "production", origin, onPaid, onCancel }: Props) {
   const [ready, setReady] = useState(false);
   const [pending, setPending] = useState<PendingState | null>(null);
   const [checking, setChecking] = useState(false);
@@ -82,10 +83,11 @@ export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallme
 
         const mp = new window.MercadoPago(publicKey, { locale: "pt-BR" });
         const bricks = mp.bricks();
+        const brickEmail = environment === "test" ? "test@testuser.com" : customerEmail;
         controller = await bricks.create("payment", "hotbox_payment_brick", {
           initialization: {
             amount: Number(amount.toFixed(2)),
-            payer: customerEmail ? { email: customerEmail } : undefined,
+            payer: brickEmail ? { email: brickEmail } : undefined,
           },
           customization: {
             paymentMethods: {
@@ -150,7 +152,7 @@ export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallme
       try { controller?.unmount?.(); } catch {}
       controllerRef.current = null;
     };
-  }, [checkoutId, amount, publicKey, maxInstallments, customerEmail, origin, brickKey]);
+  }, [checkoutId, amount, publicKey, maxInstallments, customerEmail, environment, origin, brickKey]);
 
   useEffect(() => {
     if (!pending?.paymentId) return;
@@ -292,6 +294,12 @@ export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallme
 
   return (
     <div className="space-y-3">
+      {environment === "test" && (
+        <div className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+          <p className="font-black">🧪 Mercado Pago em modo teste</p>
+          <p className="mt-1 text-xs">A HotBox usa automaticamente os dados de comprador exigidos pelo Mercado Pago para os testes de Pix e cartão.</p>
+        </div>
+      )}
       <div className="flex items-center justify-between gap-3 rounded-2xl border bg-emerald-50 p-3">
         <div className="flex items-center gap-2 text-sm font-bold text-emerald-950"><ShieldCheck className="size-5" /> Pagamento protegido pelo Mercado Pago</div>
         <button type="button" onClick={onCancel} className="rounded-full p-1.5 hover:bg-white" aria-label="Fechar pagamento"><X className="size-4" /></button>
