@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { toast } from "sonner";
 import {
@@ -191,6 +191,7 @@ function CustomerHome() {
   const [mercadoPagoPublicKey, setMercadoPagoPublicKey] = useState("");
   const [mercadoPagoMaxInstallments, setMercadoPagoMaxInstallments] = useState(1);
   const [mpCheckout, setMpCheckout] = useState<{ id: string; total: number } | null>(null);
+  const paymentSectionRef = useRef<HTMLDivElement | null>(null);
   const [ifoodStoreLink, setIfoodStoreLink] = useState("");
   const [pixEnabled, setPixEnabled] = useState(true);
   const [cardEnabled, setCardEnabled] = useState(true);
@@ -299,7 +300,14 @@ function CustomerHome() {
       const data = storeResult?.data;
       if (data) {
         setStoreName(data.store_name ?? "HotBox Delivery");
-        setDeliveryFee(Number(data.default_delivery_fee ?? 0));
+        // Não sobrescreve a taxa já calculada/validada para esta sessão ao recarregar a página.
+        // A taxa padrão só é usada quando ainda não existe uma área validada salva.
+        const savedArea = readAreaAccess();
+        setDeliveryFee(
+          savedArea && Number.isFinite(Number(savedArea.deliveryFee))
+            ? Number(savedArea.deliveryFee)
+            : Number(data.default_delivery_fee ?? 0),
+        );
         setDeliveryTime(data.estimated_delivery_time_minutes ?? null);
         setBannerUrl(data.banner_image_url ?? null);
         setInfinitepayEnabled((data as any).infinitepay_enabled === true);
@@ -354,6 +362,27 @@ function CustomerHome() {
   useEffect(() => {
     if (form.deliveryMode === "pickup" && paymentChoice !== "online") setPaymentChoice("online");
   }, [form.deliveryMode, paymentChoice]);
+
+  // Quando o checkout online é criado, leva o cliente diretamente à área
+  // do Mercado Pago para que Pix/cartão fiquem visíveis imediatamente.
+  useEffect(() => {
+    if (!mpCheckout?.id) return;
+
+    const scrollToPayment = () => {
+      paymentSectionRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    };
+
+    const frame = window.requestAnimationFrame(scrollToPayment);
+    const timer = window.setTimeout(scrollToPayment, 250);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [mpCheckout?.id]);
 
   useEffect(() => {
     const n = String(customerSession?.user?.user_metadata?.full_name || customerSession?.user?.user_metadata?.name || "").trim();
@@ -1576,9 +1605,11 @@ function CustomerHome() {
             </div>
           )}
 
-          <div>
+          <div ref={paymentSectionRef} className="scroll-mt-24">
             <div className="mb-3">
-              <h3 className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Como você prefere pagar?</h3>
+              <h3 className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
+                {mpCheckout ? "Meios de pagamento" : "Como você prefere pagar?"}
+              </h3>
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                 Escolha a opção mais conveniente. A HotBox mostra somente as formas habilitadas pela loja.
               </p>
@@ -1760,7 +1791,11 @@ function CustomerHome() {
               <MapPin className="size-4" /> {validatedNeighborhood || "Entrega"}
             </span>
             <span className="flex items-center gap-1.5 rounded-full bg-[#ffd400] px-3 py-1.5 font-black text-black shadow-sm">
-              <Bike className="size-4" /> Taxa de entrega: {deliveryFee > 0 ? brl(deliveryFee) : "grátis"}
+              <Bike className="size-4" /> Taxa de entrega: {
+                areaStatus === "supported" && validatedNeighborhood
+                  ? (deliveryFee > 0 ? brl(deliveryFee) : "grátis")
+                  : "calcular pelo CEP"
+              }
             </span>
           </div>
         </div>
