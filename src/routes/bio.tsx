@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import hotboxLogoUrl from "@/assets/logo-hotbox.jpeg";
+import { MetaPixelInjector } from "@/components/meta-pixel-injector";
 export const Route = createFileRoute("/bio")({
   component: BioPage,
 });
@@ -56,6 +57,7 @@ const ArrowIcon = () => (
 function BioPage() {
   return (
     <>
+      <MetaPixelInjector placement="bio" />
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700;800&display=swap');
 
