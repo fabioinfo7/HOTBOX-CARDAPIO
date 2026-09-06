@@ -1050,6 +1050,66 @@ function ChatPage() {
               </div>
             </div>
 
+            <div className="border-b border-black/10 bg-white px-2 py-2 md:hidden">
+              <div className="grid grid-cols-4 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => toggleBotPaused(!selected.bot_paused)}
+                  className={`flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-xl border px-1 text-[10px] font-black transition-colors ${
+                    selected.bot_paused
+                      ? "border-amber-300 bg-amber-50 text-amber-800"
+                      : "border-emerald-300 bg-emerald-50 text-emerald-800"
+                  }`}
+                  title={selected.bot_paused ? "Atendimento manual ativo" : "Atendimento automático ativo"}
+                >
+                  {selected.bot_paused ? <UserCog className="size-4" /> : <Bot className="size-4" />}
+                  {selected.bot_paused ? "Manual" : "Robô"}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSideTab("quick");
+                    setMobileToolsOpen(true);
+                  }}
+                  className="flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-xl border bg-background px-1 text-[10px] font-black text-foreground"
+                  title="Mensagens automáticas e respostas rápidas"
+                >
+                  <Zap className="size-4 text-primary" />
+                  Automáticas
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSideTab("orders");
+                    setMobileToolsOpen(true);
+                  }}
+                  className="relative flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-xl border bg-background px-1 text-[10px] font-black text-foreground"
+                  title="Pedidos em andamento"
+                >
+                  <Package className="size-4 text-primary" />
+                  Pedidos
+                  {activeOrders.length > 0 && (
+                    <span className="absolute right-1.5 top-1 min-w-4 rounded-full bg-primary px-1 text-[8px] font-black leading-4 text-primary-foreground">
+                      {activeOrders.length > 99 ? "99+" : activeOrders.length}
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleGenerateOrder}
+                  disabled={generatingOrder}
+                  className="flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-xl border bg-background px-1 text-[10px] font-black text-foreground disabled:opacity-50"
+                  title="Gerar pedido com IA"
+                >
+                  {generatingOrder ? <Loader2 className="size-4 animate-spin" /> : <PackagePlus className="size-4 text-primary" />}
+                  Gerar IA
+                </button>
+              </div>
+            </div>
+
             {/* mensagens — fundo estilo WhatsApp (papel de parede configurável em Configurações) */}
             <div
               className="flex-1 overflow-y-auto p-4"
@@ -1228,7 +1288,7 @@ function ChatPage() {
             onClick={() => setSideTab("quick")}
             className={`rounded-lg px-2 py-2 text-xs font-bold ${sideTab === "quick" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
           >
-            <Zap className="mr-1 inline size-3.5" /> Respostas
+            <Zap className="mr-1 inline size-3.5" /> Mensagens automáticas
           </button>
           <button
             type="button"
@@ -1247,6 +1307,25 @@ function ChatPage() {
           </button>
         </div>
         <div className="border-b bg-muted/20 p-2 md:hidden">
+          <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border bg-background px-3 py-2">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Atendimento</p>
+              <p className={`text-sm font-black ${selected?.bot_paused ? "text-amber-700" : "text-emerald-700"}`}>
+                {selected?.bot_paused ? "Manual ativo" : "Robô ativo"}
+              </p>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant={selected?.bot_paused ? "outline" : "default"}
+              className="rounded-xl font-bold"
+              disabled={!selected}
+              onClick={() => selected && toggleBotPaused(!selected.bot_paused)}
+            >
+              {selected?.bot_paused ? <Bot className="size-4" /> : <UserCog className="size-4" />}
+              {selected?.bot_paused ? "Ativar robô" : "Mudar para manual"}
+            </Button>
+          </div>
           <div className="grid grid-cols-[1fr_auto] gap-2">
             <Button
               size="sm"
