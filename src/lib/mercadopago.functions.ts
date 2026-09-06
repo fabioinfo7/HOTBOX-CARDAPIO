@@ -7,12 +7,13 @@ export type MercadoPagoPublicConfig = {
   infinitepayEnabled: boolean;
   mercadopagoPublicKey: string;
   maxInstallments: number;
+  environment: "test" | "production";
 };
 
 export async function loadMercadoPagoConfig(supabaseAdmin: any) {
   const { data } = await supabaseAdmin
     .from("store_config")
-    .select("digital_payment_provider,mercadopago_enabled,mercadopago_public_key,mercadopago_access_token,mercadopago_webhook_token,mercadopago_max_installments")
+    .select("digital_payment_provider,mercadopago_enabled,mercadopago_public_key,mercadopago_access_token,mercadopago_webhook_token,mercadopago_max_installments,mercadopago_environment")
     .eq("id", 1)
     .maybeSingle();
 
@@ -23,6 +24,7 @@ export async function loadMercadoPagoConfig(supabaseAdmin: any) {
     accessToken: String(data?.mercadopago_access_token || "").trim(),
     webhookToken: String(data?.mercadopago_webhook_token || "").trim(),
     maxInstallments: Math.min(12, Math.max(1, Number(data?.mercadopago_max_installments || 1))),
+    environment: data?.mercadopago_environment === "production" ? "production" : "test",
   };
 }
 
@@ -35,10 +37,31 @@ function normalizeEmail(value: unknown) {
   return /\S+@\S+\.\S+/.test(email) ? email : "";
 }
 
-function statusMessage(status: string, detail: string) {
-  if (status === "approved") return "Pagamento aprovado.";
-  if (detail === "pending_challenge") return "Seu banco precisa confirmar esta compra.";
-  if (status === "pending" || status === "in_process") return "Pagamento em análise. Aguarde alguns instantes.";
+function firstPayment(order: any) {
+  return Array.isArray(order?.transactions?.payments) ? order.transactions.payments[0] || null : null;
+}
+
+export function mercadoPagoOrderState(order: any) {
+  const payment = firstPayment(order) || {};
+  const orderStatus = String(order?.status || "");
+  const orderDetail = String(order?.status_detail || "");
+  const paymentStatus = String(payment?.status || "");
+  const paymentDetail = String(payment?.status_detail || "");
+  const approved =
+    orderStatus === "processed" &&
+    (paymentStatus === "processed" || paymentStatus === "approved" || paymentDetail === "accredited" || orderDetail === "accredited");
+  const rejected = ["failed", "canceled", "cancelled"].includes(orderStatus) || ["failed", "rejected", "canceled", "cancelled"].includes(paymentStatus);
+  const pending = !approved && !rejected && orderStatus !== "refunded";
+  return { orderStatus, orderDetail, paymentStatus, paymentDetail, approved, rejected, pending };
+}
+
+function statusMessage(order: any) {
+  const state = mercadoPagoOrderState(order);
+  if (state.approved) return "Pagamento aprovado.";
+  if (state.orderStatus === "refunded") return "Pagamento estornado.";
+  if (state.paymentDetail === "pending_challenge") return "Seu banco precisa confirmar esta compra.";
+  if (state.pending) return "Pagamento aguardando confirmação. Não envie novamente.";
+  const detail = state.paymentDetail || state.orderDetail;
   const map: Record<string, string> = {
     cc_rejected_bad_filled_card_number: "Confira o número do cartão.",
     cc_rejected_bad_filled_date: "Confira a validade do cartão.",
@@ -53,11 +76,11 @@ function statusMessage(status: string, detail: string) {
   return map[detail] || "O pagamento não foi aprovado. Você pode tentar novamente ou escolher outro meio de pagamento.";
 }
 
-async function fetchPayment(accessToken: string, paymentId: string) {
+export async function fetchMercadoPagoOrder(accessToken: string, orderId: string) {
   try {
-    const response = await fetch(`https://api.mercadopago.com/v1/payments/${encodeURIComponent(paymentId)}`, {
+    const response = await fetch(`https://api.mercadopago.com/v1/orders/${encodeURIComponent(orderId)}`, {
       method: "GET",
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
     });
     const body: any = await response.json().catch(() => ({}));
     return { response, body };
@@ -66,73 +89,87 @@ async function fetchPayment(accessToken: string, paymentId: string) {
   }
 }
 
-function extractFee(body: any) {
-  const fromFeeDetails = Array.isArray(body?.fee_details)
-    ? body.fee_details.reduce((sum: number, fee: any) => sum + Math.abs(Number(fee?.amount || 0)), 0)
-    : 0;
-  const gross = Number(body?.transaction_amount || 0);
-  const net = Number(body?.transaction_details?.net_received_amount || 0);
-  if (fromFeeDetails > 0) return Number(fromFeeDetails.toFixed(2));
-  if (gross > 0 && net > 0 && gross >= net) return Number((gross - net).toFixed(2));
-  return 0;
+function orderPaymentInfo(order: any) {
+  const payment = firstPayment(order) || {};
+  const method = payment?.payment_method || {};
+  const amount = Number(payment?.paid_amount ?? payment?.amount ?? order?.total_amount ?? 0);
+  return {
+    orderId: order?.id != null ? String(order.id) : "",
+    paymentId: payment?.id != null ? String(payment.id) : "",
+    amount,
+    paymentMethodId: String(method?.id || ""),
+    paymentTypeId: String(method?.type || ""),
+    installments: Math.max(1, Number(method?.installments || payment?.installments || 1)),
+    qrCode: method?.qr_code ? String(method.qr_code) : null,
+    qrCodeBase64: method?.qr_code_base64 ? String(method.qr_code_base64) : null,
+    ticketUrl: method?.ticket_url ? String(method.ticket_url) : null,
+    challengeUrl: method?.three_ds?.external_resource_url || payment?.three_ds_info?.external_resource_url || null,
+    challengeCreq: method?.three_ds?.creq || payment?.three_ds_info?.creq || null,
+  };
 }
 
-export async function storeMercadoPagoSnapshot(supabaseAdmin: any, checkoutId: string, payment: any, webhookPayload?: any) {
-  const paymentMethodId = String(payment?.payment_method_id || "");
-  const paymentTypeId = String(payment?.payment_type_id || "");
-  const kind = paymentMethodId === "pix" || paymentTypeId === "bank_transfer" ? "mercadopago_pix" : "mercadopago_card";
-  const tx = payment?.point_of_interaction?.transaction_data || {};
+export async function storeMercadoPagoSnapshot(supabaseAdmin: any, checkoutId: string, order: any, webhookPayload?: any) {
+  const info = orderPaymentInfo(order);
+  const state = mercadoPagoOrderState(order);
+  const kind = info.paymentMethodId === "pix" || info.paymentTypeId === "bank_transfer" ? "mercadopago_pix" : "mercadopago_card";
+  const { data: current } = await (supabaseAdmin as any).from("site_checkout_sessions").select("status").eq("id", checkoutId).maybeSingle();
+  const checkoutStatus = String(current?.status || "");
+
   await (supabaseAdmin as any)
     .from("site_checkout_sessions")
     .update({
       payment_provider: "mercadopago",
       payment_kind: kind,
-      mercadopago_payment_id: payment?.id != null ? String(payment.id) : null,
-      mercadopago_status: String(payment?.status || ""),
-      mercadopago_status_detail: String(payment?.status_detail || ""),
-      mercadopago_payment_method_id: paymentMethodId || null,
-      mercadopago_payment_type_id: paymentTypeId || null,
-      mercadopago_installments: Math.max(1, Number(payment?.installments || 1)),
-      mercadopago_transaction_amount: Number(payment?.transaction_amount || 0) || null,
-      mercadopago_net_received_amount: Number(payment?.transaction_details?.net_received_amount || 0) || null,
-      mercadopago_fee_amount: extractFee(payment) || 0,
-      mercadopago_qr_code: tx?.qr_code ? String(tx.qr_code) : null,
-      mercadopago_qr_code_base64: tx?.qr_code_base64 ? String(tx.qr_code_base64) : null,
-      mercadopago_ticket_url: tx?.ticket_url ? String(tx.ticket_url) : null,
+      mercadopago_order_id: info.orderId || null,
+      mercadopago_payment_id: info.paymentId || null,
+      mercadopago_order_status: state.orderStatus || null,
+      mercadopago_order_status_detail: state.orderDetail || null,
+      mercadopago_status: state.paymentStatus || state.orderStatus || null,
+      mercadopago_status_detail: state.paymentDetail || state.orderDetail || null,
+      mercadopago_payment_method_id: info.paymentMethodId || null,
+      mercadopago_payment_type_id: info.paymentTypeId || null,
+      mercadopago_installments: info.installments,
+      mercadopago_transaction_amount: info.amount || null,
+      mercadopago_qr_code: info.qrCode,
+      mercadopago_qr_code_base64: info.qrCodeBase64,
+      mercadopago_ticket_url: info.ticketUrl,
       mercadopago_verified_at: new Date().toISOString(),
-      mercadopago_verification_payload: payment,
+      mercadopago_verification_payload: order,
       ...(webhookPayload !== undefined ? { mercadopago_webhook_payload: webhookPayload } : {}),
-      status: payment?.status === "approved" ? "payment_pending" : "payment_pending",
+      status: checkoutStatus === "paid" ? "paid" : "payment_pending",
       updated_at: new Date().toISOString(),
     })
     .eq("id", checkoutId);
 
-  return kind;
+  return { kind, ...info, ...state };
 }
 
 export async function finalizeIfApproved(
   supabaseAdmin: any,
   checkout: any,
-  payment: any,
+  order: any,
   onFinalized?: (orderId: string) => Promise<void>,
 ) {
+  const state = mercadoPagoOrderState(order);
+  const info = orderPaymentInfo(order);
   const expected = Number(Number(checkout.total || 0).toFixed(2));
-  const paid = Number(Number(payment?.transaction_amount || 0).toFixed(2));
-  const reference = String(payment?.external_reference || payment?.metadata?.checkout_id || "");
-  if (reference !== String(checkout.id)) return { ok: false, error: "Referência do pagamento não confere com o checkout." } as const;
-  if (paid !== expected) return { ok: false, error: "Valor confirmado pelo Mercado Pago não confere com o pedido." } as const;
-  if (String(payment?.currency_id || "BRL").toUpperCase() !== "BRL") return { ok: false, error: "Moeda do pagamento inválida." } as const;
-  if (String(payment?.status || "") !== "approved") return { ok: false, pending: true } as const;
+  const paid = Number(Number(info.amount || 0).toFixed(2));
+  const reference = String(order?.external_reference || "");
+
+  if (reference !== String(checkout.id)) return { ok: false, validation: true, error: "Referência da order não confere com o checkout." } as const;
+  if (paid !== expected) return { ok: false, validation: true, error: "Valor confirmado pelo Mercado Pago não confere com o pedido." } as const;
+  if (String(order?.currency || order?.currency_id || "BRL").toUpperCase() !== "BRL") return { ok: false, validation: true, error: "Moeda do pagamento inválida." } as const;
+  if (!state.approved) return { ok: false, pending: state.pending, rejected: state.rejected } as const;
 
   if (checkout.order_id) return { ok: true, order_id: String(checkout.order_id), already_created: true } as const;
 
   const { data: finalized, error } = await (supabaseAdmin as any).rpc("finalize_site_checkout_paid", {
     p_checkout_id: checkout.id,
     p_confirmed_by: "mercadopago",
-    p_provider_ref: String(payment.id || ""),
+    p_provider_ref: info.orderId || info.paymentId,
     p_stripe_session_id: null,
   });
-  if (error || !finalized?.ok) return { ok: false, error: error?.message || finalized?.error || "Falha ao gerar pedido." } as const;
+  if (error || !finalized?.ok) return { ok: false, transient: true, error: error?.message || finalized?.error || "Falha ao gerar pedido." } as const;
 
   if (finalized.order_id && onFinalized) {
     try {
@@ -142,6 +179,26 @@ export async function finalizeIfApproved(
     }
   }
   return { ok: true, order_id: finalized.order_id } as const;
+}
+
+function paymentResult(order: any) {
+  const info = orderPaymentInfo(order);
+  const state = mercadoPagoOrderState(order);
+  return {
+    orderId: info.orderId,
+    paymentId: info.paymentId,
+    status: state.paymentStatus || state.orderStatus || "pending",
+    statusDetail: state.paymentDetail || state.orderDetail || "",
+    message: statusMessage(order),
+    qrCode: info.qrCode,
+    qrCodeBase64: info.qrCodeBase64,
+    ticketUrl: info.ticketUrl,
+    challengeUrl: info.challengeUrl ? String(info.challengeUrl) : null,
+    challengeCreq: info.challengeCreq ? String(info.challengeCreq) : null,
+    approved: state.approved,
+    rejected: state.rejected,
+    pending: state.pending,
+  };
 }
 
 export const createMercadoPagoPayment = createServerFn({ method: "POST" })
@@ -159,41 +216,28 @@ export const createMercadoPagoPayment = createServerFn({ method: "POST" })
       await notifyPaidSiteOrder(supabaseAdmin, orderId);
     };
     const cfg = await loadMercadoPagoConfig(supabaseAdmin);
-    if (!cfg.publicKey || !cfg.accessToken) {
-      return { ok: false, error: "Mercado Pago não está configurado corretamente." } as const;
-    }
+    if (!cfg.publicKey || !cfg.accessToken) return { ok: false, error: "Mercado Pago não está configurado corretamente." } as const;
 
     const { data: checkout, error } = await (supabaseAdmin as any)
       .from("site_checkout_sessions")
-      .select("id,status,total,customer_name,customer_phone,order_data,items,expires_at,order_id,payment_provider,mercadopago_payment_id,mercadopago_status,mercadopago_attempt_no")
+      .select("id,status,total,customer_name,customer_phone,order_data,items,expires_at,order_id,payment_provider,mercadopago_order_id,mercadopago_payment_id,mercadopago_status,mercadopago_attempt_no")
       .eq("id", data.checkoutId)
       .maybeSingle();
     if (error || !checkout) return { ok: false, error: "Checkout não encontrado." } as const;
     if (checkout.payment_provider !== "mercadopago") return { ok: false, error: "Este checkout pertence a outro provedor de pagamento." } as const;
     if (checkout.order_id) return { ok: true, approved: true, order_id: checkout.order_id, checkout_id: String(checkout.id), total: Number(checkout.total || 0), payment_method: "mercadopago" } as const;
     if (!["created", "payment_pending"].includes(String(checkout.status))) return { ok: false, error: "Este checkout não está mais disponível." } as const;
-    if (new Date(checkout.expires_at).getTime() < Date.now()) return { ok: false, error: "Este checkout expirou. Refaça o pedido." } as const;
+    // A expiração impede iniciar uma NOVA cobrança. Uma order já criada continua podendo ser confirmada depois.
+    if (!checkout.mercadopago_order_id && new Date(checkout.expires_at).getTime() < Date.now()) return { ok: false, error: "Este checkout expirou. Refaça o pedido." } as const;
 
-    if (checkout.mercadopago_payment_id && ["pending", "in_process", "approved"].includes(String(checkout.mercadopago_status || ""))) {
-      const existing = await fetchPayment(cfg.accessToken, String(checkout.mercadopago_payment_id));
+    if (checkout.mercadopago_order_id) {
+      const existing = await fetchMercadoPagoOrder(cfg.accessToken, String(checkout.mercadopago_order_id));
       if (existing.response.ok) {
         await storeMercadoPagoSnapshot(supabaseAdmin, checkout.id, existing.body);
         const finalized = await finalizeIfApproved(supabaseAdmin, checkout, existing.body, notifyPaid);
-        if (finalized.ok) return { ok: true, approved: true, order_id: finalized.order_id, paymentId: String(existing.body.id) } as const;
-        const tx = existing.body?.point_of_interaction?.transaction_data || {};
-        return {
-          ok: true,
-          approved: false,
-          pending: true,
-          paymentId: String(existing.body.id),
-          status: String(existing.body.status || "pending"),
-          statusDetail: String(existing.body.status_detail || ""),
-          qrCode: tx?.qr_code ? String(tx.qr_code) : null,
-          qrCodeBase64: tx?.qr_code_base64 ? String(tx.qr_code_base64) : null,
-          ticketUrl: tx?.ticket_url ? String(tx.ticket_url) : null,
-          challengeUrl: existing.body?.three_ds_info?.external_resource_url ? String(existing.body.three_ds_info.external_resource_url) : null,
-          challengeCreq: existing.body?.three_ds_info?.creq ? String(existing.body.three_ds_info.creq) : null,
-        } as const;
+        const result = paymentResult(existing.body);
+        if (finalized.ok) return { ok: true, approved: true, order_id: finalized.order_id, orderId: result.orderId, paymentId: result.paymentId } as const;
+        if (!result.rejected) return { ok: true, ...result } as const;
       }
     }
 
@@ -202,76 +246,45 @@ export const createMercadoPagoPayment = createServerFn({ method: "POST" })
     if (!paymentMethodId) return { ok: false, error: "Selecione Pix ou cartão para continuar." } as const;
     const isPix = paymentMethodId === "pix";
     const payer = fd.payer || {};
-    const email = normalizeEmail(payer.email);
+    const submittedEmail = normalizeEmail(payer.email);
+    const email =
+      cfg.environment === "test"
+        ? (isPix ? "test_user_br@testuser.com" : "test@testuser.com")
+        : submittedEmail;
     if (!email) return { ok: false, error: "Informe um e-mail válido para o pagamento." } as const;
-
-    const identificationType = String(payer?.identification?.type || "").trim();
-    const identificationNumber = digits(payer?.identification?.number);
     const installments = Math.min(cfg.maxInstallments, Math.max(1, Number(fd.installments || 1)));
-    const safeOrigin = new URL(data.origin).origin;
-    const notificationUrl = `${safeOrigin}/api/public/webhooks/mercadopago?token=${encodeURIComponent(cfg.webhookToken)}`;
-    const od = checkout.order_data || {};
+
+    const paymentMethod: any = isPix
+      ? { id: "pix", type: "bank_transfer" }
+      : {
+          id: paymentMethodId,
+          type: "credit_card",
+          token: String(fd.token || "").trim(),
+          installments,
+        };
+    if (!isPix && !paymentMethod.token) return { ok: false, error: "Os dados do cartão não foram tokenizados. Tente novamente." } as const;
 
     const body: any = {
-      transaction_amount: Number(Number(checkout.total).toFixed(2)),
-      description: "Pedido HotBox Delivery",
-      payment_method_id: paymentMethodId,
+      type: "online",
+      processing_mode: "automatic",
+      total_amount: Number(checkout.total).toFixed(2),
       external_reference: String(checkout.id),
-      notification_url: notificationUrl,
-      metadata: { checkout_id: String(checkout.id), source: "hotbox_cardapio" },
-      payer: {
-        email,
-        first_name: String(checkout.customer_name || "").trim().split(/\s+/)[0] || undefined,
-        identification: identificationType && identificationNumber ? { type: identificationType, number: identificationNumber } : undefined,
+      payer: { email },
+      metadata: {
+        checkout_id: String(checkout.id),
+        hotbox_environment: cfg.environment,
       },
-      additional_info: {
-        items: (Array.isArray(checkout.items) ? checkout.items : []).map((item: any) => ({
-          id: String(item.product_id || ""),
-          title: String(item.product_name || "Produto HotBox").slice(0, 120),
-          description: String(item.notes || "").slice(0, 250) || undefined,
-          category_id: "food",
-          quantity: Math.max(1, Number(item.qty || 1)),
-          unit_price: Number(item.unit_price || 0),
-        })),
-        payer: {
-          first_name: String(checkout.customer_name || "").trim().split(/\s+/)[0] || undefined,
-          last_name: String(checkout.customer_name || "").trim().split(/\s+/).slice(1).join(" ") || undefined,
-          phone: { area_code: digits(checkout.customer_phone).slice(0, 2), number: digits(checkout.customer_phone).slice(2) },
-          address: od?.delivery_mode === "delivery" ? {
-            zip_code: digits(od.address_cep),
-            street_name: od.address_street || undefined,
-            street_number: od.address_number || undefined,
-          } : undefined,
-        },
-        shipments: od?.delivery_mode === "delivery" ? {
-          receiver_address: {
-            zip_code: digits(od.address_cep),
-            street_name: od.address_street || undefined,
-            street_number: od.address_number || undefined,
-            floor: od.address_complement || undefined,
-            apartment: od.address_complement || undefined,
-          },
-        } : undefined,
+      transactions: {
+        payments: [{ amount: Number(checkout.total).toFixed(2), payment_method: paymentMethod }],
       },
     };
 
-    if (!isPix) {
-      body.token = String(fd.token || "").trim();
-      body.installments = installments;
-      body.issuer_id = fd.issuer_id || fd.issuerId || undefined;
-      body.three_d_secure_mode = "optional";
-      body.capture = true;
-      body.binary_mode = false;
-      if (!body.token) return { ok: false, error: "Os dados do cartão não foram tokenizados. Tente novamente." } as const;
-    }
-
-    // Idempotência por checkout + número da tentativa. Dois cliques simultâneos usam a MESMA chave.
-    // Só avançamos a tentativa depois de uma recusa confirmada pelo próprio Mercado Pago.
     const attemptNo = Math.max(1, Number(checkout.mercadopago_attempt_no || 1));
-    const idempotencyKey = `hotbox-${checkout.id}-${attemptNo}`;
+    const idempotencyKey = `hotbox-order-${checkout.id}-${attemptNo}`;
     const headers: Record<string, string> = {
       Authorization: `Bearer ${cfg.accessToken}`,
       "Content-Type": "application/json",
+      Accept: "application/json",
       "X-Idempotency-Key": idempotencyKey,
     };
     if (data.deviceId) headers["X-meli-session-id"] = String(data.deviceId).slice(0, 200);
@@ -279,7 +292,7 @@ export const createMercadoPagoPayment = createServerFn({ method: "POST" })
     let response: Response;
     let created: any;
     try {
-      response = await fetch("https://api.mercadopago.com/v1/payments", {
+      response = await fetch("https://api.mercadopago.com/v1/orders", {
         method: "POST",
         headers,
         body: JSON.stringify(body),
@@ -288,51 +301,39 @@ export const createMercadoPagoPayment = createServerFn({ method: "POST" })
     } catch {
       return { ok: false, error: "O Mercado Pago não respondeu agora. Aguarde alguns segundos e tente novamente; a proteção contra cobrança duplicada será mantida." } as const;
     }
+
     if (!response.ok || !created?.id) {
-      const cause = created?.cause?.[0]?.description || created?.message || created?.error;
-      return { ok: false, error: String(cause || "Não foi possível iniciar o pagamento pelo Mercado Pago.") } as const;
+      const errors = Array.isArray(created?.errors) ? created.errors.map((x: any) => x?.message || x?.code).filter(Boolean).join(" · ") : "";
+      const cause = errors || created?.message || created?.error;
+      const rawMessage = String(cause || "Não foi possível iniciar a order pelo Mercado Pago.");
+      const environmentHint =
+        cfg.environment === "test" && /Unauthorized use of live credentials/i.test(rawMessage)
+          ? " O Mercado Pago recusou a credencial no ambiente de teste. Confirme se Public Key e Access Token vieram da mesma tela 'Credenciais de teste' desta aplicação."
+          : "";
+      return { ok: false, error: `${rawMessage}${environmentHint}` } as const;
     }
 
     await storeMercadoPagoSnapshot(supabaseAdmin, checkout.id, created);
+    const verified = await fetchMercadoPagoOrder(cfg.accessToken, String(created.id));
+    const order = verified.response.ok ? verified.body : created;
+    if (verified.response.ok) await storeMercadoPagoSnapshot(supabaseAdmin, checkout.id, order);
 
-    // Segunda confirmação servidor-servidor antes de liberar um pedido aprovado.
-    const verified = await fetchPayment(cfg.accessToken, String(created.id));
-    const payment = verified.response.ok ? verified.body : created;
-    if (verified.response.ok) await storeMercadoPagoSnapshot(supabaseAdmin, checkout.id, payment);
+    const finalized = await finalizeIfApproved(supabaseAdmin, checkout, order, notifyPaid);
+    const result = paymentResult(order);
+    if (finalized.ok) return { ok: true, approved: true, order_id: finalized.order_id, orderId: result.orderId, paymentId: result.paymentId } as const;
 
-    const finalized = await finalizeIfApproved(supabaseAdmin, checkout, payment, notifyPaid);
-    if (finalized.ok) {
-      return { ok: true, approved: true, order_id: finalized.order_id, paymentId: String(payment.id) } as const;
-    }
-
-    const status = String(payment?.status || "");
-    const statusDetail = String(payment?.status_detail || "");
-    if (status === "rejected" || status === "cancelled") {
+    if (result.rejected) {
       await (supabaseAdmin as any).from("site_checkout_sessions")
         .update({ mercadopago_attempt_no: attemptNo + 1, updated_at: new Date().toISOString() })
         .eq("id", checkout.id);
-      return { ok: false, rejected: true, paymentId: String(payment.id), status, statusDetail, error: statusMessage(status, statusDetail) } as const;
+      return { ok: false, rejected: true, orderId: result.orderId, paymentId: result.paymentId, status: result.status, statusDetail: result.statusDetail, error: result.message } as const;
     }
 
-    const tx = payment?.point_of_interaction?.transaction_data || {};
-    return {
-      ok: true,
-      approved: false,
-      pending: true,
-      paymentId: String(payment.id),
-      status,
-      statusDetail,
-      message: statusMessage(status, statusDetail),
-      qrCode: tx?.qr_code ? String(tx.qr_code) : null,
-      qrCodeBase64: tx?.qr_code_base64 ? String(tx.qr_code_base64) : null,
-      ticketUrl: tx?.ticket_url ? String(tx.ticket_url) : null,
-      challengeUrl: payment?.three_ds_info?.external_resource_url ? String(payment.three_ds_info.external_resource_url) : null,
-      challengeCreq: payment?.three_ds_info?.creq ? String(payment.three_ds_info.creq) : null,
-    } as const;
+    return { ok: true, ...result } as const;
   });
 
 export const checkMercadoPagoPayment = createServerFn({ method: "POST" })
-  .inputValidator((data: { checkoutId: string; paymentId?: string | null }) => data)
+  .inputValidator((data: { checkoutId: string; orderId?: string | null; paymentId?: string | null }) => data)
   .handler(async ({ data }) => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const notifyPaid = async (orderId: string) => {
@@ -344,41 +345,28 @@ export const checkMercadoPagoPayment = createServerFn({ method: "POST" })
 
     const { data: checkout } = await (supabaseAdmin as any)
       .from("site_checkout_sessions")
-      .select("id,total,order_id,payment_provider,mercadopago_payment_id,mercadopago_status,mercadopago_attempt_no")
+      .select("id,total,order_id,payment_provider,mercadopago_order_id,mercadopago_payment_id,mercadopago_status,mercadopago_attempt_no")
       .eq("id", data.checkoutId)
       .maybeSingle();
     if (!checkout || checkout.payment_provider !== "mercadopago") return { ok: false, error: "Checkout não encontrado." } as const;
     if (checkout.order_id) return { ok: true, approved: true, order_id: checkout.order_id } as const;
 
-    const paymentId = String(data.paymentId || checkout.mercadopago_payment_id || "");
-    if (!paymentId) return { ok: false, error: "Pagamento ainda não iniciado." } as const;
-    const verified = await fetchPayment(cfg.accessToken, paymentId);
-    if (!verified.response.ok) return { ok: false, error: "Não foi possível consultar o pagamento agora." } as const;
+    const orderId = String(data.orderId || checkout.mercadopago_order_id || "");
+    if (!orderId) return { ok: false, error: "Pagamento ainda não iniciado." } as const;
+    const verified = await fetchMercadoPagoOrder(cfg.accessToken, orderId);
+    if (!verified.response.ok) return { ok: false, error: "Não foi possível consultar a order agora." } as const;
+
     const previousStatus = String(checkout.mercadopago_status || "");
     await storeMercadoPagoSnapshot(supabaseAdmin, checkout.id, verified.body);
     const finalized = await finalizeIfApproved(supabaseAdmin, checkout, verified.body, notifyPaid);
-    if (finalized.ok) return { ok: true, approved: true, order_id: finalized.order_id, checkout_id: String(checkout.id), total: Number(checkout.total || 0), payment_method: "mercadopago", paymentId } as const;
+    const result = paymentResult(verified.body);
+    if (finalized.ok) return { ok: true, approved: true, order_id: finalized.order_id, checkout_id: String(checkout.id), total: Number(checkout.total || 0), payment_method: "mercadopago", orderId: result.orderId, paymentId: result.paymentId } as const;
 
-    const status = String(verified.body?.status || "");
-    const statusDetail = String(verified.body?.status_detail || "");
-    if ((status === "rejected" || status === "cancelled") && previousStatus !== "rejected" && previousStatus !== "cancelled") {
+    if (result.rejected && previousStatus !== "rejected" && previousStatus !== "cancelled") {
       await (supabaseAdmin as any).from("site_checkout_sessions")
         .update({ mercadopago_attempt_no: Math.max(1, Number(checkout.mercadopago_attempt_no || 1)) + 1, updated_at: new Date().toISOString() })
         .eq("id", checkout.id);
     }
-    const tx = verified.body?.point_of_interaction?.transaction_data || {};
-    return {
-      ok: true,
-      approved: false,
-      pending: status === "pending" || status === "in_process",
-      rejected: status === "rejected" || status === "cancelled",
-      paymentId,
-      status,
-      statusDetail,
-      message: statusMessage(status, statusDetail),
-      qrCode: tx?.qr_code ? String(tx.qr_code) : null,
-      qrCodeBase64: tx?.qr_code_base64 ? String(tx.qr_code_base64) : null,
-      challengeUrl: verified.body?.three_ds_info?.external_resource_url ? String(verified.body.three_ds_info.external_resource_url) : null,
-      challengeCreq: verified.body?.three_ds_info?.creq ? String(verified.body.three_ds_info.creq) : null,
-    } as const;
+
+    return { ok: true, ...result } as const;
   });
