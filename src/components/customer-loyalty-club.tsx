@@ -117,7 +117,7 @@ export function CustomerLoyaltyClub({ session, onSessionChange, onUseReward }: P
           <div className="grid size-12 shrink-0 place-items-center rounded-2xl bg-black text-orange-400 shadow-lg"><Flame className="size-6" /></div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2"><h2 className="font-display text-lg font-black uppercase">Clube HotBox</h2><Sparkles className="size-4 text-orange-500" /></div>
-            <p className="mt-1 text-sm text-muted-foreground">Peça logado. A cada 10 pedidos concluídos, desbloqueie um cupom de <b>1 batata grátis</b>.</p>
+            <p className="mt-1 text-sm text-muted-foreground">Entre na sua conta antes de pedir e participe do Clube HotBox. A cada 10 pedidos concluídos, ganhe <b>1 batata grátis</b>.</p>
             <div className="mt-3 flex flex-wrap gap-2">
               <Button className="rounded-xl" onClick={() => setAuthOpen(true)}><LogIn className="mr-2 size-4" /> Entrar no Clube</Button>
               <Button variant="outline" className="rounded-xl" onClick={() => { setAuthMode("signup"); setAuthOpen(true); }}>Criar conta</Button>
