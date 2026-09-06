@@ -15,9 +15,9 @@ import {
 import {
   hideDigitalMenuFinanceRecordFn,
   listDigitalMenuFinanceFn,
-  refundMercadoPagoFn,
   updateDigitalMenuFinanceMetaFn,
 } from "@/lib/digital-menu-finance.functions";
+import { refundMercadoPagoFn } from "@/lib/mercadopago-refund.functions";
 
 export const Route = createFileRoute("/_authenticated/loja/financeiro-cardapio")({ component: DigitalMenuFinancePage });
 
