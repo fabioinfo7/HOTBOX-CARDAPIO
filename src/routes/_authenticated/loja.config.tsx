@@ -1249,6 +1249,98 @@ function ConfigPage() {
         </div>
       </Card>
 
+      <Card className="space-y-4 p-5" style={tabStyle("integracoes")}>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-semibold">Meta Pixel — Cardápio Digital e Página da Bio</h2>
+            <p className="mt-1 max-w-3xl text-xs text-muted-foreground">
+              Cole aqui o código padrão do Meta Pixel fornecido pelo Gerenciador de Eventos.
+              Ao salvar, a HotBox identifica o Pixel ID e passa a carregar o Pixel automaticamente
+              nas páginas selecionadas.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 rounded-xl border px-3 py-2">
+            <Label htmlFor="meta-pixel-enabled" className="cursor-pointer text-xs font-bold">
+              Pixel ativo
+            </Label>
+            <Switch
+              id="meta-pixel-enabled"
+              checked={(c as any).meta_pixel_enabled === true}
+              onCheckedChange={(checked) => setC({ ...c, meta_pixel_enabled: checked } as any)}
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border bg-muted/20 p-3">
+            <div>
+              <p className="text-sm font-semibold">Cardápio Digital</p>
+              <p className="text-[11px] text-muted-foreground">Rastreia acessos e ações de compra no cardápio.</p>
+            </div>
+            <Switch
+              checked={(c as any).meta_pixel_on_menu !== false}
+              onCheckedChange={(checked) => setC({ ...c, meta_pixel_on_menu: checked } as any)}
+            />
+          </label>
+
+          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border bg-muted/20 p-3">
+            <div>
+              <p className="text-sm font-semibold">Página da Bio</p>
+              <p className="text-[11px] text-muted-foreground">Rastreia quem acessa a página de links da HotBox.</p>
+            </div>
+            <Switch
+              checked={(c as any).meta_pixel_on_bio !== false}
+              onCheckedChange={(checked) => setC({ ...c, meta_pixel_on_bio: checked } as any)}
+            />
+          </label>
+        </div>
+
+        <div>
+          <Label htmlFor="meta-pixel-script">Script do Meta Pixel</Label>
+          <Textarea
+            id="meta-pixel-script"
+            value={(c as any).meta_pixel_script || ""}
+            onChange={(e) => setC({ ...c, meta_pixel_script: e.target.value } as any)}
+            placeholder={`<!-- Meta Pixel Code -->
+<script>
+  !function(f,b,e,v,n,t,s){...}
+  fbq('init', 'SEU_PIXEL_ID');
+  fbq('track', 'PageView');
+</script>
+<!-- End Meta Pixel Code -->`}
+            className="mt-1 min-h-48 font-mono text-xs"
+            spellCheck={false}
+          />
+          <div className="mt-2 rounded-xl border bg-muted/20 p-3 text-[11px] leading-relaxed text-muted-foreground">
+            <b>Como funciona:</b> você cola o script completo uma única vez. O sistema extrai o Pixel ID,
+            carrega o Pixel somente nas páginas habilitadas e envia automaticamente eventos do funil.
+            Não é necessário editar arquivos do código a cada troca de Pixel.
+          </div>
+        </div>
+
+        <div className="grid gap-2 rounded-xl border p-3 text-xs sm:grid-cols-2">
+          <div>
+            <p className="font-bold">Eventos do cardápio enviados ao Meta</p>
+            <p className="mt-1 text-muted-foreground">
+              PageView, ViewContent, AddToCart, InitiateCheckout, AddPaymentInfo e Purchase.
+            </p>
+          </div>
+          <div>
+            <p className="font-bold">Página da Bio</p>
+            <p className="mt-1 text-muted-foreground">
+              O acesso à Bio envia PageView e continua compatível com os eventos internos do Analytics 360.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex justify-end">
+          <Button onClick={save} disabled={saving} className="min-w-40">
+            <Save className="size-4" />
+            {saving ? "Salvando..." : "Salvar Meta Pixel"}
+          </Button>
+        </div>
+      </Card>
+
       <Card className="space-y-3 p-5" style={tabStyle("integracoes")}>
         <h2 className="font-semibold">99Food (Open Delivery)</h2>
         <p className="text-xs text-muted-foreground">
