@@ -65,6 +65,57 @@ function deviceInfo() {
   };
 }
 
+
+function trackMetaPixel(event_name: string, extra: Partial<AnalyticsEventInput>) {
+  if (typeof window === "undefined") return;
+
+  const fbq = (window as any).fbq;
+  if (typeof fbq !== "function") return;
+
+  const map: Record<string, string> = {
+    product_view: "ViewContent",
+    add_to_cart: "AddToCart",
+    checkout_started: "InitiateCheckout",
+    payment_started: "AddPaymentInfo",
+    purchase: "Purchase",
+    lead: "Lead",
+    contact: "Contact",
+  };
+
+  if (event_name === "page_view") {
+    const key = `${window.location.pathname}${window.location.search}`;
+    (window as any).__hotboxMetaPageViews ??= new Set<string>();
+    const pageViews: Set<string> = (window as any).__hotboxMetaPageViews;
+    const genericKey = `analytics:${key}`;
+
+    if (!pageViews.has(genericKey)) {
+      fbq("track", "PageView");
+      pageViews.add(genericKey);
+    }
+    return;
+  }
+
+  const metaEvent = map[event_name];
+  if (!metaEvent) return;
+
+  const params: Record<string, any> = {};
+
+  if (extra.product_name) params.content_name = extra.product_name;
+  if (extra.product_id) {
+    params.content_ids = [String(extra.product_id)];
+    params.content_type = "product";
+  }
+  if (extra.value != null && Number.isFinite(Number(extra.value))) {
+    params.value = Number(extra.value);
+    params.currency = "BRL";
+  }
+  if (extra.quantity != null && Number.isFinite(Number(extra.quantity))) {
+    params.num_items = Number(extra.quantity);
+  }
+
+  fbq("track", metaEvent, params);
+}
+
 export function trackAnalytics(event_name: string, extra: Partial<AnalyticsEventInput> = {}) {
   if (typeof window === "undefined") return;
   if (/^\/(loja|admin|entregador)(\/|$)/.test(window.location.pathname)) return;
@@ -79,6 +130,9 @@ export function trackAnalytics(event_name: string, extra: Partial<AnalyticsEvent
     page_title: extra.page_title || document.title,
     ...extra,
   };
+
+  trackMetaPixel(event_name, extra);
+
   void trackAnalyticsEvent({ data: payload })
     .then((result: any) => {
       if (!result?.ok) {
