@@ -79,5 +79,20 @@ export function trackAnalytics(event_name: string, extra: Partial<AnalyticsEvent
     page_title: extra.page_title || document.title,
     ...extra,
   };
-  void trackAnalyticsEvent({ data: payload }).catch(() => {});
+  void trackAnalyticsEvent({ data: payload })
+    .then((result: any) => {
+      if (!result?.ok) {
+        console.warn("[analytics] evento não gravado", {
+          event_name,
+          stage: result?.stage || "unknown",
+          error: result?.error || "Falha sem detalhe",
+        });
+      }
+    })
+    .catch((error: any) => {
+      console.warn("[analytics] falha ao enviar evento", {
+        event_name,
+        message: error?.message || String(error),
+      });
+    });
 }
