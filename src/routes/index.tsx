@@ -190,6 +190,7 @@ function CustomerHome() {
   const [paymentAvailable, setPaymentAvailable] = useState(false);
   const [mercadoPagoPublicKey, setMercadoPagoPublicKey] = useState("");
   const [mercadoPagoMaxInstallments, setMercadoPagoMaxInstallments] = useState(1);
+  const [mercadoPagoEnvironment, setMercadoPagoEnvironment] = useState<"test" | "production">("test");
   const [mpCheckout, setMpCheckout] = useState<{ id: string; total: number } | null>(null);
   const paymentSectionRef = useRef<HTMLDivElement | null>(null);
   const [ifoodStoreLink, setIfoodStoreLink] = useState("");
@@ -323,6 +324,7 @@ function CustomerHome() {
       setPaymentAvailable(pay.payment_available === true);
       setMercadoPagoPublicKey(String(pay.mercadopago_public_key || ""));
       setMercadoPagoMaxInstallments(Math.min(12, Math.max(1, Number(pay.mercadopago_max_installments || 1))));
+      setMercadoPagoEnvironment(pay.mercadopago_environment === "production" ? "production" : "test");
       setPayOnDeliveryEnabled(pay.pay_on_delivery_enabled === true);
       setPayOnDeliveryCardEnabled(pay.pay_on_delivery_card_enabled !== false);
       setPayOnDeliveryPixEnabled(pay.pay_on_delivery_pix_enabled !== false);
@@ -1622,6 +1624,7 @@ function CustomerHome() {
                 publicKey={mercadoPagoPublicKey}
                 maxInstallments={mercadoPagoMaxInstallments}
                 customerEmail={customerSession?.user?.email || null}
+                environment={mercadoPagoEnvironment}
                 origin={typeof window !== "undefined" ? window.location.origin : ""}
                 onPaid={finishMercadoPago}
                 onCancel={cancelMercadoPagoCheckout}
