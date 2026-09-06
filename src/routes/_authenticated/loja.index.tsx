@@ -97,6 +97,15 @@ function OrdersDashboard() {
     }
   });
   const [manualOpen, setManualOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 767px)");
+    const sync = () => setIsMobile(media.matches);
+    sync();
+    media.addEventListener?.("change", sync);
+    return () => media.removeEventListener?.("change", sync);
+  }, []);
 
   function toggleView() {
     const next = viewMode === "cards" ? "rows" : "cards";
@@ -295,37 +304,59 @@ function OrdersDashboard() {
   const activeList = orders.filter((o) => o.status !== "failed");
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Pedidos ao vivo</h1>
-          <p className="text-sm text-muted-foreground">
-            Atualização em tempo real.{" "}
+    <div className="space-y-4 md:space-y-6">
+      <div className="hb-orders-mobile-hero flex flex-col gap-3 md:flex-row md:flex-wrap md:items-center md:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-black tracking-tight md:text-2xl">Pedidos ao vivo</h1>
             {pendingCount > 0 && (
-              <span className="font-semibold text-primary">{pendingCount} aguardando confirmação</span>
+              <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-primary px-2 py-0.5 text-[11px] font-black text-primary-foreground">
+                {pendingCount}
+              </span>
             )}
+          </div>
+          <p className="mt-0.5 text-xs text-muted-foreground md:text-sm">
+            Atualização em tempo real
+            {pendingCount > 0 && <span className="font-semibold text-primary"> • {pendingCount} aguardando</span>}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="default" onClick={() => setManualOpen(true)}>
-            <PackagePlus className="size-4" /> Novo pedido manual
+
+        <div className="grid grid-cols-[1fr_auto] gap-2 md:flex md:items-center">
+          <Button className="min-h-11 rounded-xl font-bold md:min-h-9" onClick={() => setManualOpen(true)}>
+            <PackagePlus className="size-4" /> Novo pedido
           </Button>
+
           <Button
             variant="outline"
             size="icon"
+            className="hidden rounded-xl md:inline-flex"
             title={viewMode === "cards" ? "Ver como lista" : "Ver como cards"}
             onClick={toggleView}
           >
             {viewMode === "cards" ? <List className="size-4" /> : <LayoutGrid className="size-4" />}
           </Button>
-          <Button variant="outline" onClick={() => setAlarmOn(!alarmOn)}>
+
+          <Button
+            variant="outline"
+            size="icon"
+            className="min-h-11 min-w-11 rounded-xl md:hidden"
+            onClick={() => setAlarmOn(!alarmOn)}
+            title={alarmOn ? "Silenciar alarme" : "Ativar alarme"}
+          >
+            {alarmOn ? <Bell className="size-4" /> : <BellOff className="size-4" />}
+          </Button>
+
+          <Button variant="outline" className="hidden md:inline-flex" onClick={() => setAlarmOn(!alarmOn)}>
             {alarmOn ? <Bell className="size-4" /> : <BellOff className="size-4" />}{" "}
             {alarmOn ? "Alarme ativo" : "Alarme mudo"}
           </Button>
-          {alarmOn && !soundReady && (
-            <span className="text-xs text-muted-foreground">Clique em qualquer lugar da tela pra liberar o som</span>
-          )}
         </div>
+
+        {alarmOn && !soundReady && (
+          <span className="hidden text-xs text-muted-foreground md:inline">
+            Clique em qualquer lugar da tela pra liberar o som
+          </span>
+        )}
       </div>
 
       <ManualOrderDialog open={manualOpen} onOpenChange={setManualOpen} />
@@ -333,7 +364,7 @@ function OrdersDashboard() {
       {/* áudio do alarme agora é o singleton compartilhado (src/lib/alarm-audio.ts) */}
 
       {lowStock.length > 0 && (
-        <div className="flex items-center justify-between gap-3 rounded-xl border-2 border-warning bg-warning/10 p-4">
+        <div className="flex flex-col items-stretch gap-3 rounded-2xl border-2 border-warning bg-warning/10 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
           <div>
             <h3 className="font-bold text-warning-foreground">
               ⚠ Estoque baixo: {lowStock.map((i) => i.name).join(", ")}
@@ -363,7 +394,7 @@ function OrdersDashboard() {
 
       {!activeList.length && !failedInList.length ? (
         <Card className="p-10 text-center text-muted-foreground">Nenhum pedido em andamento</Card>
-      ) : viewMode === "rows" ? (
+      ) : !isMobile && viewMode === "rows" ? (
         <Card className="overflow-hidden p-0">
           <table className="w-full text-sm">
             <thead className="bg-muted text-left text-xs uppercase tracking-wide">
@@ -454,7 +485,7 @@ function OrdersDashboard() {
           </table>
         </Card>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:gap-4 xl:grid-cols-3">
           {activeList.map((o) => {
             const isPending = o.status === "pending" || o.status === "pending_review";
             // pedido da iFood parado sem ninguém aceitar há mais de 3 minutos —
@@ -473,7 +504,7 @@ function OrdersDashboard() {
             return (
               <Card
                 key={o.id}
-                className={`overflow-hidden rounded-2xl border p-0 shadow-sm transition-shadow hover:shadow-lg ${customerHasUnread ? "customer-message-pulse border-2 border-emerald-500" : platformStuck ? "ifood-urgent-pulse border-2 border-red-500" : isPending ? "alarm-pulse" : ""}`}
+                className={`w-full min-w-0 overflow-hidden rounded-[22px] border p-0 shadow-sm transition-shadow hover:shadow-lg ${customerHasUnread ? "customer-message-pulse border-2 border-emerald-500" : platformStuck ? "ifood-urgent-pulse border-2 border-red-500" : isPending ? "alarm-pulse" : ""}`}
               >
                 {o.loyalty_reward_used && (
                   <div className="flex items-center justify-center gap-2 bg-emerald-600 px-3 py-3 text-center text-sm font-black uppercase tracking-wide text-white shadow-inner">
@@ -498,7 +529,7 @@ function OrdersDashboard() {
                   </span>
                 </div>
 
-                <div className="px-4 pb-1 pt-3">
+                <div className="px-3.5 pb-1 pt-3 sm:px-4">
                   <div className="flex items-center justify-between gap-2">
                     <span className="flex items-center gap-1.5 text-sm font-bold">
                       {o.source === "whatsapp" && (
@@ -632,12 +663,12 @@ function OrdersDashboard() {
                 )}
 
                 {/* ações — grade 2 colunas, compacta */}
-                <div className="grid grid-cols-2 gap-1.5 border-t bg-muted/30 p-3">
+                <div className="grid grid-cols-2 gap-2 border-t bg-muted/30 p-3">
                   <Link to="/loja/pedido/$id" params={{ id: o.id }} search={{}} className="col-span-2">
                     <Button
                       size="sm"
                       variant="outline"
-                      className="w-full rounded-full border-2 font-semibold"
+                      className="min-h-11 w-full rounded-xl border-2 font-bold sm:min-h-9 sm:rounded-full sm:font-semibold"
                       disabled={o.customer_cancel_requested}
                     >
                       <Eye className="size-3.5" /> Ver detalhes
@@ -653,7 +684,7 @@ function OrdersDashboard() {
                   {o.status === "pending" && !o.customer_cancel_requested && (
                     <Button
                       size="sm"
-                      className="rounded-full font-semibold shadow-sm"
+                      className="min-h-11 rounded-xl font-bold shadow-sm sm:min-h-9 sm:rounded-full sm:font-semibold"
                       onClick={() => updateStatus(o, "preparing")}
                     >
                       <ChefHat className="size-3.5" /> Aceitar
@@ -662,7 +693,7 @@ function OrdersDashboard() {
                   {o.status === "preparing" && !o.customer_cancel_requested && (
                     <Button
                       size="sm"
-                      className="rounded-full font-semibold shadow-sm"
+                      className="min-h-11 rounded-xl font-bold shadow-sm sm:min-h-9 sm:rounded-full sm:font-semibold"
                       onClick={() => updateStatus(o, "ready_pickup")}
                     >
                       <Package className="size-3.5" /> Pronto
@@ -671,7 +702,7 @@ function OrdersDashboard() {
                   {o.status === "ready_pickup" && !o.customer_cancel_requested && (
                     <Button
                       size="sm"
-                      className="rounded-full font-semibold shadow-sm"
+                      className="min-h-11 rounded-xl font-bold shadow-sm sm:min-h-9 sm:rounded-full sm:font-semibold"
                       onClick={() => updateStatus(o, "out_for_delivery")}
                     >
                       <Bike className="size-3.5" /> Saindo
@@ -681,7 +712,7 @@ function OrdersDashboard() {
                     <Button
                       size="sm"
                       variant="secondary"
-                      className="rounded-full font-semibold shadow-sm"
+                      className="min-h-11 rounded-xl font-bold shadow-sm sm:min-h-9 sm:rounded-full sm:font-semibold"
                       onClick={() => updateStatus(o, "delivered")}
                     >
                       <CheckCircle2 className="size-3.5" /> Entregue
@@ -709,7 +740,7 @@ function OrdersDashboard() {
                     <Button
                       size="sm"
                       variant={customerHasUnread ? "default" : "outline"}
-                      className="w-full rounded-full font-semibold"
+                      className="min-h-11 w-full rounded-xl font-bold sm:min-h-9 sm:rounded-full sm:font-semibold"
                     >
                       <MessageCircle className="size-3.5" />
                       {customerHasUnread ? "Nova mensagem — abrir conversa" : "Conversar com cliente"}
