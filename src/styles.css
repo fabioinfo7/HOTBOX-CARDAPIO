@@ -586,3 +586,39 @@
   }
   .hb-admin-mobile-main table { min-width: 680px; }
 }
+
+
+/* HOTBOX V8 — refinamento mobile de Pedidos e Chat */
+@media (max-width: 767px) {
+  .hb-orders-mobile-hero {
+    margin: -2px -2px 0;
+    padding: 2px;
+  }
+
+  .hb-admin-mobile-main {
+    overflow-x: hidden;
+  }
+
+  .hb-admin-mobile-main table {
+    min-width: 0;
+  }
+
+  .hb-admin-mobile-main .grid,
+  .hb-admin-mobile-main .flex {
+    min-width: 0;
+  }
+
+  .hb-admin-mobile-main [class*="max-w-"] {
+    max-width: 100%;
+  }
+
+  .hb-chat-app {
+    width: 100%;
+    max-width: 100vw;
+  }
+
+  .hb-chat-app button,
+  .hb-chat-app [role="button"] {
+    touch-action: manipulation;
+  }
+}
