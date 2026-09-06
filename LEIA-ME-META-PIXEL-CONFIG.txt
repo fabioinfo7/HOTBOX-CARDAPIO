@@ -1,0 +1,28 @@
+HOTBOX — META PIXEL 100% VIA CONFIGURAÇÕES
+==========================================
+
+ARQUIVOS ALTERADOS
+1) src/routes/__root.tsx
+2) src/routes/_authenticated/loja.config.tsx
+3) scripts/preflight.mjs
+4) supabase/migrations/20260906002000_meta_pixel_script_via_config.sql
+
+INSTALAÇÃO
+1. Execute a migration SQL no Supabase.
+2. Substitua os 3 arquivos de código mantendo exatamente os caminhos.
+3. Faça o deploy.
+4. Abra Configurações > Integrações.
+5. Em "Meta Pixel do site", ative a chave e cole o script COMPLETO fornecido pela Meta.
+6. Clique em Salvar.
+
+COMPORTAMENTO
+- Não existe snippet padrão do Meta Pixel hardcoded nas páginas públicas.
+- O script fica salvo em store_config e é carregado dinamicamente no site público.
+- O painel /loja, /admin e /entregador não disparam esse Pixel, evitando contaminar métricas com acessos internos.
+- Para retirar o Pixel, desative a chave e salve.
+- A alteração passa a valer nas novas cargas de página dos clientes sem editar código nem fazer novo deploy.
+- A Conversions API (CAPI) permanece separada e continua usando Pixel ID + token do CAPI quando configurada.
+
+SEGURANÇA
+- Apenas administradores continuam podendo gravar store_config pela RLS existente.
+- A função pública retorna somente o snippet de rastreamento habilitado e não expõe tokens privados da configuração.
