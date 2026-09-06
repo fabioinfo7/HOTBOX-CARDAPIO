@@ -1,104 +1,183 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
+import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { brasiliaDayRange } from "@/lib/brasilia-date";
 
-const WEBHOOK_VERSION = "HOTBOX_MP_ORDERS_V5_20260906";
+async function requireStoreAdmin(context: any) {
+  const { data: role } = await context.supabase
+    .from("user_roles")
+    .select("role")
+    .eq("user_id", context.userId)
+    .eq("role", "store_admin")
+    .maybeSingle();
+  return !!role;
+}
 
-export const Route = createFileRoute("/api/public/webhooks/mercadopago")({
-  server: {
-    handlers: {
-      GET: async () => Response.json({ ok: true, service: "hotbox-mercadopago-webhook", version: WEBHOOK_VERSION, mode: "orders-api" }),
-      POST: async ({ request }) => {
-        const url = new URL(request.url);
-        const payload: any = await request.json().catch(() => ({}));
-        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-        const { loadMercadoPagoConfig, fetchMercadoPagoOrder, storeMercadoPagoSnapshot, finalizeIfApproved } = await import("@/lib/mercadopago.functions");
-        const cfg = await loadMercadoPagoConfig(supabaseAdmin);
-        const token = url.searchParams.get("token") || "";
+const isPaymentFilter = (value: unknown): value is "all" | "pix" | "card" =>
+  value === "all" || value === "pix" || value === "card";
+const isProviderFilter = (value: unknown): value is "all" | "infinitepay" | "mercadopago" =>
+  value === "all" || value === "infinitepay" || value === "mercadopago";
 
-        if (!cfg.accessToken || !cfg.webhookToken || token !== cfg.webhookToken) {
-          return Response.json({ ok: false, error: "unauthorized", version: WEBHOOK_VERSION }, { status: 401 });
-        }
+const DIGITAL_KINDS = ["infinitepay", "infinitepay_card", "infinitepay_pix", "mercadopago", "mercadopago_card", "mercadopago_pix"];
 
-        const eventType = String(payload?.type || url.searchParams.get("type") || "").toLowerCase();
-        const action = String(payload?.action || "");
-        const orderId = String(payload?.data?.id || url.searchParams.get("data.id") || "").trim();
+function applyPaymentFilter(query: any, payment: "all" | "pix" | "card") {
+  if (payment === "pix") return query.in("payment_kind", ["infinitepay_pix", "mercadopago_pix"]);
+  if (payment === "card") return query.in("payment_kind", ["infinitepay", "infinitepay_card", "mercadopago", "mercadopago_card"]);
+  return query.in("payment_kind", DIGITAL_KINDS);
+}
 
-        if (eventType !== "order" && !action.startsWith("order.")) {
-          return Response.json({ ok: true, ignored: true, reason: "not_order_event", version: WEBHOOK_VERSION }, { status: 200 });
-        }
-        if (!orderId) return Response.json({ ok: true, ignored: true, reason: "order_id_missing", version: WEBHOOK_VERSION }, { status: 200 });
+function applyProviderFilter(query: any, provider: "all" | "infinitepay" | "mercadopago") {
+  return provider === "all" ? query : query.eq("payment_provider", provider);
+}
 
-        // O simulador do painel pode enviar um ID fictício como "123456". Confirmamos o recebimento sem tentar tratá-lo como order real.
-        if (!/^ORD/i.test(orderId)) {
-          console.info("[mercadopago-webhook] teste/simulação recebido", { action, orderId });
-          return Response.json({ ok: true, simulated: true, version: WEBHOOK_VERSION }, { status: 200 });
-        }
+export const listDigitalMenuFinanceFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: {
+    from: string;
+    to: string;
+    payment?: "all" | "pix" | "card";
+    provider?: "all" | "infinitepay" | "mercadopago";
+    page?: number;
+    pageSize?: number;
+  }) => data)
+  .handler(async ({ data, context }) => {
+    if (!(await requireStoreAdmin(context))) return { ok: false, error: "Acesso não autorizado." } as const;
 
-        const verified = await fetchMercadoPagoOrder(cfg.accessToken, orderId);
-        if (!verified.response.ok) {
-          if ([400, 404].includes(Number(verified.response.status))) {
-            console.warn("[mercadopago-webhook] order inválida/não encontrada", { orderId, status: verified.response.status });
-            return Response.json({ ok: true, ignored: true, reason: "order_not_found", version: WEBHOOK_VERSION }, { status: 200 });
-          }
-          return Response.json({ ok: false, retry: true, version: WEBHOOK_VERSION }, { status: 503 });
-        }
+    const payment = isPaymentFilter(data.payment) ? data.payment : "all";
+    const provider = isProviderFilter(data.provider) ? data.provider : "all";
+    const pageSize = Math.min(50, Math.max(10, Math.floor(Number(data.pageSize) || 15)));
+    const page = Math.max(1, Math.floor(Number(data.page) || 1));
+    const { since, until } = brasiliaDayRange(data.from, data.to);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-        const order = verified.body;
-        const checkoutId = String(order?.external_reference || "").trim();
-        if (!checkoutId) return Response.json({ ok: true, ignored: true, reason: "checkout_reference_missing", version: WEBHOOK_VERSION }, { status: 200 });
+    let q = (supabaseAdmin as any)
+      .from("site_checkout_sessions")
+      .select(
+        "id,status,payment_provider,payment_kind,customer_name,customer_phone,subtotal,delivery_fee,coupon_code,coupon_discount,total,order_id,paid_at,created_at,updated_at,infinitepay_receipt_url,infinitepay_amount_cents,infinitepay_paid_amount_cents,infinitepay_installments,mercadopago_order_id,mercadopago_payment_id,mercadopago_order_status,mercadopago_order_status_detail,mercadopago_status,mercadopago_status_detail,mercadopago_payment_method_id,mercadopago_payment_type_id,mercadopago_installments,mercadopago_transaction_amount,mercadopago_net_received_amount,mercadopago_fee_amount,mercadopago_refunded_amount,mercadopago_refund_status,mercadopago_refunded_at,finance_reference,finance_note",
+        { count: "exact" },
+      )
+      .eq("status", "paid")
+      .is("finance_hidden_at", null)
+      .gte("paid_at", since)
+      .lte("paid_at", until);
+    q = applyPaymentFilter(q, payment);
+    q = applyProviderFilter(q, provider);
 
-        const { data: checkout, error } = await (supabaseAdmin as any)
-          .from("site_checkout_sessions")
-          .select("id,total,order_id,payment_provider")
-          .eq("id", checkoutId)
-          .maybeSingle();
-        if (error) return Response.json({ ok: false, retry: true, version: WEBHOOK_VERSION }, { status: 503 });
-        if (!checkout || checkout.payment_provider !== "mercadopago") return Response.json({ ok: true, ignored: true, reason: "checkout_not_found_or_wrong_provider", version: WEBHOOK_VERSION }, { status: 200 });
+    const fromRow = (page - 1) * pageSize;
+    const toRow = fromRow + pageSize - 1;
+    const { data: rows, count, error } = await q.order("paid_at", { ascending: false }).range(fromRow, toRow);
+    if (error) return { ok: false, error: error.message } as const;
 
-        await storeMercadoPagoSnapshot(supabaseAdmin, checkout.id, order, payload);
+    const orderIds = [...new Set((rows ?? []).map((r: any) => r.order_id).filter(Boolean))];
+    const orderMap = new Map<string, any>();
+    if (orderIds.length) {
+      const { data: orders } = await supabaseAdmin
+        .from("orders")
+        .select("id,order_number,external_display_id,status,customer_name,customer_phone,payment_method,payment_status,created_at")
+        .in("id", orderIds);
+      for (const order of orders ?? []) orderMap.set(String(order.id), order);
+    }
 
-        // Reconciliamos também estornos que tenham mudado de processing -> processed.
-        const providerRefunds = Array.isArray(order?.transactions?.refunds) ? order.transactions.refunds : [];
-        if (providerRefunds.length) {
-          const { data: localRefunds } = await (supabaseAdmin as any)
-            .from("mercadopago_refunds")
-            .select("id,mercadopago_refund_id,mercadopago_transaction_id,amount,status")
-            .eq("checkout_id", checkout.id)
-            .in("status", ["requested", "processing", "processed"]);
-          for (const providerRefund of providerRefunds) {
-            const providerRefundId = String(providerRefund?.id || "");
-            const providerTxId = String(providerRefund?.transaction_id || "");
-            const providerAmount = Number(providerRefund?.amount || 0);
-            const local = (localRefunds || []).find((r: any) =>
-              (providerRefundId && String(r.mercadopago_refund_id || "") === providerRefundId) ||
-              (!r.mercadopago_refund_id && String(r.mercadopago_transaction_id || "") === providerTxId && Number(r.amount || 0) === providerAmount)
-            );
-            if (local?.id) {
-              await (supabaseAdmin as any).rpc("finalize_mercadopago_refund", {
-                p_refund_log_id: local.id,
-                p_provider_refund_id: providerRefundId,
-                p_provider_status: String(providerRefund?.status || order?.status_detail || order?.status || "processing"),
-                p_response_payload: order,
-              });
-            }
-          }
-        }
+    const { data: periodSummary, error: summaryError } = await (supabaseAdmin as any).rpc("digital_menu_finance_summary", {
+      p_since: since,
+      p_until: until,
+      p_payment_kind: payment,
+      p_provider: provider,
+    });
+    if (summaryError) return { ok: false, error: summaryError.message } as const;
 
-        const result = await finalizeIfApproved(supabaseAdmin, checkout, order, async (orderDbId: string) => {
-          const { notifyPaidSiteOrder } = await import("@/lib/site-checkout-notify.server");
-          await notifyPaidSiteOrder(supabaseAdmin, orderDbId);
-        });
+    const { data: allTimeSummary, error: allTimeError } = await (supabaseAdmin as any).rpc("digital_menu_finance_summary", {
+      p_since: null,
+      p_until: null,
+      p_payment_kind: "all",
+      p_provider: "all",
+    });
+    if (allTimeError) return { ok: false, error: allTimeError.message } as const;
 
-        if (!result.ok && (result as any).transient) {
-          console.error("[mercadopago-webhook] falha temporária ao finalizar", result);
-          return Response.json({ ok: false, retry: true, version: WEBHOOK_VERSION }, { status: 503 });
-        }
-        if (!result.ok && (result as any).validation) {
-          console.error("[mercadopago-webhook] validação recusou a order", result);
-          return Response.json({ ok: true, received: true, validation_error: true, version: WEBHOOK_VERSION }, { status: 200 });
-        }
+    const checkoutIds = (rows ?? []).map((r: any) => String(r.id));
+    const refundMap = new Map<string, any[]>();
+    if (checkoutIds.length) {
+      const { data: refunds } = await (supabaseAdmin as any)
+        .from("mercadopago_refunds")
+        .select("id,checkout_id,mercadopago_order_id,mercadopago_transaction_id,mercadopago_refund_id,refund_type,amount,reason,status,requested_at,processed_at,error_message")
+        .in("checkout_id", checkoutIds)
+        .order("requested_at", { ascending: false });
+      for (const refund of refunds ?? []) {
+        const key = String(refund.checkout_id);
+        refundMap.set(key, [...(refundMap.get(key) || []), refund]);
+      }
+    }
 
-        return Response.json({ ok: true, received: true, processed: !!result.ok, version: WEBHOOK_VERSION }, { status: 200 });
-      },
-    },
-  },
-});
+    let refundTotal = 0;
+    if (provider !== "infinitepay") {
+      let refundScope = (supabaseAdmin as any)
+        .from("site_checkout_sessions")
+        .select("id")
+        .eq("status", "paid")
+        .eq("payment_provider", "mercadopago")
+        .gte("paid_at", since)
+        .lte("paid_at", until);
+      refundScope = applyPaymentFilter(refundScope, payment);
+      const { data: refundCheckouts } = await refundScope;
+      const refundCheckoutIds = (refundCheckouts ?? []).map((x: any) => String(x.id));
+      if (refundCheckoutIds.length) {
+        const { data: periodRefunds } = await (supabaseAdmin as any)
+          .from("mercadopago_refunds")
+          .select("amount,status,requested_at")
+          .in("checkout_id", refundCheckoutIds)
+          .gte("requested_at", since)
+          .lte("requested_at", until)
+          .in("status", ["processing", "processed"]);
+        refundTotal = (periodRefunds ?? []).reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0);
+      }
+    }
+
+    return {
+      ok: true,
+      page,
+      pageSize,
+      count: count ?? 0,
+      periodSummary: { ...(periodSummary ?? {}), refund_total: refundTotal, net_total: Number(periodSummary?.sales_total || 0) - refundTotal },
+      allTimeSummary: allTimeSummary ?? {},
+      rows: (rows ?? []).map((row: any) => ({ ...row, order: row.order_id ? orderMap.get(String(row.order_id)) ?? null : null, refunds: refundMap.get(String(row.id)) || [] })),
+    } as const;
+  });
+
+export const updateDigitalMenuFinanceMetaFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { checkoutId: string; reference?: string | null; note?: string | null }) => data)
+  .handler(async ({ data, context }) => {
+    if (!(await requireStoreAdmin(context))) return { ok: false, error: "Acesso não autorizado." } as const;
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { error } = await (supabaseAdmin as any)
+      .from("site_checkout_sessions")
+      .update({
+        finance_reference: String(data.reference ?? "").trim().slice(0, 120) || null,
+        finance_note: String(data.note ?? "").trim().slice(0, 2000) || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", data.checkoutId)
+      .eq("status", "paid")
+      .in("payment_kind", DIGITAL_KINDS);
+    if (error) return { ok: false, error: error.message } as const;
+    return { ok: true } as const;
+  });
+
+export const hideDigitalMenuFinanceRecordFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { checkoutId: string }) => data)
+  .handler(async ({ data, context }) => {
+    if (!(await requireStoreAdmin(context))) return { ok: false, error: "Acesso não autorizado." } as const;
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { error } = await (supabaseAdmin as any)
+      .from("site_checkout_sessions")
+      .update({
+        finance_hidden_at: new Date().toISOString(),
+        finance_hidden_by: context.userId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", data.checkoutId)
+      .eq("status", "paid")
+      .in("payment_kind", DIGITAL_KINDS);
+    if (error) return { ok: false, error: error.message } as const;
+    return { ok: true } as const;
+  });
