@@ -167,6 +167,7 @@ function ChatPage() {
   const [activeOrders, setActiveOrders] = useState<ActiveOrder[]>([]);
   const [deliveryMinutes, setDeliveryMinutes] = useState(60);
   const [sideTab, setSideTab] = useState<"quick" | "orders">("quick");
+  const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
   const [timerNow, setTimerNow] = useState(Date.now());
   const [currentOperator, setCurrentOperator] = useState<{ id: string; email: string | null } | null>(null);
   const [orderItemsByOrder, setOrderItemsByOrder] = useState<Record<string, any[]>>({});
@@ -739,7 +740,7 @@ function ChatPage() {
   }, [filtered]);
 
   return (
-    <div className="flex h-[calc(100vh-5rem)] overflow-hidden md:rounded-2xl md:border md:bg-card md:shadow-lg">
+    <div className="hb-chat-app flex h-[calc(100vh-5rem)] overflow-hidden md:rounded-2xl md:border md:bg-card md:shadow-lg">
       {/* ============ SIDEBAR ============ */}
       <div
         className={`${selectedId ? "hidden md:flex" : "flex"} w-full shrink-0 flex-col border-r bg-muted/20 md:w-72`}
@@ -1010,7 +1011,7 @@ function ChatPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  className="gap-1.5 border-white/30 bg-white/10 text-white hover:bg-white/20 hover:text-white"
+                  className="hidden gap-1.5 border-white/30 bg-white/10 text-white hover:bg-white/20 hover:text-white md:inline-flex"
                   disabled={generatingOrder}
                   onClick={handleGenerateOrder}
                   title="A IA lê essa conversa inteira e gera o pedido no sistema com os dados que o cliente confirmou"
@@ -1022,7 +1023,7 @@ function ChatPage() {
                   )}
                   Gerar pedido com IA
                 </Button>
-                <label className="flex cursor-pointer items-center gap-2">
+                <label className="hidden cursor-pointer items-center gap-2 md:flex">
                   <span className="text-xs font-medium text-white/80">
                     {selected.bot_paused ? (
                       <span className="flex items-center gap-1 font-semibold text-amber-300">
@@ -1036,6 +1037,16 @@ function ChatPage() {
                   </span>
                   <Switch checked={selected.bot_paused} onCheckedChange={toggleBotPaused} />
                 </label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-9 rounded-full text-white hover:bg-white/10 hover:text-white md:hidden"
+                  onClick={() => setMobileToolsOpen(true)}
+                  title="Ferramentas da conversa"
+                >
+                  <MoreHorizontal className="size-5" />
+                </Button>
               </div>
             </div>
 
@@ -1202,8 +1213,16 @@ function ChatPage() {
       </div>
 
       {/* ============ PAINEL LATERAL: RESPOSTAS / PEDIDOS ============ */}
-      <div className="hidden w-72 shrink-0 flex-col border-l md:flex">
-        <div className="grid grid-cols-2 border-b bg-card p-2">
+      {mobileToolsOpen && (
+        <button
+          type="button"
+          aria-label="Fechar ferramentas"
+          className="fixed inset-0 z-[58] bg-black/45 backdrop-blur-[1px] md:hidden"
+          onClick={() => setMobileToolsOpen(false)}
+        />
+      )}
+      <div className={`${mobileToolsOpen ? "fixed inset-x-0 bottom-[calc(4.8rem+env(safe-area-inset-bottom))] top-[4.25rem] z-[60] flex w-full rounded-t-[28px] shadow-2xl" : "hidden"} shrink-0 flex-col border-l bg-background md:static md:flex md:w-72 md:rounded-none md:shadow-none`}>
+        <div className="grid grid-cols-[1fr_1fr_auto] border-b bg-card p-2 md:grid-cols-2">
           <button
             type="button"
             onClick={() => setSideTab("quick")}
@@ -1218,6 +1237,34 @@ function ChatPage() {
           >
             <Package className="mr-1 inline size-3.5" /> Pedidos {activeOrders.length ? `(${activeOrders.length})` : ""}{unreadPhones.size ? ` · 💬 ${unreadPhones.size}` : ""}
           </button>
+          <button
+            type="button"
+            className="grid size-9 place-items-center rounded-full text-muted-foreground hover:bg-muted md:hidden"
+            onClick={() => setMobileToolsOpen(false)}
+            aria-label="Fechar"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+        <div className="border-b bg-muted/20 p-2 md:hidden">
+          <div className="grid grid-cols-[1fr_auto] gap-2">
+            <Button
+              size="sm"
+              className="justify-center gap-2 rounded-xl"
+              disabled={!selected || generatingOrder}
+              onClick={() => {
+                setMobileToolsOpen(false);
+                handleGenerateOrder();
+              }}
+            >
+              {generatingOrder ? <Loader2 className="size-4 animate-spin" /> : <PackagePlus className="size-4" />}
+              Gerar pedido com IA
+            </Button>
+            <label className="flex items-center gap-2 rounded-xl border bg-background px-3 text-xs font-bold">
+              {selected?.bot_paused ? <UserCog className="size-4 text-amber-500" /> : <Bot className="size-4 text-emerald-500" />}
+              <Switch checked={!!selected?.bot_paused} onCheckedChange={toggleBotPaused} disabled={!selected} />
+            </label>
+          </div>
         </div>
         {sideTab === "quick" ? (
           <QuickRepliesPanel
