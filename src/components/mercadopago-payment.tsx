@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, Copy, CreditCard, Loader2, QrCode, ShieldCheck, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -41,9 +41,18 @@ function loadScript(src: string, attrs?: Record<string, string>) {
   return new Promise<void>((resolve, reject) => {
     const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null;
     if (existing) {
-      if ((existing as any).dataset.loaded === "true" || src === SECURITY_SRC) return resolve();
+      if (
+        (existing as any).dataset.loaded === "true" ||
+        (src === SDK_SRC && !!window.MercadoPago) ||
+        src === SECURITY_SRC
+      ) {
+        return resolve();
+      }
       existing.addEventListener("load", () => resolve(), { once: true });
       existing.addEventListener("error", () => reject(new Error("Falha ao carregar módulo de pagamento.")), { once: true });
+      window.setTimeout(() => {
+        if (src === SDK_SRC && window.MercadoPago) resolve();
+      }, 250);
       return;
     }
     const script = document.createElement("script");
@@ -67,6 +76,10 @@ export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallme
   const [brickKey, setBrickKey] = useState(0);
   const controllerRef = useRef<any>(null);
   const challengeFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const brickContainerId = useMemo(
+    () => `hotbox_payment_brick_${String(checkoutId).replace(/[^a-zA-Z0-9_-]/g, "_")}`,
+    [checkoutId],
+  );
 
   useEffect(() => {
     let alive = true;
@@ -74,6 +87,8 @@ export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallme
 
     async function init() {
       try {
+        setFatalError("");
+        setReady(false);
         if (!publicKey) throw new Error("Chave pública do Mercado Pago não configurada.");
         await Promise.all([
           loadScript(SDK_SRC),
@@ -81,10 +96,14 @@ export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallme
         ]);
         if (!alive || !window.MercadoPago) return;
 
+        const container = document.getElementById(brickContainerId);
+        if (!container) throw new Error("Área de pagamento não encontrada na página.");
+        container.innerHTML = "";
+
         const mp = new window.MercadoPago(publicKey, { locale: "pt-BR" });
         const bricks = mp.bricks();
         const brickEmail = environment === "test" ? "test@testuser.com" : customerEmail;
-        controller = await bricks.create("payment", "hotbox_payment_brick", {
+        controller = await bricks.create("payment", brickContainerId, {
           initialization: {
             amount: Number(amount.toFixed(2)),
             payer: brickEmail ? { email: brickEmail } : undefined,
@@ -96,15 +115,24 @@ export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallme
               minInstallments: 1,
               maxInstallments: Math.min(12, Math.max(1, Number(maxInstallments || 1))),
             },
-            visual: {
-              style: { theme: "default" },
-            },
           },
           callbacks: {
             onReady: () => alive && setReady(true),
             onError: (error: any) => {
               console.error("[mercadopago-brick]", error);
-              if (alive) setFatalError("Não foi possível carregar o formulário de pagamento. Atualize a página e tente novamente.");
+              const detail =
+                error?.message ||
+                error?.cause?.message ||
+                error?.error ||
+                error?.type ||
+                "";
+              if (alive) {
+                setFatalError(
+                  detail
+                    ? `Mercado Pago: ${String(detail)}`
+                    : "Não foi possível carregar o formulário de pagamento. Atualize a página e tente novamente.",
+                );
+              }
             },
             onSubmit: async ({ formData }: any) => {
               const attemptId = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
@@ -152,7 +180,7 @@ export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallme
       try { controller?.unmount?.(); } catch {}
       controllerRef.current = null;
     };
-  }, [checkoutId, amount, publicKey, maxInstallments, customerEmail, environment, origin, brickKey]);
+  }, [checkoutId, amount, publicKey, maxInstallments, customerEmail, environment, origin, brickKey, brickContainerId]);
 
   useEffect(() => {
     if (!pending?.paymentId) return;
@@ -236,7 +264,18 @@ export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallme
       <div className="rounded-3xl border border-red-200 bg-red-50 p-5 text-sm text-red-950">
         <p className="font-black">Não foi possível abrir o pagamento</p>
         <p className="mt-1">{fatalError}</p>
-        <Button variant="outline" className="mt-4 rounded-xl" onClick={onCancel}>Voltar ao pedido</Button>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button
+            className="rounded-xl"
+            onClick={() => {
+              setFatalError("");
+              setBrickKey((k) => k + 1);
+            }}
+          >
+            Tentar carregar novamente
+          </Button>
+          <Button variant="outline" className="rounded-xl" onClick={onCancel}>Voltar ao pedido</Button>
+        </div>
       </div>
     );
   }
@@ -305,7 +344,7 @@ export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallme
         <button type="button" onClick={onCancel} className="rounded-full p-1.5 hover:bg-white" aria-label="Fechar pagamento"><X className="size-4" /></button>
       </div>
       {!ready && <div className="flex items-center justify-center gap-2 rounded-2xl border p-6 text-sm font-semibold text-muted-foreground"><Loader2 className="size-5 animate-spin" /> Carregando Pix e cartão…</div>}
-      <div id="hotbox_payment_brick" className={ready ? "block" : "min-h-0 overflow-hidden opacity-0"} />
+      <div id={brickContainerId} className={ready ? "block" : "min-h-0 overflow-hidden opacity-0"} />
       <div className="flex items-center justify-center gap-4 text-[11px] font-semibold text-muted-foreground"><span className="flex items-center gap-1"><QrCode className="size-3.5" /> Pix</span><span className="flex items-center gap-1"><CreditCard className="size-3.5" /> Cartão</span><span className="flex items-center gap-1"><ShieldCheck className="size-3.5" /> 3DS quando necessário</span></div>
     </div>
   );
