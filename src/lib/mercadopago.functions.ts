@@ -264,16 +264,21 @@ export const createMercadoPagoPayment = createServerFn({ method: "POST" })
         };
     if (!isPix && !paymentMethod.token) return { ok: false, error: "Os dados do cartão não foram tokenizados. Tente novamente." } as const;
 
+    const payerBody: any = { email };
+    const identification = payer?.identification;
+    if (!isPix && identification?.type && identification?.number) {
+      payerBody.identification = {
+        type: String(identification.type).trim(),
+        number: String(identification.number).replace(/\D/g, ""),
+      };
+    }
+
     const body: any = {
       type: "online",
       processing_mode: "automatic",
       total_amount: Number(checkout.total).toFixed(2),
       external_reference: String(checkout.id),
-      payer: { email },
-      metadata: {
-        checkout_id: String(checkout.id),
-        hotbox_environment: cfg.environment,
-      },
+      payer: payerBody,
       transactions: {
         payments: [{ amount: Number(checkout.total).toFixed(2), payment_method: paymentMethod }],
       },
@@ -303,7 +308,16 @@ export const createMercadoPagoPayment = createServerFn({ method: "POST" })
     }
 
     if (!response.ok || !created?.id) {
-      const errors = Array.isArray(created?.errors) ? created.errors.map((x: any) => x?.message || x?.code).filter(Boolean).join(" · ") : "";
+      const errors = Array.isArray(created?.errors)
+        ? created.errors
+            .map((x: any) => {
+              const property = x?.property || x?.field || x?.path;
+              const detail = x?.message || x?.detail || x?.code;
+              return [property, detail].filter(Boolean).join(": ");
+            })
+            .filter(Boolean)
+            .join(" · ")
+        : "";
       const cause = errors || created?.message || created?.error;
       const rawMessage = String(cause || "Não foi possível iniciar a order pelo Mercado Pago.");
       const environmentHint =
