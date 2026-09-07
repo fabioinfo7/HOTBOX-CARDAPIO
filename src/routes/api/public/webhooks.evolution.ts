@@ -969,7 +969,7 @@ async function loadOrCreateDraft(supabaseAdmin: any, conversationId: string): Pr
         freight_notification_value: null,
         freight_notification_address_key: null,
         freight_notification_at: null,
-        stage: "collecting",
+        stage: "post_order",
         updated_at: new Date().toISOString(),
       };
       await supabaseAdmin.from("order_drafts").update(cleared).eq("conversation_id", conversationId);
@@ -1806,6 +1806,288 @@ async function handleDigitalOrderSupportIfNeeded(
   return Response.json({ ok: true, action: "digital_order_status_informed", order_id: order.id });
 }
 
+
+const HOTBOX_WHATSAPP_FLOW_VERSION = "V16_POST_ORDER_GUARD_20260907";
+
+type ActiveWhatsappOrder = {
+  id: string;
+  order_number: number | null;
+  status: string | null;
+  customer_name: string | null;
+  total: number | null;
+  delivery_fee: number | null;
+  payment_method: string | null;
+  created_at: string | null;
+};
+
+async function loadActiveWhatsappOrder(
+  supabaseAdmin: any,
+  phone: string,
+): Promise<ActiveWhatsappOrder | null> {
+  const { data, error } = await supabaseAdmin
+    .from("orders")
+    .select("id,order_number,status,customer_name,total,delivery_fee,payment_method,created_at")
+    .eq("customer_phone", phone)
+    .not("status", "in", "(delivered,cancelled,canceled,failed)")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error("[post-order] falha ao consultar pedido ativo:", error);
+    return null;
+  }
+
+  return data ?? null;
+}
+
+function isExplicitNewOrderRequest(text: string): boolean {
+  const t = normalizeStreet(String(text || ""));
+  return /\b(?:novo pedido|outro pedido|fazer outro pedido|quero pedir de novo|quero fazer outro|mais um pedido|segunda compra)\b/.test(t);
+}
+
+function isActiveOrderCancellationIntent(text: string): boolean {
+  const t = normalizeStreet(String(text || ""));
+  return /\b(?:cancela|cancelar|cancele|quero cancelar|pode cancelar|entao cancela|então cancela|desiste do pedido|desistir do pedido)\b/.test(t);
+}
+
+function isPostOrderNotificationRequest(text: string): boolean {
+  const t = normalizeStreet(String(text || ""));
+  return /\b(?:quando sair|quando for sair|quando sair pra entrega|quando sair para entrega|me avisa|me avise|avisa quando|avise quando|vou pro portao|vou para o portao|ir pro portao|ir para o portao)\b/.test(t);
+}
+
+function isPostOrderStatusQuestion(text: string): boolean {
+  const t = normalizeStreet(String(text || ""));
+  return /\b(?:meu pedido|pedido esta|pedido está|como esta o pedido|como está o pedido|ja saiu|já saiu|saiu para entrega|demora quanto|quanto falta|vai demorar|status|andamento)\b/.test(t);
+}
+
+function isAlreadyOrderedStatement(text: string): boolean {
+  const t = normalizeStreet(String(text || ""));
+  return /\b(?:ja fiz o pedido|já fiz o pedido|ja pedi|já pedi|pedido ja foi feito|pedido já foi feito|acabei de fazer o pedido|ja esta feito|já está feito)\b/.test(t);
+}
+
+function isShortPostOrderReply(text: string): boolean {
+  const t = normalizeStreet(String(text || "")).replace(/[.!?]+/g, "").trim();
+  return /^(sim|nao|não|ok|okay|certo|beleza|obrigado|obrigada|valeu|pode deixar|entendi)$/.test(t);
+}
+
+async function cancelActiveWhatsappOrder(
+  supabaseAdmin: any,
+  conversationId: string,
+  order: ActiveWhatsappOrder,
+  reason?: string | null,
+) {
+  const cancelReason = String(reason || "").trim()
+    ? `Cliente cancelou pelo WhatsApp: ${String(reason).trim()}`
+    : "Cliente cancelou o pedido pelo WhatsApp";
+
+  const { error } = await supabaseAdmin
+    .from("orders")
+    .update({
+      status: "cancelled",
+      cancelled_at: new Date().toISOString(),
+      cancel_reason: cancelReason,
+      customer_cancel_requested: false,
+      customer_cancel_reason: cancelReason,
+    })
+    .eq("id", order.id);
+
+  if (error) throw error;
+
+  await supabaseAdmin
+    .from("order_drafts")
+    .update({
+      stage: "collecting",
+      items: [],
+      notes: null,
+      awaiting_final_confirmation: false,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("conversation_id", conversationId);
+}
+
+async function handlePostOrderGuard(
+  supabaseAdmin: any,
+  conversation: any,
+  draft: Draft,
+  phone: string,
+  text: string,
+): Promise<Response | null> {
+  const activeOrder = await loadActiveWhatsappOrder(supabaseAdmin, phone);
+  if (!activeOrder) {
+    if (draft.stage === "post_order") {
+      draft.stage = "collecting";
+      await supabaseAdmin
+        .from("order_drafts")
+        .update({ stage: "collecting", updated_at: new Date().toISOString() })
+        .eq("conversation_id", conversation.id);
+    }
+    return null;
+  }
+
+  // Confirmação pendente de cancelamento de um pedido já criado.
+  if (draft.stage === "confirm_cancel_active_order") {
+    if (isExplicitPendingActionConfirmation(text) || isExplicitOrderConfirmation(text)) {
+      try {
+        await cancelActiveWhatsappOrder(supabaseAdmin, conversation.id, activeOrder, draft.notes ?? null);
+        await replyAndLog(
+          supabaseAdmin,
+          conversation.id,
+          phone,
+          `Pedido *${orderNumberFmt(activeOrder.order_number)}* cancelado conforme solicitado.`,
+          { systemMessage: true },
+        );
+        return Response.json({ ok: true, action: "active_order_cancelled", order_id: activeOrder.id });
+      } catch (err: any) {
+        console.error("[post-order] falha ao cancelar pedido ativo:", err);
+        await createHumanHandoff(supabaseAdmin, {
+          conversationId: conversation.id,
+          reason: "Falha ao cancelar pedido ativo solicitado pelo cliente",
+          details: err?.message || String(err),
+          priority: "high",
+        });
+        return Response.json({ ok: true, action: "active_order_cancel_handoff" });
+      }
+    }
+
+    if (isExplicitOrderRejection(text)) {
+      draft.stage = "post_order";
+      draft.notes = null;
+      await supabaseAdmin
+        .from("order_drafts")
+        .update({
+          stage: "post_order",
+          notes: null,
+          awaiting_final_confirmation: false,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("conversation_id", conversation.id);
+
+      await replyAndLog(
+        supabaseAdmin,
+        conversation.id,
+        phone,
+        `Tudo bem. O pedido *${orderNumberFmt(activeOrder.order_number)}* continua normalmente.`,
+        { systemMessage: true },
+      );
+      return Response.json({ ok: true, action: "active_order_cancel_rejected" });
+    }
+
+    await replyAndLog(
+      supabaseAdmin,
+      conversation.id,
+      phone,
+      `Só preciso confirmar: deseja realmente cancelar o pedido *${orderNumberFmt(activeOrder.order_number)}*?`,
+      { systemMessage: true },
+    );
+    return Response.json({ ok: true, action: "active_order_cancel_confirmation_repeated" });
+  }
+
+  // Um novo pedido precisa ser pedido de forma explícita. Sem isso, um pedido
+  // ativo coloca a conversa em modo pós-pedido e impede o robô de reiniciar a venda.
+  if (isExplicitNewOrderRequest(text)) {
+    draft.stage = "collecting";
+    await supabaseAdmin
+      .from("order_drafts")
+      .update({
+        stage: "collecting",
+        items: [],
+        customer_name: null,
+        payment_method: null,
+        awaiting_final_confirmation: false,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("conversation_id", conversation.id);
+    return null;
+  }
+
+  if (isActiveOrderCancellationIntent(text)) {
+    draft.stage = "confirm_cancel_active_order";
+    draft.notes = text;
+    await supabaseAdmin
+      .from("order_drafts")
+      .update({
+        stage: "confirm_cancel_active_order",
+        notes: text,
+        items: [],
+        awaiting_final_confirmation: false,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("conversation_id", conversation.id);
+
+    await replyAndLog(
+      supabaseAdmin,
+      conversation.id,
+      phone,
+      `Só para confirmar: você deseja cancelar o pedido *${orderNumberFmt(activeOrder.order_number)}* por completo?`,
+      { systemMessage: true },
+    );
+    return Response.json({ ok: true, action: "active_order_cancel_confirmation_requested" });
+  }
+
+  if (isPostOrderNotificationRequest(text)) {
+    await replyAndLog(
+      supabaseAdmin,
+      conversation.id,
+      phone,
+      "Pode deixar 😊 Vamos avisar por aqui quando o pedido sair para entrega, assim você consegue se organizar para ir ao portão.",
+      { systemMessage: true },
+    );
+    return Response.json({ ok: true, action: "post_order_notification_acknowledged", order_id: activeOrder.id });
+  }
+
+  if (isPostOrderStatusQuestion(text)) {
+    const status = publicOrderStatusLabel(activeOrder.status);
+    await replyAndLog(
+      supabaseAdmin,
+      conversation.id,
+      phone,
+      `Seu pedido *${orderNumberFmt(activeOrder.order_number)}* está *${status}*. Vamos avisando por aqui cada mudança de etapa.`,
+      { systemMessage: true },
+    );
+    return Response.json({ ok: true, action: "post_order_status_informed", order_id: activeOrder.id });
+  }
+
+  if (isAlreadyOrderedStatement(text)) {
+    await replyAndLog(
+      supabaseAdmin,
+      conversation.id,
+      phone,
+      `Sim, seu pedido *${orderNumberFmt(activeOrder.order_number)}* já está registrado. Vamos acompanhar tudo por aqui.`,
+      { systemMessage: true },
+    );
+    return Response.json({ ok: true, action: "post_order_already_registered", order_id: activeOrder.id });
+  }
+
+  // Respostas soltas como "sim", "não", "ok" não podem reiniciar coleta de itens,
+  // nome, endereço ou pagamento depois que o pedido já foi confirmado.
+  if (isShortPostOrderReply(text)) {
+    return Response.json({ ok: true, action: "post_order_short_reply_ignored", order_id: activeOrder.id });
+  }
+
+  // Se a mensagem não é claramente um novo pedido nem uma alteração estruturada,
+  // mantém o contexto de pós-pedido. A IA pode responder dúvidas, mas o draft não
+  // deve voltar automaticamente para TAKING_ORDER.
+  if (draft.stage === "post_order") {
+    const t = normalizeStreet(String(text || ""));
+    const looksLikeOrderModification =
+      /\b(?:adiciona|adicionar|acrescenta|acrescentar|tira|tirar|remove|remover|troca|trocar|muda|mudar)\b/.test(t);
+
+    if (!looksLikeOrderModification && !isLikelyCustomerQuestion(text)) {
+      await replyAndLog(
+        supabaseAdmin,
+        conversation.id,
+        phone,
+        `Seu pedido *${orderNumberFmt(activeOrder.order_number)}* já está confirmado. Se quiser alterar algo do pedido ou tiver alguma dúvida, pode me dizer.`,
+        { systemMessage: true },
+      );
+      return Response.json({ ok: true, action: "post_order_context_preserved", order_id: activeOrder.id });
+    }
+  }
+
+  return null;
+}
+
 async function loadLastOrderText(supabaseAdmin: any, phone: string): Promise<string | null> {
   const { data: order } = await supabaseAdmin
     .from("orders")
@@ -2069,7 +2351,7 @@ ${conversationStageText}
 - RETIRADA é exceção: se o cliente disser claramente que vai retirar, não peça bairro nem endereço.
 - PAGAMENTO: a loja aceita SOMENTE Pix ou cartão. Cartão pode ser crédito ou débito, mas NÃO pergunte qual dos dois: registre apenas "cartão". DINHEIRO EM ESPÉCIE NÃO É ACEITO e nunca existe pergunta sobre troco. Quando chegar a etapa de pagamento e esse dado estiver faltando, envie a pergunta de pagamento em uma mensagem organizada: "*Qual será a forma de pagamento?*\nAceitamos cartão de crédito, cartão de débito ou Pix.\n\n*Observação:* Não aceitamos dinheiro em espécie, para segurança do nosso entregador." NÃO pergunte se o pagamento será agora ou na entrega. Se o cliente disser apenas "Pix", registre Pix e siga o fluxo; se disser espontaneamente "Pix agora", respeite essa informação.
 - PRAZO DE ENTREGA: para pedidos de entrega própria, informe sempre prazo de ATÉ 40 MINUTOS, ressaltando que a maioria das entregas acontece antes e que o cliente receberá atualizações pelo WhatsApp. Nunca informe 45 minutos e nunca prometa horário exato.
-- LOCALIZAÇÃO DA LOJA: se perguntarem onde fica, informe "Rua Carlos Chagas, em Jardim Gramacho" e diga naturalmente que trabalhamos somente com delivery. Nunca informe o número 492 ao cliente. O número existe apenas para uso interno/cálculo de rota.
+- LOCALIZAÇÃO DA LOJA: use somente a localização confirmada nas configurações/biblioteca oficial. Nunca invente endereço e nunca exponha número interno usado apenas para cálculo de rota. Perguntas simples de localização são preferencialmente respondidas pelo template determinístico do backend.
 - PREÇO: use exclusivamente o preço efetivo do CARDÁPIO ATIVO AGORA; quando houver promoção ativa no sistema, esse preço promocional é o valor válido.
 - Não ofereça adicionais pagos, bordas, molhos ou complementos que não existam como produto/opção estruturada no sistema. Observações como “sem ingrediente” podem ser registradas, mas nunca invente cobrança adicional.
 - Não confirme Pix apenas por foto de comprovante: informe somente que o comprovante foi recebido e será conferido.
@@ -2085,6 +2367,8 @@ ${conversationStageText}
 ⚡ COLETA INTELIGENTE E ORGANIZADA — REGRA OBRIGATÓRIA: depois que o cliente escolher os itens, peça NOME DE QUEM VAI RECEBER + ENDEREÇO COMPLETO (rua e número) na mesma mensagem, com quebras de linha e campos visualmente separados. NÃO coloque endereço, nome, pagamento e observações todos no mesmo parágrafo. Assim que o cliente responder, registre imediatamente todo dado válido que ele tiver informado — inclusive pagamento, caso ele informe espontaneamente. Com o endereço completo, primeiro confirme a taxa de entrega pelo fluxo existente. SOMENTE depois da taxa confirmada, verifique o que ainda falta e peça apenas esses campos. Se faltar pagamento, pergunte pagamento de forma organizada. Se qualquer dado já estiver salvo, NUNCA pergunte novamente. A partir do momento em que o nome for conhecido, trate o cliente pelo primeiro nome nas mensagens seguintes de forma natural. Essa regra não altera BAIRRO PRIMEIRO nem a regra existente dos 30 segundos da confirmação da taxa.
 
 🚫 ZERO LOOP DE DADOS JÁ INFORMADOS — REGRA INVIOLÁVEL: endereço, nome, pagamento, bairro, itens, quantidade, taxa e qualquer outro dado presente em "O QUE JÁ SEI DO PEDIDO" são fatos persistidos e NUNCA podem ser solicitados novamente, salvo se o próprio cliente disser que deseja corrigir/alterar aquele dado. Antes de fazer qualquer pergunta, confira os campos já preenchidos. Se uma resposta trouxer várias informações de uma vez, absorva todas na mesma rodada. Se faltar apenas UM campo, peça só esse campo. Se não faltar nenhum, avance imediatamente. Nunca reinicie uma sequência de perguntas porque o cliente respondeu em formato diferente do esperado.
+
+🧱 PÓS-PEDIDO — REGRA ABSOLUTA: se houver pedido ATIVO/CONFIRMADO do cliente, NÃO reinicie coleta de produtos, nome, endereço, taxa ou pagamento por causa de mensagens como "me avisa quando sair", "já fiz o pedido", "não", "sim", "moro numa avenida", "ok" ou perguntas sobre andamento. Trate essas mensagens como contexto do pedido já criado. Só comece um NOVO pedido quando o cliente pedir explicitamente "novo pedido", "outro pedido" ou equivalente. Se pedir cancelamento do pedido ativo, use o fluxo de cancelamento com confirmação. Se pedir alteração de item do pedido ativo, use as ferramentas de atualização de pedido ativo. Nunca volte silenciosamente para um rascunho vazio depois de confirmar uma venda.
 
 🔄 INTERRUPÇÃO + RETOMADA — REGRA CENTRAL: o cliente pode sair do fluxo a qualquer momento, fazer uma pergunta, mandar uma observação, mudar de assunto por uma mensagem ou responder em ordem diferente. Primeiro compreenda e resolva o que ele acabou de dizer usando somente fatos confirmados; depois retome de forma sutil EXATAMENTE a etapa que ainda faltava, sem reiniciar, sem repetir dados já salvos e sem mandar para atendimento manual apenas porque ele saiu da ordem esperada. Respostas curtas como "sim", "não", "pode", "posso?", "esse", "isso", "ok" devem ser interpretadas pelo contexto das mensagens imediatamente anteriores. Se a mensagem trouxer vários dados, capture todos antes de decidir a próxima pergunta.
 
@@ -4254,7 +4538,7 @@ async function executeTool(
     draft.estimated_distance_km = null;
     draft.failed_finalize_attempts = 0;
     draft.awaiting_final_confirmation = false;
-    draft.stage = "collecting";
+    draft.stage = "post_order";
     draft.items = [];
     draft.payment_method = null;
     draft.card_type = null;
@@ -5488,6 +5772,8 @@ export const Route = createFileRoute("/api/public/webhooks/evolution")({
   server: {
     handlers: {
       POST: async ({ request }) => {
+    console.info("[HOTBOX WhatsApp]", HOTBOX_WHATSAPP_FLOW_VERSION);
+
         let payload: any;
         try {
           payload = await request.json();
@@ -5819,7 +6105,7 @@ async function handleIncomingMessageUnlocked(
   const { data: cfgStore } = await supabaseAdmin
     .from("store_config")
     .select(
-      "store_name, default_delivery_fee, estimated_delivery_time_minutes, delivery_pricing_mode, delivery_fee_tiers, business_hours_enabled, business_hours, ifood_store_link, nfood_store_link, ai_temperature",
+      "store_name, store_address, default_delivery_fee, estimated_delivery_time_minutes, delivery_pricing_mode, delivery_fee_tiers, business_hours_enabled, business_hours, ifood_store_link, nfood_store_link, ai_temperature",
     )
     .maybeSingle();
   const businessHoursText =
@@ -6097,6 +6383,21 @@ async function handleIncomingMessageUnlocked(
     return Response.json({ ok: true, action: "conversation_ended_by_customer" });
   }
 
+  // ============ GUARDA DE PÓS-PEDIDO WHATSAPP ============
+  // Se existe pedido ativo deste telefone, o atendimento não pode "esquecer"
+  // que a venda já foi fechada e reiniciar coleta de itens/endereço/pagamento.
+  // Perguntas, avisos de portão, status e cancelamento são tratados antes do
+  // fluxo de novo pedido. Novo pedido só começa quando o cliente pedir isso
+  // explicitamente.
+  const postOrderResponse = await handlePostOrderGuard(
+    supabaseAdmin,
+    conversation,
+    draft,
+    phone,
+    text,
+  );
+  if (postOrderResponse) return postOrderResponse;
+
   // ============ SUPORTE A PEDIDO JÁ FEITO PELO SITE / CARDÁPIO DIGITAL ============
   // Tem prioridade sobre BAIRRO PRIMEIRO: aqui o cliente não está começando uma
   // compra no WhatsApp, está consultando um pedido que já existe no sistema.
@@ -6166,6 +6467,7 @@ async function handleIncomingMessageUnlocked(
       deliveryTimeMinutes: cfgStore?.estimated_delivery_time_minutes ?? 40,
       businessHoursEnabled: cfgStore?.business_hours_enabled === true,
       businessHours: Array.isArray(cfgStore?.business_hours) ? cfgStore.business_hours as BusinessHourRange[] : null,
+      storeAddress: cfgStore?.store_address || null,
     });
     const resume = publicFaqIntent === "split_payment" ? null : resumePromptForDraft(draft);
     const answer = resume ? `${faqText}\n\n${resume}` : faqText;
