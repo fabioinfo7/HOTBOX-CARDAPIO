@@ -28,7 +28,7 @@ export const resolveFreightApprovalFn = createServerFn({ method: "POST" })
 
     const { data: approval, error: approvalError } = await (supabaseAdmin as any)
       .from("pending_freight_approvals")
-      .select("id,conversation_id,phone,customer_name,address,address_key,status")
+      .select("id,conversation_id,phone,customer_name,address,address_key,status,approval_kind")
       .eq("id", data.approvalId)
       .maybeSingle();
 
@@ -41,6 +41,14 @@ export const resolveFreightApprovalFn = createServerFn({ method: "POST" })
     }
 
     const now = new Date().toISOString();
+    const approvalKind = String((approval as any).approval_kind || "standard");
+
+    if (approvalKind === "partner_quote" && data.mode === "operator") {
+      return {
+        ok: false,
+        error: "Cotação de motoboy parceiro exige digitar o valor e autorizar o sistema a enviar.",
+      } as const;
+    }
 
     if (data.mode === "operator") {
       await (supabaseAdmin as any)
