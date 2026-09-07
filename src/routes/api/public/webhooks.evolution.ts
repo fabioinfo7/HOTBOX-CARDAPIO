@@ -8001,7 +8001,7 @@ export async function handleIncomingMessage(
 
       // Só marca como processado depois que o turno terminou com sucesso.
       // Mensagens que chegarem DURANTE a resposta não pertencem a batchIds e
-      // continuam pendentes para o próximo turno — nunca somem silenciosamente.
+      // continuam pendentes para o próximo turno — nunca somem silenciosamente.//
       if (batchIds.length) {
         await (supabaseAdmin as any)
           .from("whatsapp_messages")
