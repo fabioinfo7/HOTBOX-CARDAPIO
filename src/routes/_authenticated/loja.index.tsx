@@ -71,6 +71,10 @@ type Order = {
   ifood_driver_assigned_at: string | null;
   nfood_driver_assigned_at: string | null;
   loyalty_reward_used?: boolean;
+  subtotal?: number | null;
+  delivery_fee?: number | null;
+  coupon_code?: string | null;
+  coupon_discount?: number | null;
 };
 
 function statusLabelFor(o: Order): string {
@@ -620,6 +624,19 @@ function OrdersDashboard() {
                       </div>
                     )}
                   </div>
+
+                  {o.coupon_code && Number(o.coupon_discount || 0) > 0 && (
+                    <div className="mt-2.5 rounded-xl border border-fuchsia-200 bg-fuchsia-50 px-3 py-2">
+                      <div className="flex items-center justify-between gap-2 text-[11px] font-black text-fuchsia-800">
+                        <span>🎟 CUPOM {o.coupon_code}</span>
+                        <span>-{brl(Number(o.coupon_discount || 0))}</span>
+                      </div>
+                      <div className="mt-1 grid grid-cols-2 gap-x-3 text-[10px] text-fuchsia-900/80">
+                        <span>Subtotal: {brl(Number(o.subtotal || 0))}</span>
+                        <span className="text-right">Entrega: {brl(Number(o.delivery_fee || 0))}</span>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="mt-2.5 flex items-center justify-between border-t border-dashed pt-2">
                     <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
