@@ -1884,8 +1884,59 @@ function ConfigPage() {
         <AiInstructionsCard />
       </div>
 
+      <Card className="space-y-4 p-5" style={tabStyle("entrega")}>
+        <div>
+          <h2 className="font-semibold">🏍️ Modo operacional da entrega no WhatsApp</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Define como o atendimento automático obtém a taxa de entrega naquela noite. Existe apenas <strong>um modo ativo por vez</strong>.
+            Exceções cadastradas por rua têm prioridade sobre esta escolha.
+          </p>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => setC({ ...c, whatsapp_delivery_dispatch_mode: "fixed_by_neighborhood" })}
+            className={`rounded-xl border p-4 text-left transition ${
+              (c.whatsapp_delivery_dispatch_mode || "fixed_by_neighborhood") === "fixed_by_neighborhood"
+                ? "border-primary bg-primary/10 ring-1 ring-primary"
+                : "hover:bg-muted/60"
+            }`}
+          >
+            <div className="font-semibold">📍 Taxa fixa por bairro</div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              O backend consulta o valor configurado em cada bairro e pode informar esse valor ao cliente sem pedir aprovação manual.
+            </p>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setC({ ...c, whatsapp_delivery_dispatch_mode: "partner_quote" })}
+            className={`rounded-xl border p-4 text-left transition ${
+              c.whatsapp_delivery_dispatch_mode === "partner_quote"
+                ? "border-primary bg-primary/10 ring-1 ring-primary"
+                : "hover:bg-muted/60"
+            }`}
+          >
+            <div className="font-semibold">🤝 Motoboy parceiro — cotação manual</div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              A automação nunca usa taxa fixa. Ela avisa o cliente que vai verificar a taxa e abre um popup para o operador consultar o parceiro,
+              digitar o valor e autorizar o envio.
+            </p>
+          </button>
+        </div>
+
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+          <strong>Regra de segurança:</strong> estes modos são mutuamente exclusivos. A IA não escolhe o modo, não calcula taxa e não pode ignorar uma exceção de rua.
+        </div>
+      </Card>
+
       <div style={tabStyle("entrega")}>
         <BairrosAtendidosCard pricingMode={c.delivery_pricing_mode === "distance" ? "distance" : "neighborhood"} />
+      </div>
+
+      <div style={tabStyle("entrega")}>
+        <StreetDeliveryExceptionsCard />
       </div>
 
       <div style={tabStyle("entrega")}>
@@ -2368,6 +2419,203 @@ function BairrosAtendidosCard({ pricingMode }: { pricingMode: "neighborhood" | "
                   </Button>
                 </>
               )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+
+function StreetDeliveryExceptionsCard() {
+  const [rows, setRows] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newStreet, setNewStreet] = useState("");
+  const [newNeighborhood, setNewNeighborhood] = useState("");
+  const [newMode, setNewMode] = useState<"fixed" | "partner_quote">("partner_quote");
+  const [newFee, setNewFee] = useState("");
+  const [adding, setAdding] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    const { data, error } = await (supabase as any)
+      .from("delivery_street_exceptions")
+      .select("*")
+      .order("neighborhood", { ascending: true })
+      .order("street_name", { ascending: true });
+    if (error) toast.error(error.message);
+    setRows(data ?? []);
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function add() {
+    const street = newStreet.trim();
+    const neighborhood = newNeighborhood.trim();
+    if (!street || !neighborhood) {
+      toast.error("Informe a rua e o bairro para evitar ambiguidades.");
+      return;
+    }
+
+    const fee = newMode === "fixed" ? Number(newFee.replace(",", ".")) : null;
+    if (newMode === "fixed" && (!Number.isFinite(fee) || Number(fee) <= 0)) {
+      toast.error("Para uma exceção com taxa fixa, informe um valor maior que zero.");
+      return;
+    }
+
+    setAdding(true);
+    const { error } = await (supabase as any)
+      .from("delivery_street_exceptions")
+      .insert({
+        street_name: street,
+        neighborhood,
+        dispatch_mode: newMode,
+        fixed_fee: newMode === "fixed" ? Number(Number(fee).toFixed(2)) : null,
+        active: true,
+      });
+
+    if (error) {
+      toast.error(error.message.includes("duplicate") ? "Essa rua já possui uma exceção nesse bairro." : error.message);
+      setAdding(false);
+      return;
+    }
+
+    setNewStreet("");
+    setNewNeighborhood("");
+    setNewFee("");
+    setNewMode("partner_quote");
+    toast.success("Exceção de rua adicionada.");
+    setAdding(false);
+    load();
+  }
+
+  async function toggle(id: string, active: boolean) {
+    await (supabase as any)
+      .from("delivery_street_exceptions")
+      .update({ active: !active, updated_at: new Date().toISOString() })
+      .eq("id", id);
+    load();
+  }
+
+  async function remove(id: string) {
+    if (!window.confirm("Remover esta exceção de rua?")) return;
+    const { error } = await (supabase as any).from("delivery_street_exceptions").delete().eq("id", id);
+    if (error) toast.error(error.message);
+    else toast.success("Exceção removida.");
+    load();
+  }
+
+  async function updateMode(row: any, mode: "fixed" | "partner_quote") {
+    let fixedFee = row.fixed_fee;
+    if (mode === "fixed" && !(Number(fixedFee) > 0)) {
+      const raw = window.prompt("Valor fixo dessa rua:", "");
+      if (!raw) return;
+      const parsed = Number(raw.replace(",", "."));
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        toast.error("Valor inválido.");
+        return;
+      }
+      fixedFee = Number(parsed.toFixed(2));
+    }
+
+    const { error } = await (supabase as any)
+      .from("delivery_street_exceptions")
+      .update({
+        dispatch_mode: mode,
+        fixed_fee: mode === "fixed" ? fixedFee : null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", row.id);
+    if (error) toast.error(error.message);
+    load();
+  }
+
+  async function editFee(row: any) {
+    const raw = window.prompt("Nova taxa fixa para essa rua:", row.fixed_fee == null ? "" : String(row.fixed_fee).replace(".", ","));
+    if (!raw) return;
+    const parsed = Number(raw.replace(",", "."));
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      toast.error("Valor inválido.");
+      return;
+    }
+    const { error } = await (supabase as any)
+      .from("delivery_street_exceptions")
+      .update({ fixed_fee: Number(parsed.toFixed(2)), updated_at: new Date().toISOString() })
+      .eq("id", row.id);
+    if (error) toast.error(error.message);
+    load();
+  }
+
+  return (
+    <Card className="space-y-4 p-5">
+      <div>
+        <h2 className="font-semibold">🛣️ Exceções de entrega por rua</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          A regra da rua sempre vence o modo geral da noite. Assim, uma rua pode forçar <strong>motoboy parceiro</strong> mesmo quando o bairro usa taxa fixa,
+          ou pode forçar uma <strong>taxa fixa própria</strong> mesmo quando a noite inteira está em cotação com parceiros.
+        </p>
+      </div>
+
+      <div className="grid gap-2 lg:grid-cols-[1.4fr_1fr_1fr_0.7fr_auto]">
+        <Input placeholder="Rua / Avenida" value={newStreet} onChange={(e) => setNewStreet(e.target.value)} />
+        <Input placeholder="Bairro" value={newNeighborhood} onChange={(e) => setNewNeighborhood(e.target.value)} />
+        <Select value={newMode} onValueChange={(v) => setNewMode(v as "fixed" | "partner_quote")}>
+          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="partner_quote">Motoboy parceiro</SelectItem>
+            <SelectItem value="fixed">Taxa fixa</SelectItem>
+          </SelectContent>
+        </Select>
+        <Input
+          placeholder="R$"
+          inputMode="decimal"
+          disabled={newMode !== "fixed"}
+          value={newFee}
+          onChange={(e) => setNewFee(e.target.value)}
+        />
+        <Button size="sm" onClick={add} disabled={adding}>
+          <Plus className="size-4" /> Adicionar
+        </Button>
+      </div>
+
+      <div className="rounded-xl bg-muted/40 p-3 text-[11px] text-muted-foreground">
+        O sistema normaliza abreviações comuns de endereço. Ex.: “Avenida Doutor Laureano”, “Av. Dr Laureano” e “AV DOUTOR LAUREANO” são comparadas de forma equivalente.
+      </div>
+
+      {loading ? (
+        <p className="text-xs text-muted-foreground">Carregando...</p>
+      ) : rows.length === 0 ? (
+        <p className="text-xs text-muted-foreground">Nenhuma exceção por rua cadastrada.</p>
+      ) : (
+        <div className="space-y-2">
+          {rows.map((row) => (
+            <div key={row.id} className={`rounded-xl border p-3 ${row.active ? "" : "opacity-50"}`}>
+              <div className="flex flex-wrap items-center gap-2">
+                <Switch checked={!!row.active} onCheckedChange={() => toggle(row.id, row.active)} />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold">{row.street_name}</p>
+                  <p className="text-[11px] text-muted-foreground">{row.neighborhood}</p>
+                </div>
+                <Select value={row.dispatch_mode} onValueChange={(v) => updateMode(row, v as "fixed" | "partner_quote")}>
+                  <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="partner_quote">Motoboy parceiro</SelectItem>
+                    <SelectItem value="fixed">Taxa fixa</SelectItem>
+                  </SelectContent>
+                </Select>
+                {row.dispatch_mode === "fixed" && (
+                  <Button size="sm" variant="outline" onClick={() => editFee(row)}>
+                    R$ {Number(row.fixed_fee || 0).toFixed(2).replace(".", ",")}
+                  </Button>
+                )}
+                <Button size="icon" variant="ghost" className="text-destructive" onClick={() => remove(row.id)}>
+                  <Trash2 className="size-4" />
+                </Button>
+              </div>
             </div>
           ))}
         </div>
