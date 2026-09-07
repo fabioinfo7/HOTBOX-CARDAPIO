@@ -5,6 +5,7 @@ import { brl, orderNumberFmt } from "@/lib/formatters";
 import { sendWhatsappText, sendWhatsappMedia } from "@/lib/whatsapp-send.server";
 import { isWithinBusinessHours, formatBusinessHoursText, type BusinessHourRange } from "@/lib/business-hours";
 import { getEffectivePrice } from "@/lib/promotions";
+import { detectPublicFaqIntent, renderPublicFaq, resumePromptForDraft, menuSendFailureMessage } from "@/lib/whatsapp-auto-templates.server";
 
 // Envia todas as imagens do cardápio cadastradas em /loja/config → Imagens do
 // cardápio, uma de cada vez, com um pequeno intervalo. Quando o cliente pede
@@ -14,13 +15,10 @@ async function sendMenuImagesOnce(
   supabaseAdmin: any,
   conversationId: string,
   phone: string,
-  force = false,   // true = cliente pediu explicitamente → envia mesmo se já enviou antes
-): Promise<void> {
+  force = false,
+): Promise<{ ok: boolean; sent: number; reason?: string }> {
   try {
     if (!force) {
-      // Verifica se o cardápio em imagem já foi enviado nesta conversa.
-      // Impede reenvio em caso de race-condition (2 mensagens chegando juntas)
-      // ou de o bot enviar de novo sem o cliente ter pedido.
       const { count } = await supabaseAdmin
         .from("whatsapp_messages")
         .select("id", { count: "exact", head: true })
@@ -28,32 +26,70 @@ async function sendMenuImagesOnce(
         .eq("direction", "out")
         .not("media_url", "is", null)
         .eq("media_type", "image");
-      if ((count ?? 0) > 0) return; // já enviou — não repete
+      if ((count ?? 0) > 0) return { ok: true, sent: 0, reason: "already_sent" };
     }
 
-    const { data: imgs } = await supabaseAdmin
+    const { data: imgs, error: imagesError } = await supabaseAdmin
       .from("menu_images")
       .select("url")
       .order("created_at", { ascending: true });
-    const urls: string[] = (imgs ?? []).map((i: any) => i.url).filter(Boolean);
-    if (!urls.length) return;
-    for (let i = 0; i < urls.length; i++) {
-      const res = await sendWhatsappMedia(supabaseAdmin, phone, urls[i], "image", i === 0 ? "Cardápio 👇" : undefined);
-      if (res.ok) {
-        await supabaseAdmin.from("whatsapp_messages").insert({
-          conversation_id: conversationId,
-          direction: "out",
-          sender_type: "bot",
-          body: i === 0 ? "Cardápio 👇" : null,
-          media_url: urls[i],
-          media_type: "image",
-          external_id: res.externalId ?? null,
-        });
-      }
-      await new Promise((r) => setTimeout(r, 700));
+
+    if (imagesError) {
+      console.error("[menu-image] falha ao carregar imagens:", imagesError);
+      return { ok: false, sent: 0, reason: "menu_images_query_failed" };
     }
-  } catch {
-    /* falha silenciosa — não trava o atendimento se o storage/CDN estiver instável */
+
+    const urls: string[] = (imgs ?? []).map((i: any) => String(i?.url || "").trim()).filter(Boolean);
+    if (!urls.length) return { ok: false, sent: 0, reason: "no_menu_images" };
+
+    let sent = 0;
+    for (let i = 0; i < urls.length; i++) {
+      let delivered: any = null;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const result = await sendWhatsappMedia(
+            supabaseAdmin,
+            phone,
+            urls[i],
+            "image",
+            i === 0 ? "Cardápio 👇" : undefined,
+          );
+          if (result?.ok) {
+            delivered = result;
+            break;
+          }
+          console.warn(`[menu-image] tentativa ${attempt} falhou`, { url: urls[i] });
+        } catch (err) {
+          console.warn(`[menu-image] exceção na tentativa ${attempt}:`, err);
+        }
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 1000));
+      }
+
+      if (!delivered?.ok) {
+        console.error("[menu-image] envio não confirmado após retry", { url: urls[i], index: i });
+        return { ok: false, sent, reason: "media_send_failed" };
+      }
+
+      const { error: logError } = await supabaseAdmin.from("whatsapp_messages").insert({
+        conversation_id: conversationId,
+        direction: "out",
+        sender_type: "bot",
+        body: i === 0 ? "Cardápio 👇" : null,
+        media_url: urls[i],
+        media_type: "image",
+        external_id: delivered.externalId ?? null,
+      });
+      if (logError) {
+        console.error("[menu-image] mídia enviada, mas falhou ao registrar histórico:", logError);
+      }
+      sent += 1;
+      if (i < urls.length - 1) await new Promise((r) => setTimeout(r, 700));
+    }
+
+    return { ok: sent === urls.length, sent };
+  } catch (err) {
+    console.error("[menu-image] falha inesperada:", err);
+    return { ok: false, sent: 0, reason: "unexpected_error" };
   }
 }
 
@@ -343,6 +379,133 @@ async function uploadMediaToStorage(
   }
 }
 
+
+type OperationalQuestionKey =
+  | "neighborhood"
+  | "items"
+  | "name_address"
+  | "address"
+  | "payment"
+  | "beverage"
+  | "final_confirmation";
+
+function operationalQuestionKey(text: string): OperationalQuestionKey | null {
+  const t = normalizeStreet(String(text || ""));
+  if (!t) return null;
+  if (/(qual|informe|informar|diga|dizer|confirme|confirmar).{0,40}bairro|bairro.{0,25}(por favor|qual)/.test(t)) return "neighborhood";
+  if (/o que voce gostaria de pedir|quais itens|quais produtos|qual sabor|o que deseja pedir/.test(t)) return "items";
+  if (/nome de quem vai receber/.test(t) && /(endereco|rua|numero)/.test(t)) return "name_address";
+  if (/(qual|informe|informar).{0,35}(endereco|rua|numero)/.test(t)) return "address";
+  if (/qual sera a forma de pagamento|forma de pagamento|metodo de pagamento/.test(t)) return "payment";
+  if (/algo para beber|algo pra beber|alguma bebida|quer.*bebida|quer.*refrigerante/.test(t)) return "beverage";
+  if (/posso fechar o pedido|esta tudo certo|confirm.*pedido|aguardando sua confirmacao/.test(t)) return "final_confirmation";
+  return null;
+}
+
+function sameOperationalQuestion(a: string, b: string): boolean {
+  const ka = operationalQuestionKey(a);
+  const kb = operationalQuestionKey(b);
+  return Boolean(ka && kb && ka === kb);
+}
+
+async function guardAgainstOutboundLoop(
+  supabaseAdmin: any,
+  conversationId: string,
+  proposedText: string,
+): Promise<{ text: string; handedOff: boolean }> {
+  const key = operationalQuestionKey(proposedText);
+  if (!key) return { text: proposedText, handedOff: false };
+
+  try {
+    const [{ data: draftRow }, { data: recentOut }] = await Promise.all([
+      supabaseAdmin
+        .from("order_drafts")
+        .select("customer_name,delivery_mode,address_street,address_number,address_neighborhood,items,payment_method,estimated_delivery_fee,awaiting_final_confirmation")
+        .eq("conversation_id", conversationId)
+        .maybeSingle(),
+      supabaseAdmin
+        .from("whatsapp_messages")
+        .select("body,created_at")
+        .eq("conversation_id", conversationId)
+        .eq("direction", "out")
+        .not("body", "is", null)
+        .order("created_at", { ascending: false })
+        .limit(8),
+    ]);
+
+    const draft = draftRow ? ({ ...draftRow, items: draftRow.items ?? [] } as Draft) : null;
+
+    // Primeira proteção: um dado já persistido nunca pode voltar a ser pedido.
+    if (draft) {
+      if (key === "neighborhood" && draft.address_neighborhood) return { text: buildContinuityFallback(draft), handedOff: false };
+      if (key === "items" && (draft.items ?? []).length) return { text: buildContinuityFallback(draft), handedOff: false };
+      if (key === "payment" && draft.payment_method) return { text: buildContinuityFallback(draft), handedOff: false };
+      if (key === "name_address" && draft.customer_name && draft.address_street && draft.address_number) return { text: buildContinuityFallback(draft), handedOff: false };
+      if (key === "address" && draft.address_street && draft.address_number && draft.address_neighborhood) return { text: buildContinuityFallback(draft), handedOff: false };
+    }
+
+    // Segunda proteção: a mesma pergunta operacional pode ser feita no máximo
+    // duas vezes. A terceira tentativa vira atendimento manual, em vez de loop.
+    let sameCount = 0;
+    for (const row of recentOut ?? []) {
+      const body = String(row?.body ?? "");
+      if (sameOperationalQuestion(proposedText, body)) sameCount += 1;
+      else if (operationalQuestionKey(body)) break;
+    }
+
+    if (sameCount >= 2) {
+      await supabaseAdmin
+        .from("whatsapp_conversations")
+        .update({ bot_paused: true })
+        .eq("id", conversationId);
+      try {
+        await supabaseAdmin.rpc("record_system_alert", {
+          _kind: "atendimento_loop_bloqueado",
+          _message: `O atendimento automático tentou repetir pela 3ª vez a etapa ${key}. A conversa foi passada para o modo manual.`,
+          _severity: "warn",
+        });
+      } catch {}
+      return {
+        text:
+          "Percebi que o atendimento automático não conseguiu avançar corretamente e não quero ficar repetindo a mesma pergunta. Vou deixar esta conversa para nossa equipe continuar por aqui.",
+        handedOff: true,
+      };
+    }
+  } catch (err) {
+    console.warn("[LOOP_GUARD] Falha ao conferir repetição:", err);
+  }
+
+  return { text: proposedText, handedOff: false };
+}
+
+function requestsHumanAgent(text: string): boolean {
+  const t = normalizeStreet(text);
+  return /\b(quero|chama|falar com|passa para|passa pro|preciso de).{0,25}\b(atendente|humano|pessoa|alguem da loja|gerente)\b|\b(atendente humano|falar com alguem)\b/.test(t);
+}
+
+function strongFrustrationSignal(text: string): boolean {
+  const t = normalizeStreet(text);
+  return /ja falei|ja disse|de novo|voce nao entende|nao esta entendendo|nao entende nada|para de perguntar|fica repetindo|esta repetindo/.test(t);
+}
+
+async function repeatedQuestionRecently(supabaseAdmin: any, conversationId: string): Promise<boolean> {
+  try {
+    const { data } = await supabaseAdmin
+      .from("whatsapp_messages")
+      .select("body")
+      .eq("conversation_id", conversationId)
+      .eq("direction", "out")
+      .not("body", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(4);
+    const bodies = (data ?? []).map((x: any) => String(x?.body ?? ""));
+    if (bodies.length < 2) return false;
+    return sameOperationalQuestion(bodies[0], bodies[1]);
+  } catch {
+    return false;
+  }
+}
+
 async function replyAndLog(
   supabaseAdmin: any,
   conversationId: string,
@@ -350,6 +513,8 @@ async function replyAndLog(
   text: string,
   opts?: { systemMessage?: boolean },
 ) {
+  const guarded = await guardAgainstOutboundLoop(supabaseAdmin, conversationId, text);
+  text = guarded.text;
   const externalId = await sendWhatsappReply(phone, text);
   // Mensagens automáticas do sistema (comprovante do pedido, chave Pix, fallback)
   // são marcadas com media_type "system": aparecem normal no chat do painel, mas
@@ -814,6 +979,30 @@ function buildContinuityFallback(draft: Draft): string {
   return `${namePrefix}perfeito. Vou preparar o resumo do pedido para sua confirmação.`;
 }
 
+
+type DeterministicFlowState =
+  | "WAITING_NEIGHBORHOOD"
+  | "TAKING_ORDER"
+  | "WAITING_NAME_ADDRESS"
+  | "WAITING_FREIGHT"
+  | "WAITING_PAYMENT"
+  | "READY_FOR_BEVERAGE_OR_SUMMARY"
+  | "WAITING_FINAL_CONFIRMATION"
+  | "OUTSIDE_DELIVERY_AREA"
+  | "ORDER_FLOW_COMPLETE";
+
+function deriveFlowState(draft: Draft): DeterministicFlowState {
+  if (draft.out_of_delivery_area) return "OUTSIDE_DELIVERY_AREA";
+  if (draft.awaiting_final_confirmation) return "WAITING_FINAL_CONFIRMATION";
+  if (draft.delivery_mode !== "pickup" && !draft.address_neighborhood) return "WAITING_NEIGHBORHOOD";
+  if (!(draft.items ?? []).length) return "TAKING_ORDER";
+  if (!draft.customer_name) return "WAITING_NAME_ADDRESS";
+  if (draft.delivery_mode === "delivery" && (!draft.address_street || !draft.address_number)) return "WAITING_NAME_ADDRESS";
+  if (draft.delivery_mode === "delivery" && draft.estimated_delivery_fee == null) return "WAITING_FREIGHT";
+  if (!draft.payment_method) return "WAITING_PAYMENT";
+  return "READY_FOR_BEVERAGE_OR_SUMMARY";
+}
+
 /** Última barreira contra loops: dado já persistido não pode ser perguntado de novo. */
 function enforceNoRepeatedKnownQuestion(text: string, draft: Draft): string {
   if (!text) return text;
@@ -1035,45 +1224,46 @@ async function resolveFreightImmediatelyForCompleteDraft(
     const fullAddress = [draft.address_street, draft.address_number, draft.address_neighborhood]
       .filter(Boolean)
       .join(", ");
-    const rawResult = await calculateDeliveryFee(cfgRow as DeliveryConfig, fullAddress, {
+    const result = await calculateAuthoritativeFreight(
       supabaseAdmin,
-      phone: conversation.phone,
-    });
-    const result = applyBairroOverride(
-      rawResult,
+      cfgRow,
+      fullAddress,
       draft.address_neighborhood,
-      bairrosAtendidos,
-      (cfgRow as any)?.default_delivery_fee ?? null,
       draft.address_street,
+      conversation.phone,
+      bairrosAtendidos,
       bairrosNaoAtendidos,
       ruasNaoAtendidas,
     );
 
     if (result.outOfArea) {
-      // Não reclassifica silenciosamente um bairro ativo. A proteção autoritativa
-      // de bairros continua sendo a fonte de verdade da cobertura.
-      const activeMatch = findConfiguredBairroMatch(draft.address_neighborhood, bairrosAtendidos);
-      if (activeMatch) result.outOfArea = false;
-    }
-
-    if (!result.outOfArea && result.fee != null) {
-      const { requestFreightApproval } = await import("@/lib/freight-approval.server");
-      const outcome = await requestFreightApproval(supabaseAdmin, {
-        conversationId: conversation.id,
-        phone: conversation.phone,
-        customerName: draft.customer_name ?? conversation.customer_name ?? null,
-        address: fullAddress,
-        fee: Number(result.fee),
-        distanceKm: result.distanceKm ?? null,
-      });
-      if (outcome.status === "rejected") {
-        await supabaseAdmin.from("whatsapp_conversations").update({ bot_paused: true }).eq("id", conversation.id);
-        return { status: "manual" };
-      }
-      if (outcome.fee != null) result.fee = Number(outcome.fee);
+      draft.out_of_delivery_area = true;
+      await supabaseAdmin.from("order_drafts").update({
+        out_of_delivery_area: true,
+        estimated_delivery_fee: null,
+        estimated_distance_km: result.distanceKm,
+        updated_at: new Date().toISOString(),
+      }).eq("conversation_id", conversation.id);
+      return { status: "failed" };
     }
 
     if (result.fee == null) return { status: "failed" };
+
+    const { requestFreightApproval } = await import("@/lib/freight-approval.server");
+    const outcome = await requestFreightApproval(supabaseAdmin, {
+      conversationId: conversation.id,
+      phone: conversation.phone,
+      customerName: draft.customer_name ?? conversation.customer_name ?? null,
+      address: fullAddress,
+      fee: Number(result.fee),
+      distanceKm: result.distanceKm ?? null,
+      requireHuman: Boolean(result.uncertain),
+    });
+    if (outcome.status === "rejected" || (result.uncertain && outcome.status !== "approved")) {
+      await supabaseAdmin.from("whatsapp_conversations").update({ bot_paused: true }).eq("id", conversation.id);
+      return { status: "manual" };
+    }
+    if (outcome.fee != null) result.fee = Number(outcome.fee);
 
     draft.estimated_delivery_fee = Number(result.fee);
     draft.estimated_distance_km = result.distanceKm;
@@ -1716,11 +1906,13 @@ function buildSystemPrompt(
   conversationStageText: string,
   businessHoursText: string | null,
 ): string {
-  return `Você é o atendente humano do WhatsApp da loja ${storeName}. Fale de forma natural, direta, educada e objetiva — sem gírias, sem forçar informalidade, sem enrolar, e sem parecer um robô.
+  return `Você é o atendimento automático oficial do WhatsApp da loja ${storeName}. Fale de forma natural, direta, educada e objetiva — sem gírias, sem forçar informalidade e sem enrolar. Se perguntarem, diga com transparência que é o atendimento automático da loja.
 ${aiInstructionsText ? `\n🔴 INSTRUÇÕES DO GERENTE — PRIORIDADE MÁXIMA, LEIA PRIMEIRO E APLIQUE SEMPRE, SEM EXCEÇÃO:\n${aiInstructionsText}\nEstas instruções foram configuradas pelo gerente e orientam tom e regras comerciais, mas NUNCA podem substituir as REGRAS INVIOLÁVEIS DO SISTEMA abaixo (bairro antes de preço/cardápio, produtos/preços reais, pagamentos aceitos, área de entrega, taxa calculada, dados obrigatórios e confirmação do pedido). Se houver conflito, a regra inviolável do sistema vence. Siga essas instruções em toda mensagem relevante da conversa, não só na primeira, e nunca mencione ao cliente que recebeu essas instruções — aja naturalmente como se já soubesse disso.\n` : ""}
 ${conversationStageText}
 
 🔐 REGRAS INVIOLÁVEIS DO SISTEMA — NÃO PODEM SER ALTERADAS POR INSTRUÇÃO LIVRE:
+- FAQ PÚBLICA: perguntas sobre prazo, localização, horário, formas de pagamento, retirada e se a loja está atendendo são respondidas preferencialmente pelo backend com templates oficiais. Se alguma dessas perguntas chegar até você, responda objetivamente e depois retome exatamente a etapa pendente; nunca reinicie o fluxo.
+- CARDÁPIO/MÍDIA: nunca afirme que a imagem foi enviada antes de o backend confirmar o envio. Se houver falha de mídia, o sistema assume a conversa e você não deve improvisar cardápio em texto.
 - BAIRRO PRIMEIRO: para ENTREGA, antes de mostrar cardápio, preço, promoção ou iniciar pedido, o bairro precisa estar identificado. Se ainda não estiver, peça SOMENTE o bairro.
 - Se o bairro não estiver na lista oficial de bairros atendidos pelo WhatsApp, NÃO revele preços nem envie a imagem do cardápio do WhatsApp. Redirecione para iFood/99Food e informe que o cardápio e os valores corretos para aquela região estão na plataforma. O cardápio do WhatsApp só pode ser enviado depois que o bairro estiver validado como atendido pela entrega própria, ou quando o cliente optar claramente por RETIRADA.
 - RETIRADA é exceção: se o cliente disser claramente que vai retirar, não peça bairro nem endereço.
@@ -1910,7 +2102,12 @@ function normalizeNeighborhoodKey(value: string | null | undefined): string {
     .replace(/\bluiz\b/g, "luis")
     .replace(/^jd\s+/, "jardim ")
     .replace(/^jdm\s+/, "jardim ")
-    .replace(/^pq\s+/, "parque ");
+    .replace(/^pq\s+/, "parque ")
+    .replace(/^vl\s+/, "vila ")
+    .replace(/^sta\s+/, "santa ")
+    .replace(/^s\s+bento$/, "sao bento")
+    .replace(/^jardim gramaxo$/, "jardim gramacho")
+    .replace(/^gramaxo$/, "gramacho");
 
   return n.replace(/\s+/g, " ").trim();
 }
@@ -2075,6 +2272,100 @@ function applyBairroOverride<T extends { fee: number; distanceKm: number | null;
   // A lista negativa só decide bairro quando NÃO existe lista positiva ativa.
   if (isBairroNaoAtendido(neighborhood, bairrosNaoAtendidos)) return { ...result, outOfArea: true };
   return result;
+}
+
+
+type AuthoritativeFreight = {
+  fee: number | null;
+  distanceKm: number | null;
+  outOfArea: boolean;
+  uncertain: boolean;
+  source: "neighborhood" | "neighborhood_default" | "distance" | "unavailable";
+};
+
+async function calculateAuthoritativeFreight(
+  supabaseAdmin: any,
+  cfgRow: any,
+  fullAddress: string,
+  neighborhood: string | null | undefined,
+  street: string | null | undefined,
+  phone: string,
+  bairrosAtendidos: string[],
+  bairrosNaoAtendidos: string[],
+  ruasNaoAtendidas: string[],
+): Promise<AuthoritativeFreight> {
+  if (isRuaNaoAtendida(street, ruasNaoAtendidas)) {
+    return { fee: null, distanceKm: null, outOfArea: true, uncertain: false, source: "unavailable" };
+  }
+
+  const pricingMode = String(cfgRow?.delivery_pricing_mode || "flat");
+
+  // MODO POR BAIRRO: o valor vem EXCLUSIVAMENTE da tabela bairros_atendidos.
+  // Nunca usa o valor default no lugar de uma taxa específica cadastrada sem
+  // antes localizar o bairro correto. Isso elimina o erro de anunciar a taxa
+  // geral para um bairro que tem preço próprio.
+  if (pricingMode !== "distance") {
+    const { data: rows, error } = await supabaseAdmin
+      .from("bairros_atendidos")
+      .select("nome,ativo,delivery_fee");
+    if (error) throw new Error(`Falha ao consultar taxa por bairro: ${error.message}`);
+
+    const activeRows = (rows ?? []).filter((r: any) => {
+      const ativo = r?.ativo;
+      return ativo === true || ativo === 1 || String(ativo ?? "").toLowerCase() === "true";
+    });
+    const activeNames = activeRows.map((r: any) => String(r?.nome ?? "").trim()).filter(Boolean);
+    const canonical = findConfiguredBairroMatch(neighborhood, activeNames);
+
+    if (activeNames.length && !canonical) {
+      return { fee: null, distanceKm: null, outOfArea: true, uncertain: false, source: "unavailable" };
+    }
+    if (!canonical) {
+      // Sem lista positiva confiável, não inventa valor por bairro.
+      return { fee: null, distanceKm: null, outOfArea: false, uncertain: true, source: "unavailable" };
+    }
+
+    const matched = activeRows.find((r: any) => normalizeNeighborhoodKey(r?.nome) === normalizeNeighborhoodKey(canonical));
+    const explicitFee = matched?.delivery_fee == null ? null : Number(matched.delivery_fee);
+    if (explicitFee != null && Number.isFinite(explicitFee) && explicitFee >= 0) {
+      return { fee: explicitFee, distanceKm: null, outOfArea: false, uncertain: false, source: "neighborhood" };
+    }
+
+    const fallback = cfgRow?.default_delivery_fee == null ? null : Number(cfgRow.default_delivery_fee);
+    if (fallback != null && Number.isFinite(fallback) && fallback >= 0) {
+      return { fee: fallback, distanceKm: null, outOfArea: false, uncertain: false, source: "neighborhood_default" };
+    }
+
+    return { fee: null, distanceKm: null, outOfArea: false, uncertain: true, source: "unavailable" };
+  }
+
+  // MODO POR KM: o bairro continua sendo a porta de entrada da área atendida,
+  // mas o PREÇO e o limite de distância vêm apenas do cálculo por km.
+  if (bairrosAtendidos.length && !isBairroAtendido(neighborhood, bairrosAtendidos)) {
+    return { fee: null, distanceKm: null, outOfArea: true, uncertain: false, source: "unavailable" };
+  }
+  if (!bairrosAtendidos.length && isBairroNaoAtendido(neighborhood, bairrosNaoAtendidos)) {
+    return { fee: null, distanceKm: null, outOfArea: true, uncertain: false, source: "unavailable" };
+  }
+
+  const raw = await calculateDeliveryFee(cfgRow as DeliveryConfig, fullAddress, {
+    supabaseAdmin,
+    phone,
+  });
+
+  if (raw.outOfArea) {
+    return { fee: null, distanceKm: raw.distanceKm ?? null, outOfArea: true, uncertain: Boolean(raw.uncertain), source: "distance" };
+  }
+  if (raw.fee == null || !Number.isFinite(Number(raw.fee)) || Number(raw.fee) < 0) {
+    return { fee: null, distanceKm: raw.distanceKm ?? null, outOfArea: false, uncertain: true, source: "unavailable" };
+  }
+  return {
+    fee: Number(raw.fee),
+    distanceKm: raw.distanceKm ?? null,
+    outOfArea: false,
+    uncertain: Boolean(raw.uncertain),
+    source: "distance",
+  };
 }
 
 function normalizePaymentMethod(v: any): "pix" | "card" | null {
@@ -2884,22 +3175,21 @@ async function executeTool(
           const fullAddress = [draft.address_street, draft.address_number, draft.address_neighborhood]
             .filter(Boolean)
             .join(", ");
-          const rawResult = await calculateDeliveryFee(cfgRow as DeliveryConfig, fullAddress, {
+          const result = await calculateAuthoritativeFreight(
             supabaseAdmin,
-            phone: conversation.phone,
-          });
-          const result = applyBairroOverride(
-            rawResult,
+            cfgRow,
+            fullAddress,
             draft.address_neighborhood,
-            bairrosAtendidos,
-            (cfgRow as any)?.default_delivery_fee ?? null,
             draft.address_street,
+            conversation.phone,
+            bairrosAtendidos,
             bairrosNaoAtendidos,
             ruasNaoAtendidas,
           );
-          // Antes de deixar a IA informar o valor ao cliente, pede aprovação
-          // humana (popup na loja) com janela de 30 segundos. Se ninguém
-          // responder, o valor calculado é liberado automaticamente.
+
+          // Antes de deixar qualquer valor sair para o cliente, passa pelo
+          // mesmo portão autoritativo usado no fluxo rápido. Cálculo incerto
+          // NUNCA é liberado automaticamente: exige aprovação humana.
           if (!result.outOfArea && result.fee != null) {
             const { requestFreightApproval } = await import("@/lib/freight-approval.server");
             const outcome = await requestFreightApproval(supabaseAdmin, {
@@ -2909,14 +3199,15 @@ async function executeTool(
               address: fullAddress,
               fee: Number(result.fee),
               distanceKm: result.distanceKm ?? null,
+              requireHuman: Boolean(result.uncertain),
             });
-            if (outcome.status === "rejected") {
+            if (outcome.status === "rejected" || (result.uncertain && outcome.status !== "approved")) {
               await supabaseAdmin.from("whatsapp_conversations").update({ bot_paused: true }).eq("id", conversation.id);
               if (ctx.flags) ctx.flags.silenced = true;
               return {
                 result: {
                   status: "freight_manual",
-                  message: "A loja assumiu a conversa para informar a taxa de entrega manualmente.",
+                  message: "A loja assumiu a conversa para confirmar a taxa de entrega com segurança.",
                 },
               };
             }
@@ -3246,56 +3537,48 @@ async function executeTool(
       };
     }
 
-    // nunca fecha um pedido de entrega com o frete por distância indefinido —
-    // isso já foi a causa de entregas saindo de graça por engano. Tenta
-    // recalcular uma última vez antes de desistir.
+    // NUNCA fecha pedido de entrega com taxa desconhecida e NUNCA substitui
+    // uma falha de cálculo por um valor genérico. Recalcula pela mesma fonte
+    // autoritativa usada durante a conversa; se ainda houver dúvida, o pedido
+    // fica bloqueado para confirmação manual em vez de cobrar errado.
     if (!isPickup && draft.estimated_delivery_fee == null) {
-      const { data: cfgCheck } = await supabaseAdmin.from("store_config").select("delivery_pricing_mode").maybeSingle();
-      if (cfgCheck?.delivery_pricing_mode === "distance") {
-        try {
-          const { data: cfgRow } = await supabaseAdmin
-            .from("store_config")
-            .select(
-              "delivery_pricing_mode, store_lat, store_lng, google_maps_api_key, delivery_fee_tiers, default_delivery_fee, fixed_delivery_city",
-            )
-            .maybeSingle();
-          const fullAddress = [draft.address_street, draft.address_number, draft.address_neighborhood]
-            .filter(Boolean)
-            .join(", ");
-          const result = await calculateDeliveryFee(cfgRow as DeliveryConfig, fullAddress, {
-            supabaseAdmin,
-            phone: conversation.phone,
-          });
-          draft.estimated_delivery_fee = result.fee;
-          draft.estimated_distance_km = result.distanceKm;
-          await supabaseAdmin
-            .from("order_drafts")
-            .update({
-              estimated_delivery_fee: result.fee,
-              estimated_distance_km: result.distanceKm,
-            })
-            .eq("conversation_id", conversation.id);
-        } catch {
-          /* segue pro fallback abaixo */
-        }
-      }
-      // Último recurso: se o cálculo por distância falhou, usa a taxa padrão
-      // configurada em vez de devolver erro pro cliente no fechamento.
-      if (draft.estimated_delivery_fee == null) {
-        const { data: feeFallback } = await supabaseAdmin
+      try {
+        const { data: cfgRow } = await supabaseAdmin
           .from("store_config")
-          .select("default_delivery_fee")
+          .select("delivery_pricing_mode, store_lat, store_lng, google_maps_api_key, delivery_fee_tiers, default_delivery_fee, fixed_delivery_city")
           .maybeSingle();
-        const fallback = Number(feeFallback?.default_delivery_fee ?? 0);
-        if (fallback > 0) {
-          draft.estimated_delivery_fee = fallback;
-          await supabaseAdmin
-            .from("order_drafts")
-            .update({ estimated_delivery_fee: fallback })
-            .eq("conversation_id", conversation.id);
-        } else {
-          return { result: { status: "delivery_fee_unavailable" } };
+        const fullAddress = [draft.address_street, draft.address_number, draft.address_neighborhood]
+          .filter(Boolean)
+          .join(", ");
+        const strictFreight = await calculateAuthoritativeFreight(
+          supabaseAdmin,
+          cfgRow,
+          fullAddress,
+          draft.address_neighborhood,
+          draft.address_street,
+          conversation.phone,
+          bairrosAtendidos,
+          bairrosNaoAtendidos,
+          ruasNaoAtendidas,
+        );
+        if (strictFreight.outOfArea) return { result: { status: "out_of_delivery_area" } };
+        if (strictFreight.fee == null || strictFreight.uncertain) {
+          await supabaseAdmin.from("whatsapp_conversations").update({ bot_paused: true }).eq("id", conversation.id);
+          if (ctx.flags) ctx.flags.silenced = true;
+          return { result: { status: "freight_manual", message: "Taxa não confirmada com segurança; atendimento manual ativado." } };
         }
+        draft.estimated_delivery_fee = Number(strictFreight.fee);
+        draft.estimated_distance_km = strictFreight.distanceKm;
+        await supabaseAdmin.from("order_drafts").update({
+          estimated_delivery_fee: Number(strictFreight.fee),
+          estimated_distance_km: strictFreight.distanceKm,
+          updated_at: new Date().toISOString(),
+        }).eq("conversation_id", conversation.id);
+      } catch (err) {
+        console.error("[FINALIZE_FREIGHT_STRICT]", err);
+        await supabaseAdmin.from("whatsapp_conversations").update({ bot_paused: true }).eq("id", conversation.id);
+        if (ctx.flags) ctx.flags.silenced = true;
+        return { result: { status: "freight_manual", message: "Não foi possível confirmar a taxa com segurança." } };
       }
     }
 
@@ -3969,7 +4252,7 @@ async function executeTool(
     return {
       result: {
         status: "ok",
-        message: "A imagem do cardápio será enviada ao cliente logo em seguida.",
+        message: "O backend fará o envio da imagem e só considerará sucesso após confirmação da API. Não diga que foi enviado antes dessa confirmação.",
       },
     };
   }
@@ -4028,7 +4311,10 @@ function buildDeliveryInfoText(opts: {
   const { pricingMode, maxRadiusKm, flatFee, draft } = opts;
 
   if (pricingMode !== "distance") {
-    return `TAXA DE ENTREGA: ${flatFee > 0 ? `R$ ${flatFee.toFixed(2).replace(".", ",")}` : "grátis"} (valor fixo, some ao total do pedido).`;
+    if (draft.estimated_delivery_fee != null) {
+      return `TAXA DE ENTREGA JÁ CONFIRMADA PELO BACKEND: R$ ${Number(draft.estimated_delivery_fee).toFixed(2).replace(".", ",")} — se o cliente perguntar novamente, use somente esse valor.`;
+    }
+    return "A TAXA DE ENTREGA é definida pelo bairro no cadastro da loja. O modelo NÃO recebe nem calcula esse valor: aguarde o backend confirmar a taxa depois de rua, número e bairro completos. É PROIBIDO estimar, supor ou usar uma taxa genérica.";
   }
 
   // modo por distância: NUNCA fale de bairros específicos — a entrega é decidida
@@ -4037,7 +4323,7 @@ function buildDeliveryInfoText(opts: {
     return `A ENTREGA PRA ESSE ENDEREÇO ESTÁ FORA DA ÁREA DE COBERTURA (além de ${maxRadiusKm ?? "?"} km da loja). NÃO diga simplesmente que não entregamos — siga o fluxo de REDIRECIONAMENTO FORA DE ÁREA (iFood/99Food) descrito no prompt.`;
   }
   if (draft.estimated_delivery_fee != null) {
-    return `TAXA DE ENTREGA PRA ESSE ENDEREÇO: R$ ${Number(draft.estimated_delivery_fee).toFixed(2).replace(".", ",")}${draft.estimated_distance_km != null ? ` (${draft.estimated_distance_km.toFixed(1)} km da loja)` : ""} — já calculada, pode informar esse valor exato ao cliente.`;
+    return `TAXA DE ENTREGA PRA ESSE ENDEREÇO: R$ ${Number(draft.estimated_delivery_fee).toFixed(2).replace(".", ",")}${draft.estimated_distance_km != null ? ` (${draft.estimated_distance_km.toFixed(1)} km da loja)` : ""} — valor já confirmado pelo backend. Só use esse valor se o cliente perguntar novamente; não invente outro.`;
   }
   return `A TAXA DE ENTREGA é calculada automaticamente pela distância até o endereço do cliente${maxRadiusKm ? ` — entregamos em um raio de até ${maxRadiusKm} km da loja` : ""}. IMPORTANTE: se as INSTRUÇÕES DO GERENTE (no topo) listarem bairros ou regiões específicas onde a loja atende, siga aquela lista à risca — nunca prometa entrega em bairro que não esteja lá. Se o cliente pedir entrega pra um lugar que claramente não está na área atendida pelo gerente, avise com educação que a loja não atende essa região e não peça o endereço completo. Só depois de o cliente confirmar um endereço dentro da área é que o valor exato da taxa é calculado.`;
 }
@@ -4145,6 +4431,10 @@ async function runConversationalTurn(opts: {
     ? `🟢 CONTEXTO: este é o PRIMEIRO CONTATO deste cliente com a loja (não há nenhuma resposta sua no histórico). Cumprimente UMA vez com "${greetingByTimeBR()}". Se o cliente não declarou RETIRADA, a única pergunta operacional permitida antes de qualquer outra informação é o BAIRRO; não pergunte "como posso ajudar" antes de validar o bairro.`
     : `⛔ CONTEXTO: esta é uma CONVERSA EM ANDAMENTO — você já respondeu ${assistantTurns} vez(es) neste chat. É PROIBIDO cumprimentar de novo, se apresentar, dizer o nome da loja como abertura ou perguntar "como posso ajudar". Leia o histórico abaixo e responda APENAS a última mensagem do cliente, continuando de onde a conversa parou.`) + manualContinuationRule;
 
+  const deterministicFlowState = deriveFlowState(opts.draft);
+  const stateContract = `
+🧭 ESTADO DETERMINÍSTICO DO ATENDIMENTO: ${deterministicFlowState}. Este estado é calculado pelo backend e tem prioridade sobre sua interpretação. Você NÃO decide a etapa livremente: responda a dúvida do cliente e depois avance somente para a próxima informação permitida por esse estado. Nunca volte para uma etapa já concluída. Nunca informe taxa de entrega que não esteja em O QUE JÁ SEI SOBRE O PEDIDO.`;
+
   const systemPrompt = buildSystemPrompt(
     opts.storeName,
     opts.catalogText,
@@ -4157,7 +4447,7 @@ async function runConversationalTurn(opts: {
     opts.lastAddressText,
     opts.aiInstructionsText,
     opts.pushName,
-    conversationStageText,
+    conversationStageText + stateContract,
     opts.businessHoursText,
   );
   const messages: any[] = [{ role: "system", content: systemPrompt }, ...opts.history];
@@ -5222,6 +5512,26 @@ async function handleIncomingMessageUnlocked(
         : (m.body ?? ""),
     }));
 
+  // ============ ESCALONAMENTO HUMANO / FRUSTRAÇÃO ============
+  // O cliente pode pedir uma pessoa a qualquer momento. Também interrompemos
+  // automaticamente quando ele demonstra frustração E o bot acabou de repetir
+  // a mesma etapa. O objetivo é nunca transformar um erro de interpretação em
+  // uma discussão ou loop infinito.
+  if (requestsHumanAgent(text) || (strongFrustrationSignal(text) && await repeatedQuestionRecently(supabaseAdmin, conversation.id))) {
+    await supabaseAdmin
+      .from("whatsapp_conversations")
+      .update({ bot_paused: true })
+      .eq("id", conversation.id);
+    await replyAndLog(
+      supabaseAdmin,
+      conversation.id,
+      phone,
+      "Claro. Este é o atendimento automático da Hotbox Delivery. Vou pausar o robô para que nossa equipe possa continuar seu atendimento por aqui sem repetir informações.",
+      { systemMessage: true },
+    );
+    return Response.json({ ok: true, action: "human_handoff_requested" });
+  }
+
   // ============ SUPORTE A PEDIDO JÁ FEITO PELO SITE / CARDÁPIO DIGITAL ============
   // Tem prioridade sobre BAIRRO PRIMEIRO: aqui o cliente não está começando uma
   // compra no WhatsApp, está consultando um pedido que já existe no sistema.
@@ -5247,9 +5557,28 @@ async function handleIncomingMessageUnlocked(
   // screenshot (3x Vila São Luís → 3x "informe seu bairro").
   // A saudação deve entrar no histórico normalmente (sem flag system) para que
   // o contador de turnos do assistente avance e o loop não se repita.
+  // ============ FAQ PÚBLICA DETERMINÍSTICA ============
+  // Perguntas institucionais simples são respondidas pelo backend, sem depender
+  // da IA. Isso evita respostas divergentes sobre prazo, horário, localização e
+  // pagamento. Se ainda faltar bairro, respondemos a dúvida e retomamos somente
+  // a etapa do bairro na mesma mensagem.
+  const publicFaqIntent = detectPublicFaqIntent(text);
+  if (publicFaqIntent) {
+    const faqText = renderPublicFaq(publicFaqIntent, {
+      storeName: cfgStore?.store_name || null,
+      deliveryTimeMinutes: cfgStore?.estimated_delivery_time_minutes ?? 40,
+      businessHoursEnabled: cfgStore?.business_hours_enabled === true,
+      businessHours: Array.isArray(cfgStore?.business_hours) ? cfgStore.business_hours as BusinessHourRange[] : null,
+    });
+    const resume = resumePromptForDraft(draft);
+    const answer = resume ? `${faqText}\n\n${resume}` : faqText;
+    await replyAndLog(supabaseAdmin, conversation.id, phone, answer);
+    return Response.json({ ok: true, action: `faq_${publicFaqIntent}` });
+  }
+
   const assistantTurnsBeforeThisContact = history.filter((m) => m.role === "assistant").length;
   if (assistantTurnsBeforeThisContact === 0) {
-    const greetingText = `${greetingByTimeBR()}! Para que o atendente possa dar continuidade no seu atendimento, informe seu bairro por favor.`;
+    const greetingText = `${greetingByTimeBR()}! 👋 Sou o atendimento automático da ${cfgStore?.store_name || "Hotbox Delivery"}. Vou te ajudar com seu pedido por aqui. Para começar, me informe seu bairro, por favor.`;
     // SEM systemMessage:true — deve aparecer no histórico para o loop não se repetir
     await replyAndLog(supabaseAdmin, conversation.id, phone, greetingText);
     return Response.json({ ok: true, action: "first_contact_neighborhood_required" });
@@ -5598,9 +5927,13 @@ async function handleIncomingMessageUnlocked(
         })
         .eq("conversation_id", conversation.id);
 
-      await replyAndLog(supabaseAdmin, conversation.id, phone, "Claro! Aqui está nosso cardápio:");
-      await sendMenuImagesOnce(supabaseAdmin, conversation.id, phone, true);
-      return Response.json({ ok: true, action: "served_neighborhood_menu_confirmed" });
+      const menuResult = await sendMenuImagesOnce(supabaseAdmin, conversation.id, phone, true);
+      if (!menuResult.ok) {
+        await supabaseAdmin.from("whatsapp_conversations").update({ bot_paused: true }).eq("id", conversation.id);
+        await replyAndLog(supabaseAdmin, conversation.id, phone, menuSendFailureMessage(), { systemMessage: true });
+        return Response.json({ ok: true, action: "menu_send_failed_handoff", reason: menuResult.reason });
+      }
+      return Response.json({ ok: true, action: "served_neighborhood_menu_confirmed", sent: menuResult.sent });
     }
   }
 
@@ -5937,7 +6270,7 @@ async function handleIncomingMessageUnlocked(
   const isFirstContactTurn = assistantTurnsSoFar === 0;
   if (forceNoTools && isFirstContactTurn) {
     const storeNameForGreeting = cfgStore?.store_name || "a loja";
-    const greetingText = `${greetingByTimeBR()}! Para que o atendente possa dar continuidade no seu atendimento, informe seu bairro por favor.`;
+    const greetingText = `${greetingByTimeBR()}! 👋 Sou o atendimento automático da ${storeNameForGreeting}. Vou te ajudar com seu pedido por aqui. Para começar, me informe seu bairro, por favor.`;
     await replyAndLog(supabaseAdmin, conversation.id, phone, greetingText);
     return Response.json({ ok: true, action: "conversation_turn" });
   }
@@ -5976,16 +6309,38 @@ async function handleIncomingMessageUnlocked(
     return Response.json({ ok: true, action: "freight_manual_takeover" });
   }
 
-  if (finalText) {
-    await replyAndLog(supabaseAdmin, conversation.id, phone, finalText);
-  }
-  // A imagem do cardápio só é enviada quando a IA chamou a ferramenta
-  // send_menu_image nesta rodada (cliente pediu o cardápio ou perguntou
-  // preço/valor de forma genérica) — nunca mais automaticamente no primeiro
-  // contato. force=true porque, se a IA decidiu chamar a ferramenta, é
-  // porque o cliente pediu — inclusive se for um reenvio.
+  // Cardápio em imagem é uma ação confirmada pelo backend: primeiro tentamos
+  // enviar a mídia e só então seguimos. Nunca dizemos "aqui está" antes da API
+  // confirmar o envio. Em falha, fazemos retry e transferimos para manual.
   if (sendMenuImage) {
-    await sendMenuImagesOnce(supabaseAdmin, conversation.id, phone, isExplicitMenuRequest(text));
+    const menuResult = await sendMenuImagesOnce(
+      supabaseAdmin,
+      conversation.id,
+      phone,
+      isExplicitMenuRequest(text),
+    );
+    if (!menuResult.ok) {
+      await supabaseAdmin
+        .from("whatsapp_conversations")
+        .update({ bot_paused: true })
+        .eq("id", conversation.id);
+      await replyAndLog(
+        supabaseAdmin,
+        conversation.id,
+        phone,
+        menuSendFailureMessage(),
+        { systemMessage: true },
+      );
+      return Response.json({ ok: true, action: "menu_send_failed_handoff", reason: menuResult.reason });
+    }
+    // Se a IA gerou apenas uma frase introdutória do tipo "aqui está o cardápio",
+    // ela é descartada: a própria legenda da mídia já cumpre esse papel.
+    const onlyMenuIntro = /(?:aqui est[aá]|segue|vou enviar|enviei).{0,40}card[aá]pio/i.test(String(finalText || ""));
+    if (finalText && !onlyMenuIntro) {
+      await replyAndLog(supabaseAdmin, conversation.id, phone, finalText);
+    }
+  } else if (finalText) {
+    await replyAndLog(supabaseAdmin, conversation.id, phone, finalText);
   }
   if (pixBlock) {
     await replyAndLog(supabaseAdmin, conversation.id, phone, pixBlock, { systemMessage: true });
