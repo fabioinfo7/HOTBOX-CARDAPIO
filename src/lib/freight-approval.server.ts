@@ -3,6 +3,12 @@ export type FreightApprovalOutcome = {
   fee: number | null;
 };
 
+export type PartnerFreightQuoteOutcome = {
+  status: "pending" | "resolved" | "failed";
+  fee: number | null;
+  created: boolean;
+};
+
 const WINDOW_MS = 25_000;
 const POLL_MS = 1_000;
 
@@ -203,4 +209,123 @@ export async function captureOperatorFreightMessage(
     .in("status", ["pending", "operator_will_send"]);
 
   return { blocked: false, captured: true, value };
+}
+
+
+/**
+ * Abre uma cotação obrigatória com motoboy parceiro.
+ * Diferente do popup padrão, NÃO existe valor sugerido e NÃO existe opção
+ * "eu vou informar". O operador consulta o parceiro, digita a taxa e autoriza
+ * o sistema a enviar uma única vez ao cliente.
+ */
+export async function requestPartnerFreightQuote(
+  supabaseAdmin: any,
+  input: {
+    conversationId: string;
+    phone: string;
+    customerName?: string | null;
+    address: string;
+  },
+): Promise<PartnerFreightQuoteOutcome> {
+  const addressKey = normalizeFreightAddressKey(input.address);
+
+  const { data: draft } = await (supabaseAdmin as any)
+    .from("order_drafts")
+    .select("freight_notification_status,freight_notification_value,freight_notification_address_key")
+    .eq("conversation_id", input.conversationId)
+    .maybeSingle();
+
+  if (
+    draft?.freight_notification_address_key === addressKey &&
+    ["sent_by_bot", "sent_by_operator"].includes(String(draft?.freight_notification_status || "")) &&
+    Number(draft?.freight_notification_value) > 0
+  ) {
+    return {
+      status: "resolved",
+      fee: Number(draft.freight_notification_value),
+      created: false,
+    };
+  }
+
+  const { data: existing, error: existingError } = await (supabaseAdmin as any)
+    .from("pending_freight_approvals")
+    .select("id,status,fee,approval_kind")
+    .eq("conversation_id", input.conversationId)
+    .eq("address_key", addressKey)
+    .eq("approval_kind", "partner_quote")
+    .in("status", ["pending", "bot_sent"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (existingError) {
+    console.error("[PARTNER_FREIGHT] falha ao buscar cotação existente:", existingError);
+    return { status: "failed", fee: null, created: false };
+  }
+
+  if (existing?.status === "bot_sent" && Number(existing.fee) > 0) {
+    return { status: "resolved", fee: Number(existing.fee), created: false };
+  }
+
+  if (existing?.id) {
+    await (supabaseAdmin as any)
+      .from("order_drafts")
+      .update({
+        estimated_delivery_fee: null,
+        freight_notification_status: "partner_quote_pending",
+        freight_notification_value: null,
+        freight_notification_address_key: addressKey,
+        freight_notification_at: null,
+        awaiting_final_confirmation: false,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("conversation_id", input.conversationId);
+
+    return { status: "pending", fee: null, created: false };
+  }
+
+  await (supabaseAdmin as any)
+    .from("pending_freight_approvals")
+    .update({ status: "failed", resolved_at: new Date().toISOString() })
+    .eq("conversation_id", input.conversationId)
+    .eq("address_key", addressKey)
+    .eq("status", "pending")
+    .neq("approval_kind", "partner_quote");
+
+  const { data: inserted, error } = await (supabaseAdmin as any)
+    .from("pending_freight_approvals")
+    .insert({
+      conversation_id: input.conversationId,
+      phone: input.phone,
+      customer_name: input.customerName ?? null,
+      address: input.address,
+      address_key: addressKey,
+      fee: 0,
+      distance_km: null,
+      approval_kind: "partner_quote",
+      status: "pending",
+      expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    })
+    .select("id")
+    .single();
+
+  if (error || !inserted?.id) {
+    console.error("[PARTNER_FREIGHT] falha ao abrir cotação:", error);
+    return { status: "failed", fee: null, created: false };
+  }
+
+  await (supabaseAdmin as any)
+    .from("order_drafts")
+    .update({
+      estimated_delivery_fee: null,
+      freight_notification_status: "partner_quote_pending",
+      freight_notification_value: null,
+      freight_notification_address_key: addressKey,
+      freight_notification_at: null,
+      awaiting_final_confirmation: false,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("conversation_id", input.conversationId);
+
+  return { status: "pending", fee: null, created: true };
 }
