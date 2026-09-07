@@ -917,7 +917,7 @@ type Draft = {
   failed_finalize_attempts?: number;
   awaiting_final_confirmation?: boolean;
   stage?: string | null;
-  freight_notification_status?: "pending" | "bot_authorized" | "operator_will_send" | "sent_by_bot" | "sent_by_operator" | null;
+  freight_notification_status?: "pending" | "partner_quote_pending" | "bot_authorized" | "operator_will_send" | "sent_by_bot" | "sent_by_operator" | null;
   freight_notification_value?: number | null;
   freight_notification_address_key?: string | null;
   freight_notification_at?: string | null;
@@ -1397,6 +1397,48 @@ async function persistDeterministicAddressFromTurn(
 }
 
 
+
+async function ensurePartnerQuotePending(
+  supabaseAdmin: any,
+  conversation: any,
+  draft: Draft,
+  fullAddress: string,
+): Promise<{ status: "pending" | "resolved" | "failed"; fee?: number }> {
+  const { requestPartnerFreightQuote } = await import("@/lib/freight-approval.server");
+  const quote = await requestPartnerFreightQuote(supabaseAdmin, {
+    conversationId: conversation.id,
+    phone: conversation.phone,
+    customerName: draft.customer_name ?? conversation.customer_name ?? null,
+    address: fullAddress,
+  });
+
+  if (quote.status === "resolved" && quote.fee != null) {
+    draft.estimated_delivery_fee = Number(quote.fee);
+    draft.freight_notification_status = "sent_by_bot";
+    draft.freight_notification_value = Number(quote.fee);
+    return { status: "resolved", fee: Number(quote.fee) };
+  }
+
+  if (quote.status === "failed") return { status: "failed" };
+
+  draft.estimated_delivery_fee = null;
+  draft.freight_notification_status = "partner_quote_pending";
+  draft.freight_notification_value = null;
+  draft.awaiting_final_confirmation = false;
+
+  if (quote.created) {
+    await replyAndLog(
+      supabaseAdmin,
+      conversation.id,
+      conversation.phone,
+      `${draft.customer_name ? `${String(draft.customer_name).trim().split(/\s+/)[0]}, ` : ""}só um instante, vou verificar a taxa de entrega certinha para o seu endereço.`,
+      { systemMessage: true },
+    );
+  }
+
+  return { status: "pending" };
+}
+
 /**
  * Garante que um endereço completo recém-informado nunca fique parado esperando
  * uma segunda rodada da IA para calcular o frete. A memória determinística de
@@ -1453,71 +1495,40 @@ async function resolveFreightImmediatelyForCompleteDraft(
       return { status: "failed" };
     }
 
+    if (result.requiresPartnerQuote) {
+      const partner = await ensurePartnerQuotePending(supabaseAdmin, conversation, draft, fullAddress);
+      if (partner.status === "resolved" && partner.fee != null) return { status: "resolved", fee: partner.fee };
+      if (partner.status === "failed") return { status: "failed" };
+      return { status: "pending" };
+    }
+
     if (result.fee == null) return { status: "failed" };
 
-    const { requestFreightApproval } = await import("@/lib/freight-approval.server");
-    const outcome = await requestFreightApproval(supabaseAdmin, {
-      conversationId: conversation.id,
-      phone: conversation.phone,
-      customerName: draft.customer_name ?? conversation.customer_name ?? null,
-      address: fullAddress,
-      fee: Number(result.fee),
-      distanceKm: result.distanceKm ?? null,
-      requireHuman: Boolean(result.uncertain),
-    });
-    if (outcome.status === "operator_will_send") {
-      draft.estimated_delivery_fee = null;
-      draft.freight_notification_status = "operator_will_send";
-      draft.freight_notification_value = outcome.fee == null ? Number(result.fee) : Number(outcome.fee);
-      await (supabaseAdmin as any)
-        .from("order_drafts")
-        .update({
-          estimated_delivery_fee: null,
-          freight_notification_status: "operator_will_send",
-          freight_notification_value: draft.freight_notification_value,
-          awaiting_final_confirmation: false,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("conversation_id", conversation.id);
-      return { status: "operator" };
-    }
-    if (outcome.status === "pending") return { status: "pending" };
-    if (outcome.status === "failed" || (result.uncertain && outcome.status !== "bot_sent")) {
-      const { requestSilentHumanHandoff } = await import("@/lib/human-handoff.server");
-      await requestSilentHumanHandoff(supabaseAdmin, {
-        conversationId: conversation.id,
-        phone: conversation.phone,
-        customerName: draft.customer_name ?? conversation.customer_name ?? null,
-        reason: "Não foi possível confirmar a taxa de entrega com segurança.",
-        severity: "error",
-      });
-      return { status: "manual" };
-    }
-    if (outcome.fee != null) result.fee = Number(outcome.fee);
-
+    // Taxa fixa confiável não precisa de popup. O backend é a fonte de verdade
+    // e o envio único continua protegido pelo estado freight_notification_status.
     draft.estimated_delivery_fee = Number(result.fee);
-    draft.freight_notification_status = "sent_by_bot";
+    draft.freight_notification_status = "bot_authorized";
     draft.freight_notification_value = Number(result.fee);
-    draft.estimated_distance_km = result.distanceKm;
-    draft.out_of_delivery_area = Boolean(result.outOfArea);
+    draft.estimated_distance_km = null;
+    draft.out_of_delivery_area = false;
     draft.awaiting_final_confirmation = false;
 
-    const { error } = await supabaseAdmin
+    const { error: fixedSaveError } = await supabaseAdmin
       .from("order_drafts")
       .update({
         estimated_delivery_fee: Number(result.fee),
-        estimated_distance_km: result.distanceKm,
-        out_of_delivery_area: Boolean(result.outOfArea),
-        freight_notification_status: "sent_by_bot",
+        estimated_distance_km: null,
+        out_of_delivery_area: false,
+        freight_notification_status: "bot_authorized",
         freight_notification_value: Number(result.fee),
-        freight_notification_at: new Date().toISOString(),
         awaiting_final_confirmation: false,
         updated_at: new Date().toISOString(),
       })
       .eq("conversation_id", conversation.id);
-    if (error) throw new Error(error.message);
+    if (fixedSaveError) throw new Error(fixedSaveError.message);
 
     return { status: "resolved", fee: Number(result.fee) };
+
   } catch (err) {
     console.error("[FREIGHT_IMMEDIATE] falha ao calcular/aprovar taxa:", err);
     return { status: "failed" };
@@ -2125,7 +2136,7 @@ async function handleDigitalOrderSupportIfNeeded(
 }
 
 
-const HOTBOX_WHATSAPP_FLOW_VERSION = "V19_AUTO_MENU_AFTER_NEIGHBORHOOD_20260907";
+const HOTBOX_WHATSAPP_FLOW_VERSION = "V20_FRETE_POLICY_STREET_EXCEPTIONS_KNOWLEDGE_GATE_20260907";
 
 type ActiveWhatsappOrder = {
   id: string;
@@ -2719,6 +2730,7 @@ Um atendente de verdade nunca despeja um monte de informação não pedida em ci
 - Se os itens já aparecem em "O QUE JÁ SEI DO PEDIDO", nunca volte a perguntar "quais itens/produtos gostaria de pedir". Se a quantidade já está registrada, também não pergunte a quantidade outra vez.
 - 🚨 NUNCA diga “vou finalizar”, “um momento”, “aguarde”, “já vou concluir” ou equivalente se nenhuma ação real de fechamento estiver sendo executada naquela mesma rodada. Se faltar algo, pergunte o próximo dado; se estiver completo, chame finalize_order.
 - Se o cliente corrigir uma informação que você entendeu errado, reconheça a correção de forma breve, atualize o dado e continue o fluxo no mesmo turno.
+- 🧠 LACUNA REAL DE CONHECIMENTO: antes de pedir ajuda humana, procure primeiro nas configurações estruturadas e na BIBLIOTECA OFICIAL DA EMPRESA. Se a pergunta for factual sobre a empresa e NÃO houver informação confiável em nenhuma dessas fontes, não invente. Responda internamente com o marcador exato __NEEDS_HUMAN_KNOWLEDGE__. O backend trocará esse marcador por uma resposta natural e abrirá o alerta interno. Não use esse marcador para dúvidas normais do fluxo, erros de digitação, perguntas já respondíveis pelo catálogo, bairro, pagamento, cupom, entrega, horário ou pedido ativo.
 - Só é permitido encerrar o atendimento quando: (1) o pedido foi efetivamente criado/finalizado, (2) o cliente cancelou/desistiu explicitamente, (3) houve handoff humano explícito, ou (4) o cliente encerrou a conversa. Fora disso, sempre conduza ao próximo passo.
 
 Você também é um ótimo vendedor, do nível dos melhores atendentes de delivery — sabe aumentar o ticket médio sem parecer vendedor, de um jeito tão natural que o cliente nem percebe que está sendo "vendido":
@@ -2784,6 +2796,7 @@ Regras importantes:
 - Se o cliente perguntar sobre ingredientes, sabores, bebidas, preços, tempo ou taxa de entrega, responda com base EXATAMENTE nas informações acima. Para ingredientes, use prioritariamente o campo “Ingredientes” exibido no CARDÁPIO ATIVO, que vem do cadastro do produto; nunca invente. Se aparecer “Ingredientes: não cadastrados”, diga apenas que vai confirmar a composição com a equipe antes de garantir. Se o campo Ingredientes de um produto não mencionar um ingrediente específico que o cliente perguntou (ex: "tem queijo?", "vem com bacon?"), NUNCA chute — responda com naturalidade que vai confirmar essa informação com a cozinha antes de garantir. Nunca prometa complemento, molho, acompanhamento ou variação que não esteja informado no cadastro do produto.
 - Se pedirem algo que não existe no cardápio, diga com naturalidade que não tem esse item e sugira o mais parecido do cardápio.
 - 🚨 VALOR DA TAXA DE ENTREGA — REGRA INVIOLÁVEL: você NUNCA escreve um valor de taxa de entrega que não tenha vindo, nesta conversa, no campo "delivery_fee" retornado por update_order_draft. Além disso, se o estado interno indicar que o OPERADOR escolheu informar a taxa, você fica PROIBIDA de escrever qualquer valor de taxa/frete nessa conversa, mesmo que saiba o número. É PROIBIDO estimar, chutar, arredondar, repetir valor de uma conversa antiga, deduzir por bairro/distância ou dizer "deve ficar em torno de R$ X". Quando o endereço completo é informado, o sistema abre uma janela de até 30 segundos para a loja manter ou editar o valor da entrega. O valor liberado pelo popup passa a ser a fonte de verdade e deve ser salvo no rascunho. Se a taxa já estiver salva/informada para o MESMO endereço, NÃO peça novo cálculo e NÃO gere outro popup. Enquanto esse campo não voltar com um número, apenas diga que vai confirmar o valor exato.
+- 🚨 MODO OPERACIONAL DO FRETE — REGRA ABSOLUTA: o backend decide se o endereço usa TAXA FIXA ou COTAÇÃO COM MOTOBOY PARCEIRO. A IA não escolhe isso. Exceções cadastradas por rua têm prioridade sobre o modo geral da noite. Em TAXA FIXA, o valor vem somente do cadastro estruturado. Em MOTOBOY PARCEIRO, a IA fica proibida de informar qualquer valor e o backend abre um popup interno para o operador consultar o parceiro, digitar a taxa e autorizar o envio. Nunca use o valor do bairro quando o endereço estiver em cotação de parceiro.
 - 🚨 TAXA DE ENTREGA — ENVIO EXCLUSIVO: quando update_order_draft retornar "delivery_fee", confira também o estado interno freight_notification_status. SOMENTE se o backend tiver autorizado a automação (bot_authorized/sent_by_bot) a taxa pode ser comunicada pela automação. Se o operador escolheu informar (operator_will_send/sent_by_operator), é PROIBIDO escrever, repetir ou confirmar qualquer valor de taxa; continue aguardando a mensagem do operador. Depois que a taxa for comunicada por qualquer lado, ela é única e congelada para aquele endereço e não pode ser reenviada nem alterada enquanto o endereço não mudar.
 - Estilo: direto, profissional e natural. Sem gírias, sem rodeios, sem enrolação, sem frases decorativas. Uma resposta objetiva por vez, só com o que foi pedido ou o que falta para fechar o pedido.
 - Se o endereço estiver marcado como fora da área de entrega, NÃO diga simplesmente que a loja não entrega nessa região — siga o fluxo de REDIRECIONAMENTO FORA DE ÁREA (iFood/99Food) descrito mais abaixo, e não finalize o pedido.
@@ -3062,7 +3075,14 @@ type AuthoritativeFreight = {
   distanceKm: number | null;
   outOfArea: boolean;
   uncertain: boolean;
-  source: "neighborhood" | "neighborhood_default" | "distance" | "unavailable";
+  source:
+    | "street_exception_fixed"
+    | "street_exception_partner"
+    | "global_fixed_neighborhood"
+    | "global_partner"
+    | "fixed_missing_fee_partner_fallback"
+    | "unavailable";
+  requiresPartnerQuote?: boolean;
 };
 
 async function calculateAuthoritativeFreight(
@@ -3080,49 +3100,6 @@ async function calculateAuthoritativeFreight(
     return { fee: null, distanceKm: null, outOfArea: true, uncertain: false, source: "unavailable" };
   }
 
-  const pricingMode = String(cfgRow?.delivery_pricing_mode || "flat");
-
-  // MODO POR BAIRRO: o valor vem EXCLUSIVAMENTE da tabela bairros_atendidos.
-  // Nunca usa o valor default no lugar de uma taxa específica cadastrada sem
-  // antes localizar o bairro correto. Isso elimina o erro de anunciar a taxa
-  // geral para um bairro que tem preço próprio.
-  if (pricingMode !== "distance") {
-    const { data: rows, error } = await supabaseAdmin
-      .from("bairros_atendidos")
-      .select("nome,ativo,delivery_fee");
-    if (error) throw new Error(`Falha ao consultar taxa por bairro: ${error.message}`);
-
-    const activeRows = (rows ?? []).filter((r: any) => {
-      const ativo = r?.ativo;
-      return ativo === true || ativo === 1 || String(ativo ?? "").toLowerCase() === "true";
-    });
-    const activeNames = activeRows.map((r: any) => String(r?.nome ?? "").trim()).filter(Boolean);
-    const canonical = findConfiguredBairroMatch(neighborhood, activeNames);
-
-    if (activeNames.length && !canonical) {
-      return { fee: null, distanceKm: null, outOfArea: true, uncertain: false, source: "unavailable" };
-    }
-    if (!canonical) {
-      // Sem lista positiva confiável, não inventa valor por bairro.
-      return { fee: null, distanceKm: null, outOfArea: false, uncertain: true, source: "unavailable" };
-    }
-
-    const matched = activeRows.find((r: any) => normalizeNeighborhoodKey(r?.nome) === normalizeNeighborhoodKey(canonical));
-    const explicitFee = matched?.delivery_fee == null ? null : Number(matched.delivery_fee);
-    if (explicitFee != null && Number.isFinite(explicitFee) && explicitFee >= 0) {
-      return { fee: explicitFee, distanceKm: null, outOfArea: false, uncertain: false, source: "neighborhood" };
-    }
-
-    const fallback = cfgRow?.default_delivery_fee == null ? null : Number(cfgRow.default_delivery_fee);
-    if (fallback != null && Number.isFinite(fallback) && fallback >= 0) {
-      return { fee: fallback, distanceKm: null, outOfArea: false, uncertain: false, source: "neighborhood_default" };
-    }
-
-    return { fee: null, distanceKm: null, outOfArea: false, uncertain: true, source: "unavailable" };
-  }
-
-  // MODO POR KM: o bairro continua sendo a porta de entrada da área atendida,
-  // mas o PREÇO e o limite de distância vêm apenas do cálculo por km.
   if (bairrosAtendidos.length && !isBairroAtendido(neighborhood, bairrosAtendidos)) {
     return { fee: null, distanceKm: null, outOfArea: true, uncertain: false, source: "unavailable" };
   }
@@ -3130,23 +3107,43 @@ async function calculateAuthoritativeFreight(
     return { fee: null, distanceKm: null, outOfArea: true, uncertain: false, source: "unavailable" };
   }
 
-  const raw = await calculateDeliveryFee(cfgRow as DeliveryConfig, fullAddress, {
-    supabaseAdmin,
-    phone,
+  // Para o WhatsApp, a política operacional é separada do modo do cardápio digital.
+  // Prioridade: exceção da rua > modo geral da noite > taxa fixa do bairro.
+  const { resolveWhatsappDeliveryPolicy } = await import("@/lib/whatsapp-delivery-policy.server");
+  const resolved = await resolveWhatsappDeliveryPolicy(supabaseAdmin, {
+    neighborhood: String(neighborhood || ""),
+    street: String(street || ""),
   });
 
-  if (raw.outOfArea) {
-    return { fee: null, distanceKm: raw.distanceKm ?? null, outOfArea: true, uncertain: Boolean(raw.uncertain), source: "distance" };
+  if (resolved.mode === "partner_quote") {
+    return {
+      fee: null,
+      distanceKm: null,
+      outOfArea: false,
+      uncertain: false,
+      source: resolved.source,
+      requiresPartnerQuote: true,
+    };
   }
-  if (raw.fee == null || !Number.isFinite(Number(raw.fee)) || Number(raw.fee) < 0) {
-    return { fee: null, distanceKm: raw.distanceKm ?? null, outOfArea: false, uncertain: true, source: "unavailable" };
+
+  if (resolved.fee == null || !Number.isFinite(Number(resolved.fee)) || Number(resolved.fee) <= 0) {
+    return {
+      fee: null,
+      distanceKm: null,
+      outOfArea: false,
+      uncertain: false,
+      source: "fixed_missing_fee_partner_fallback",
+      requiresPartnerQuote: true,
+    };
   }
+
   return {
-    fee: Number(raw.fee),
-    distanceKm: raw.distanceKm ?? null,
+    fee: Number(resolved.fee),
+    distanceKm: null,
     outOfArea: false,
-    uncertain: Boolean(raw.uncertain),
-    source: "distance",
+    uncertain: false,
+    source: resolved.source,
+    requiresPartnerQuote: false,
   };
 }
 
@@ -4059,73 +4056,47 @@ async function executeTool(
             ruasNaoAtendidas,
           );
 
-          // Antes de deixar qualquer valor sair para o cliente, passa pelo
-          // mesmo portão autoritativo usado no fluxo rápido. Cálculo incerto
-          // NUNCA é liberado automaticamente: exige aprovação humana.
+          if (result.requiresPartnerQuote) {
+            const partner = await ensurePartnerQuotePending(
+              supabaseAdmin,
+              conversation,
+              draft,
+              fullAddress,
+            );
+
+            patch.estimated_delivery_fee =
+              partner.status === "resolved" && partner.fee != null ? Number(partner.fee) : null;
+            patch.freight_notification_status =
+              partner.status === "resolved" ? "sent_by_bot" : "partner_quote_pending";
+            patch.freight_notification_value =
+              partner.status === "resolved" && partner.fee != null ? Number(partner.fee) : null;
+            patch.awaiting_final_confirmation = false;
+
+            await supabaseAdmin
+              .from("order_drafts")
+              .update({
+                ...patch,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("conversation_id", conversation.id);
+
+            if (ctx.flags) ctx.flags.silenced = true;
+            return {
+              result: {
+                status: partner.status === "resolved" ? "delivery_fee_ready" : "partner_quote_pending",
+                delivery_fee: partner.fee ?? null,
+                instruction:
+                  partner.status === "resolved"
+                    ? "A taxa já foi autorizada e enviada pelo backend."
+                    : "Aguardando o operador consultar o motoboy parceiro. Não informe nem estime taxa.",
+              },
+            };
+          }
+
           if (!result.outOfArea && result.fee != null) {
-            const { requestFreightApproval } = await import("@/lib/freight-approval.server");
-            const outcome = await requestFreightApproval(supabaseAdmin, {
-              conversationId: conversation.id,
-              phone: conversation.phone,
-              customerName: draft.customer_name ?? conversation.customer_name ?? null,
-              address: fullAddress,
-              fee: Number(result.fee),
-              distanceKm: result.distanceKm ?? null,
-              requireHuman: Boolean(result.uncertain),
-            });
-            if (outcome.status === "operator_will_send") {
-              draft.estimated_delivery_fee = null;
-              draft.freight_notification_status = "operator_will_send";
-              draft.freight_notification_value = outcome.fee == null ? Number(result.fee) : Number(outcome.fee);
-              patch.estimated_delivery_fee = null;
-              patch.freight_notification_status = "operator_will_send";
-              patch.freight_notification_value = draft.freight_notification_value;
-              if (ctx.flags) ctx.flags.silenced = true;
-              await supabaseAdmin
-                .from("order_drafts")
-                .update({
-                  ...patch,
-                  awaiting_final_confirmation: false,
-                  updated_at: new Date().toISOString(),
-                })
-                .eq("conversation_id", conversation.id);
-              return {
-                result: {
-                  status: "freight_operator_will_send",
-                  instruction: "O operador escolheu informar a taxa. A IA está proibida de enviar valor de frete.",
-                },
-              };
-            }
-            if (outcome.status === "pending") {
-              if (ctx.flags) ctx.flags.silenced = true;
-              return {
-                result: {
-                  status: "freight_waiting_operator_decision",
-                  instruction: "Aguardando o operador escolher quem informará a taxa. Não envie nenhum valor.",
-                },
-              };
-            }
-            if (outcome.status === "failed" || (result.uncertain && outcome.status !== "bot_sent")) {
-              const { requestSilentHumanHandoff } = await import("@/lib/human-handoff.server");
-              await requestSilentHumanHandoff(supabaseAdmin, {
-                conversationId: conversation.id,
-                phone: conversation.phone,
-                customerName: draft.customer_name ?? conversation.customer_name ?? null,
-                reason: "Falha ao confirmar a taxa de entrega com segurança.",
-                severity: "error",
-              });
-              if (ctx.flags) ctx.flags.silenced = true;
-              return {
-                result: {
-                  status: "freight_manual",
-                  message: "Taxa não confirmada com segurança.",
-                },
-              };
-            }
-            if (outcome.fee != null) result.fee = Number(outcome.fee);
-            draft.freight_notification_status = "sent_by_bot";
+            draft.freight_notification_status = "bot_authorized";
             draft.freight_notification_value = Number(result.fee);
-            patch.freight_notification_status = "sent_by_bot";
+            patch.freight_notification_status = "bot_authorized";
             patch.freight_notification_value = Number(result.fee);
           }
           draft.estimated_delivery_fee = result.fee;
@@ -4236,7 +4207,7 @@ async function executeTool(
     // "taxa + pagamento" no mesmo balão e não reformata o valor.
     if (shouldCalculateFreight && draft.estimated_delivery_fee != null && draft.delivery_mode !== "pickup") {
       const ownerStatus = String(draft.freight_notification_status || "");
-      const operatorOwnsFee = ["operator_will_send", "sent_by_operator"].includes(ownerStatus);
+      const operatorOwnsFee = ["partner_quote_pending", "operator_will_send", "sent_by_operator"].includes(ownerStatus);
       const botAlreadyOwnsAndSent = ownerStatus === "sent_by_bot";
 
       if (!operatorOwnsFee && !botAlreadyOwnsAndSent) {
@@ -4516,17 +4487,26 @@ async function executeTool(
           ruasNaoAtendidas,
         );
         if (strictFreight.outOfArea) return { result: { status: "out_of_delivery_area" } };
-        if (strictFreight.fee == null || strictFreight.uncertain) {
-          const { requestSilentHumanHandoff } = await import("@/lib/human-handoff.server");
-          await requestSilentHumanHandoff(supabaseAdmin, {
-            conversationId: conversation.id,
-            phone: conversation.phone,
-            customerName: draft.customer_name ?? conversation.customer_name ?? null,
-            reason: "A taxa de entrega não pôde ser confirmada com segurança no fechamento.",
-            severity: "error",
-          });
+
+        if (strictFreight.requiresPartnerQuote) {
+          await ensurePartnerQuotePending(supabaseAdmin, conversation, draft, fullAddress);
           if (ctx.flags) ctx.flags.silenced = true;
-          return { result: { status: "freight_manual", message: "Taxa não confirmada com segurança." } };
+          return {
+            result: {
+              status: "partner_quote_pending",
+              message: "Aguardando cotação do motoboy parceiro antes do fechamento.",
+            },
+          };
+        }
+
+        if (strictFreight.fee == null || strictFreight.uncertain) {
+          if (ctx.flags) ctx.flags.silenced = true;
+          return {
+            result: {
+              status: "delivery_fee_unavailable",
+              message: "Taxa não confirmada com segurança.",
+            },
+          };
         }
         draft.estimated_delivery_fee = Number(strictFreight.fee);
         draft.estimated_distance_km = strictFreight.distanceKm;
@@ -5402,7 +5382,7 @@ export function enforceApprovedFreight(text: string, draft: Draft): string {
   if (!text) return text;
 
   const ownerStatus = String(draft.freight_notification_status || "");
-  const operatorOwnsFreight = ["operator_will_send", "sent_by_operator"].includes(ownerStatus);
+  const operatorOwnsFreight = ["partner_quote_pending", "operator_will_send", "sent_by_operator"].includes(ownerStatus);
   if (operatorOwnsFreight) {
     const freightRe = /(taxa de entrega|taxa da entrega|frete|entrega custa|valor da entrega)/i;
     const moneyRe = /R\$\s?\d{1,4}(?:[.,]\d{2})?/;
@@ -5539,6 +5519,10 @@ function buildDeliveryInfoText(opts: {
   draft: Draft;
 }): string {
   const { pricingMode, maxRadiusKm, flatFee, draft } = opts;
+
+  if (draft.freight_notification_status === "partner_quote_pending") {
+    return "A taxa deste endereço está em COTAÇÃO COM MOTOBOY PARCEIRO. O cliente já foi avisado que a taxa está sendo verificada. NÃO informe, estime, repita nem invente valor. Aguarde o operador autorizar a taxa no popup interno.";
+  }
 
   if (pricingMode !== "distance") {
     if (draft.estimated_delivery_fee != null) {
@@ -6213,7 +6197,7 @@ async function runConversationalTurn(opts: {
   // mostrando a taxa normalmente.
   let duplicateFeeSafeText = paymentSafeText;
   const customerAskedFeeAgain = /\b(taxa|frete|valor da entrega|quanto.*entrega)\b/i.test(lastUserText);
-  const operatorOwnsFreight = ["operator_will_send", "sent_by_operator"].includes(
+  const operatorOwnsFreight = ["partner_quote_pending", "operator_will_send", "sent_by_operator"].includes(
     String(opts.draft.freight_notification_status || ""),
   );
   if (operatorOwnsFreight && opts.draft.delivery_mode !== "pickup") {
@@ -6233,6 +6217,25 @@ async function runConversationalTurn(opts: {
     aiInstructionsText: opts.aiInstructionsText,
     sendMenuImage: flags.sendMenuImage ?? false,
   });
+
+  if (highRiskSafeText.includes("__NEEDS_HUMAN_KNOWLEDGE__")) {
+    const { requestSilentHumanHandoff } = await import("@/lib/human-handoff.server");
+    await requestSilentHumanHandoff(opts.supabaseAdmin, {
+      conversationId: opts.conversation.id,
+      phone: opts.conversation.phone,
+      customerName: opts.draft.customer_name ?? opts.conversation.customer_name ?? null,
+      reason: `Pergunta fora do conhecimento disponível: ${lastUserText.slice(0, 500)}`,
+      severity: "info",
+    });
+
+    return {
+      finalText: "Só um instante, vou confirmar essa informação para você.",
+      pixBlock,
+      pixKeyLabel,
+      pixKeyMessage,
+      sendMenuImage: false,
+    };
+  }
 
   return {
     finalText: highRiskSafeText,
