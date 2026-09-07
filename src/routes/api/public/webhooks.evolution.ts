@@ -497,7 +497,7 @@ async function guardAgainstOutboundLoop(
         neighborhood:
           "Não consegui identificar seu bairro com segurança. Pode me enviar somente o nome completo do bairro em uma única mensagem, por favor?",
         items:
-          "Sem problema. Posso te ajudar com *cardápio*, *preço* ou *fazer um pedido*. Me diga qual dessas opções você deseja.",
+          "Só preciso confirmar os itens que você escolheu para seguir sem repetir etapas. Se já escolheu, me diga os sabores e quantidades em uma única mensagem.",
         payment:
           "Para continuar, preciso apenas definir a forma de pagamento. Você prefere *Pix* ou *cartão*?",
         name_address:
@@ -1248,6 +1248,91 @@ function isIntermediateItemsConfirmationPrompt(text: string): boolean {
   return asksConfirmation && mentionsItems;
 }
 
+async function recoverItemsFromAssistantConfirmation(
+  supabaseAdmin: any,
+  conversationId: string,
+  assistantText: string,
+  draft: Draft,
+): Promise<boolean> {
+  if (!isIntermediateItemsConfirmationPrompt(assistantText)) return false;
+
+  const normalizedAssistant = normalizeStreet(String(assistantText || ""));
+  if (!normalizedAssistant) return false;
+
+  const { data: products, error } = await supabaseAdmin
+    .from("products")
+    .select("name")
+    .eq("active", true);
+
+  if (error || !products?.length) return false;
+
+  const recovered: DraftItem[] = [];
+  for (const product of products) {
+    const canonicalName = String(product?.name || "").trim();
+    if (!canonicalName) continue;
+
+    const normalizedName = normalizeStreet(canonicalName);
+    const pos = normalizedAssistant.indexOf(normalizedName);
+    if (pos < 0) continue;
+
+    // Procura a quantidade imediatamente antes do nome citado pelo próprio bot.
+    // Exemplos:
+    // "1 unidade da Batata..."
+    // "2 unidades de Costela..."
+    // "1x Strogonoff..."
+    const before = normalizedAssistant.slice(Math.max(0, pos - 80), pos);
+    const qtyMatches = [
+      ...before.matchAll(/(\d{1,2})\s*(?:x|unidade|unidades)?\s*(?:da|de|do)?\s*$/g),
+    ];
+    let quantity = 1;
+    if (qtyMatches.length) {
+      const n = Number(qtyMatches[qtyMatches.length - 1][1]);
+      if (Number.isFinite(n) && n >= 1 && n <= 30) quantity = n;
+    } else {
+      // Se a frase de confirmação não traz número explícito, só recupera como 1
+      // quando ela usa singular ("uma unidade", "um item") para não inventar quantidade.
+      const singularContext = before.slice(-45);
+      if (!/\b(?:uma|um)\s+(?:unidade|item)\b/.test(singularContext)) continue;
+    }
+
+    recovered.push({ product_name: canonicalName, quantity });
+  }
+
+  if (!recovered.length) return false;
+
+  // Mescla com qualquer item já salvo. Nunca apaga item existente.
+  const merged = normalizeDraftItems(draft.items ?? []);
+  for (const item of recovered) {
+    const key = normalizeStreet(item.product_name);
+    const idx = merged.findIndex((old) => normalizeStreet(old.product_name) === key);
+    if (idx >= 0) merged[idx] = { ...merged[idx], quantity: item.quantity };
+    else merged.push(item);
+  }
+
+  draft.items = merged;
+  draft.awaiting_final_confirmation = false;
+
+  const { error: saveError } = await supabaseAdmin
+    .from("order_drafts")
+    .update({
+      items: merged,
+      awaiting_final_confirmation: false,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("conversation_id", conversationId);
+
+  if (saveError) {
+    console.error("[ITEM_CONFIRMATION_RECOVERY] falha ao persistir itens:", saveError);
+    return false;
+  }
+
+  console.info("[ITEM_CONFIRMATION_RECOVERY] itens recuperados da confirmação intermediária", {
+    conversation_id: conversationId,
+    items: recovered,
+  });
+  return true;
+}
+
 function parseAddressFromCustomerTurn(
   userText: string,
   previousAssistantText: string,
@@ -1522,6 +1607,24 @@ async function persistObviousProductMemoryFromTurn(
         if (error) throw new Error(`Falha ao persistir quantidade de cada item: ${error.message}`);
         return;
       }
+    }
+
+    // Caso típico do cardápio em imagem: cliente responde "1 e 8", o atendente
+    // traduz esses números em nomes reais e pergunta a quantidade. Quando o
+    // cliente responde "uma de cada", os nomes estão na fala ANTERIOR DO BOT,
+    // não na fala do cliente. Recupera esses nomes da própria pergunta do bot
+    // e salva no draft, sempre validando contra produtos ATIVOS do banco.
+    const foundInAssistant = candidatesFrom(previousAssistant);
+    if (foundInAssistant.length >= 2) {
+      for (const product of foundInAssistant) upsert(String((product as any).name), qty);
+      draft.items = existing;
+      draft.awaiting_final_confirmation = false;
+      const { error } = await supabaseAdmin
+        .from("order_drafts")
+        .update({ items: existing, awaiting_final_confirmation: false, updated_at: new Date().toISOString() })
+        .eq("conversation_id", conversationId);
+      if (error) throw new Error(`Falha ao persistir "de cada" a partir da fala do atendente: ${error.message}`);
+      return;
     }
   }
 
@@ -2021,7 +2124,7 @@ async function handleDigitalOrderSupportIfNeeded(
 }
 
 
-const HOTBOX_WHATSAPP_FLOW_VERSION = "V16_POST_ORDER_GUARD_20260907";
+const HOTBOX_WHATSAPP_FLOW_VERSION = "V18_ITEM_CONFIRMATION_GUARD_20260907";
 
 type ActiveWhatsappOrder = {
   id: string;
@@ -5614,12 +5717,37 @@ async function runConversationalTurn(opts: {
     !opts.forceNoTools &&
     isSimpleConversationAffirmative(lastUserText) &&
     isIntermediateItemsConfirmationPrompt(previousAssistantText) &&
-    (opts.draft.items ?? []).length > 0 &&
     !opts.draft.awaiting_final_confirmation
   ) {
+    // A confirmação do cliente não pode voltar para a IA antes de garantir que
+    // os itens citados na pergunta anterior estejam persistidos.
+    if (!(opts.draft.items ?? []).length) {
+      await recoverItemsFromAssistantConfirmation(
+        opts.supabaseAdmin,
+        opts.conversation.id,
+        previousAssistantText,
+        opts.draft,
+      );
+    }
+
+    if ((opts.draft.items ?? []).length > 0) {
+      return {
+        silenced: false,
+        finalText: buildContinuityFallback(opts.draft),
+        pixBlock: null,
+        pixKeyLabel: null,
+        pixKeyMessage: null,
+        sendMenuImage: false,
+      };
+    }
+
+    // Se nem a confirmação anterior conseguiu ser validada contra o catálogo
+    // ativo, não joga o cliente para o fallback genérico nem reinicia a venda.
+    // Pede somente a informação necessária para resolver o item.
     return {
       silenced: false,
-      finalText: buildContinuityFallback(opts.draft),
+      finalText:
+        "Entendi. Só preciso confirmar os sabores do seu pedido para não registrar nada errado. Pode me dizer os nomes dos sabores que você escolheu?",
       pixBlock: null,
       pixKeyLabel: null,
       pixKeyMessage: null,
