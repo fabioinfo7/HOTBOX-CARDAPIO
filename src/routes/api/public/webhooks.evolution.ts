@@ -549,8 +549,29 @@ function isCityOnlyInsteadOfNeighborhood(text: string): boolean {
 }
 
 function isGenericPriceRequest(text: string): boolean {
-  const t = normalizeStreet(text);
-  return /^(preco|precos|valor|valores|quanto custa|quanto ta|quanto esta|ta quanto|quanto as batatas|preco por favor|valor por favor)$/.test(t);
+  const t = normalizeStreet(text)
+    .replace(/[.,;:!?]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!t) return false;
+
+  // Não transforma pergunta de frete/taxa, troco ou pagamento em envio de cardápio.
+  if (/\b(taxa|frete|entrega|troco|pagamento|pix|cartao|credito|debito)\b/.test(t)) {
+    return false;
+  }
+
+  // Qualquer consulta comercial genérica de preço/valor deve mostrar a imagem
+  // configurada do cardápio, exatamente como solicitado pela operação.
+  return (
+    /\b(cardapio|menu|preco|precos|valor|valores)\b/.test(t) ||
+    /\bquanto\s+(?:custa|ta|esta|fica)\b/.test(t) ||
+    /\bquanto\s+(?:as|a|os|o)\s+(?:batatas?|produtos?|sabores?)\b/.test(t)
+  );
+}
+
+function shouldSendMenuImageForCustomerRequest(text: string): boolean {
+  return isExplicitMenuRequest(text) || isGenericPriceRequest(text);
 }
 
 function isCompanyKnowledgeQuestion(text: string): boolean {
@@ -2136,7 +2157,7 @@ async function handleDigitalOrderSupportIfNeeded(
 }
 
 
-const HOTBOX_WHATSAPP_FLOW_VERSION = "V20_FRETE_POLICY_STREET_EXCEPTIONS_KNOWLEDGE_GATE_20260907";
+const HOTBOX_WHATSAPP_FLOW_VERSION = "V21_MENU_ALWAYS_RESPOND_20260907";
 
 type ActiveWhatsappOrder = {
   id: string;
@@ -2689,7 +2710,7 @@ ${conversationStageText}
 
 🙏 EDUCAÇÃO OBRIGATÓRIA EM TODA SOLICITAÇÃO: sempre que pedir qualquer dado, confirmação ou esclarecimento ao cliente, use linguagem cordial e inclua "por favor" ou uma construção equivalente realmente educada (ex.: "poderia me informar ..., por favor?"). Nunca dê ordens secas como "informe o endereço", "mande o bairro" ou "diga o número". Ao receber uma informação solicitada, agradeça quando for natural. Depois que um bairro atendido for validado, o BACKEND envia automaticamente a imagem do cardápio com a legenda "Obrigado pela informação! Aqui está nosso cardápio 👇". NÃO pergunte se o cliente quer ver o cardápio.
 
-🧠 NÃO SEJA REPETITIVO: antes de responder, compare sua resposta com as últimas mensagens enviadas no histórico. Se a mesma orientação já foi dada e o cliente insistir, responda de forma mais curta e com palavras diferentes, sem copiar a mensagem anterior. Nunca repita saudação, links, regras ou explicações desnecessariamente. O cardápio em imagem só pode ser enviado novamente quando o cliente pedir explicitamente o cardápio de novo.
+🧠 NÃO SEJA REPETITIVO: antes de responder, compare sua resposta com as últimas mensagens enviadas no histórico. Se a mesma orientação já foi dada e o cliente insistir, responda de forma mais curta e com palavras diferentes, sem copiar a mensagem anterior. Nunca repita saudação, links, regras ou explicações desnecessariamente. EXCEÇÃO: sempre que o cliente pedir cardápio/menu ou fizer uma consulta genérica de preço/valor, o BACKEND reenviará a imagem configurada do cardápio. A IA não deve impedir esse reenvio.
 
 📱 FORMATAÇÃO DAS MENSAGENS — MUITO IMPORTANTE: você está escrevendo no WhatsApp, formate como atendente profissional:\n- Use *asterisco* pra destacar valores, produtos e confirmações (ex: *R$ 45,00*, *pedido confirmado*).\n- Use quebra de linha SIMPLES (sem linha em branco) entre itens de lista. Só use parágrafo separado (linha em branco) quando mudar completamente de assunto — no máximo uma vez por mensagem.\n- Emojis com moderação (🍔 📍 💳 ✅) — 1 a 2 por mensagem, só onde faz sentido.\n- Itens do pedido: uma linha por item, sem espaço entre eles.\n- Mensagem profissional é compacta e direta — evite espaçamentos excessivos.
 
@@ -7148,13 +7169,14 @@ async function handleIncomingMessageUnlocked(
         (similarity(normalizedInputNeighborhood, normalizedMatchedNeighborhood) >= 0.92 &&
           normalizedInputNeighborhood.length <= normalizedMatchedNeighborhood.length + 6);
       if (essentiallyOnlyNeighborhood) {
-        await replyAndLog(
+        return await acceptServedNeighborhoodAndSendMenu(
           supabaseAdmin,
-          conversation.id,
+          conversation,
+          draft,
           phone,
-          "Obrigado pela informação! Em que posso ajudar? Gostaria de ver nosso cardápio?",
+          authoritativeActiveNeighborhood,
+          "active_neighborhood_authoritative",
         );
-        return Response.json({ ok: true, action: "active_neighborhood_authoritative" });
       }
     }
   }
@@ -7391,7 +7413,7 @@ async function handleIncomingMessageUnlocked(
     /gostaria de ver nosso card[aá]pio\?/i.test(recentAssistantWindow);
   const currentTurnWantsMenuAfterServedNeighborhood =
     !!servedNeighborhoodAlreadyValidated && (
-      isExplicitMenuRequest(text) ||
+      shouldSendMenuImageForCustomerRequest(text) ||
       (isPositiveMenuReply(text) && justAcceptedServedNeighborhood)
     );
 
@@ -7401,6 +7423,7 @@ async function handleIncomingMessageUnlocked(
       draft.delivery_mode = "delivery";
       draft.address_neighborhood = servedNeighborhood;
       draft.out_of_delivery_area = false;
+
       await supabaseAdmin
         .from("order_drafts")
         .update({
@@ -7411,7 +7434,20 @@ async function handleIncomingMessageUnlocked(
         })
         .eq("conversation_id", conversation.id);
 
-      const menuResult = await sendMenuImagesOnce(supabaseAdmin, conversation.id, phone, true);
+      // Pedido do cliente por cardápio/preço/valor = SEMPRE reenvia a imagem.
+      // Não usa a trava "already_sent", pois essa trava estava fazendo o webhook
+      // retornar sucesso sem enviar nada e o cliente ficava sem resposta.
+      const customerExplicitlyAsked =
+        shouldSendMenuImageForCustomerRequest(text);
+
+      const menuResult = await sendMenuImagesOnce(
+        supabaseAdmin,
+        conversation.id,
+        phone,
+        customerExplicitlyAsked,
+        customerExplicitlyAsked ? "Aqui está nosso cardápio 👇" : "Obrigado pela informação! Aqui está nosso cardápio 👇",
+      );
+
       if (!menuResult.ok) {
         const { requestSilentHumanHandoff } = await import("@/lib/human-handoff.server");
         await requestSilentHumanHandoff(supabaseAdmin, {
@@ -7421,45 +7457,38 @@ async function handleIncomingMessageUnlocked(
           reason: `Falha confirmada no envio da imagem do cardápio (${menuResult.reason || "erro desconhecido"}).`,
           severity: "error",
         });
-        return Response.json({ ok: true, action: "menu_send_failed_handoff_silent", reason: menuResult.reason });
+        return Response.json({
+          ok: true,
+          action: "menu_send_failed_handoff_silent",
+          reason: menuResult.reason,
+        });
       }
-      return Response.json({ ok: true, action: "served_neighborhood_menu_confirmed", sent: menuResult.sent });
+
+      return Response.json({
+        ok: true,
+        action: customerExplicitlyAsked
+          ? "menu_or_price_request_image_sent"
+          : "served_neighborhood_menu_confirmed",
+        sent: menuResult.sent,
+      });
     }
   }
 
-  // "Preço?", "valores", "quanto as batatas" = intenção válida.
-  // Com bairro já validado, envia o cardápio em imagem uma única vez; sem
-  // bairro, pede somente o bairro e não entra no anti-loop.
-  if (isGenericPriceRequest(text)) {
-    const served = draft.address_neighborhood
-      ? findConfiguredBairroMatch(draft.address_neighborhood, bairrosAtendidos)
-      : null;
-    if (served && draft.out_of_delivery_area !== true) {
-      const menuResult = await sendMenuImagesOnce(supabaseAdmin, conversation.id, phone, false);
-      if (!menuResult.ok) {
-        const { requestSilentHumanHandoff } = await import("@/lib/human-handoff.server");
-        await requestSilentHumanHandoff(supabaseAdmin, {
-          conversationId: conversation.id,
-          phone,
-          customerName: draft.customer_name ?? conversation.customer_name ?? null,
-          reason: `Falha no envio do cardápio solicitado para consulta de preços (${menuResult.reason || "erro"}).`,
-          severity: "error",
-        });
-        return Response.json({ ok: true, action: "price_menu_send_failed_silent_handoff" });
-      }
-      return Response.json({ ok: true, action: "price_list_menu_sent", sent: menuResult.sent });
-    }
-
-    if (!draft.address_neighborhood) {
-      await replyAndLog(
-        supabaseAdmin,
-        conversation.id,
-        phone,
-        "Claro. Para eu te mostrar os valores disponíveis para sua região, me informe seu bairro, por favor.",
-        { systemMessage: true },
-      );
-      return Response.json({ ok: true, action: "price_request_waiting_neighborhood" });
-    }
+  // Se o cliente pedir cardápio/preço/valor ANTES do bairro, não fica em silêncio:
+  // pede somente o bairro. Assim que ele responder um bairro atendido, a imagem
+  // será enviada automaticamente pela regra de aceitação do bairro.
+  if (shouldSendMenuImageForCustomerRequest(text) && !draft.address_neighborhood) {
+    await replyAndLog(
+      supabaseAdmin,
+      conversation.id,
+      phone,
+      "Claro. Para eu te enviar nosso cardápio com os valores, me informe seu bairro, por favor.",
+      { systemMessage: true },
+    );
+    return Response.json({
+      ok: true,
+      action: "menu_or_price_request_waiting_neighborhood",
+    });
   }
 
   // Cidade não é bairro. "Duque de Caxias" nunca pode ser classificado
@@ -7723,23 +7752,14 @@ async function handleIncomingMessageUnlocked(
       // Se está na lista positiva ativa, recupera a conversa imediatamente,
       // mesmo que exista lixo/duplicidade antiga na tabela negativa.
       if (correction && correctedAttended) {
-        draft.address_neighborhood = correctedAttended;
-        draft.out_of_delivery_area = false;
-        await supabaseAdmin
-          .from("order_drafts")
-          .update({
-            address_neighborhood: correctedAttended,
-            out_of_delivery_area: false,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("conversation_id", conversation.id);
-        await replyAndLog(
+        return await acceptServedNeighborhoodAndSendMenu(
           supabaseAdmin,
-          conversation.id,
+          conversation,
+          draft,
           phone,
-          "Obrigado pela informação! Em que posso ajudar? Gostaria de ver nosso cardápio?",
+          correctedAttended,
+          "neighborhood_corrected_to_attended",
         );
-        return Response.json({ ok: true, action: "neighborhood_corrected_to_attended" });
       }
 
       await replyAndLog(
@@ -7839,7 +7859,8 @@ async function handleIncomingMessageUnlocked(
       supabaseAdmin,
       conversation.id,
       phone,
-      isExplicitMenuRequest(text),
+      shouldSendMenuImageForCustomerRequest(text),
+      "Aqui está nosso cardápio 👇",
     );
     if (!menuResult.ok) {
       const { requestSilentHumanHandoff } = await import("@/lib/human-handoff.server");
@@ -8001,7 +8022,7 @@ export async function handleIncomingMessage(
 
       // Só marca como processado depois que o turno terminou com sucesso.
       // Mensagens que chegarem DURANTE a resposta não pertencem a batchIds e
-      // continuam pendentes para o próximo turno — nunca somem silenciosamente.//
+      // continuam pendentes para o próximo turno — nunca somem silenciosamente.
       if (batchIds.length) {
         await (supabaseAdmin as any)
           .from("whatsapp_messages")
