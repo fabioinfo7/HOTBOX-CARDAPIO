@@ -16,6 +16,7 @@ async function sendMenuImagesOnce(
   conversationId: string,
   phone: string,
   force = false,
+  firstCaption = "Cardápio 👇",
 ): Promise<{ ok: boolean; sent: number; reason?: string }> {
   try {
     if (!force) {
@@ -52,7 +53,7 @@ async function sendMenuImagesOnce(
             phone,
             urls[i],
             "image",
-            i === 0 ? "Cardápio 👇" : undefined,
+            i === 0 ? firstCaption : undefined,
           );
           if (result?.ok) {
             delivered = result;
@@ -74,7 +75,7 @@ async function sendMenuImagesOnce(
         conversation_id: conversationId,
         direction: "out",
         sender_type: "bot",
-        body: i === 0 ? "Cardápio 👇" : null,
+        body: i === 0 ? firstCaption : null,
         media_url: urls[i],
         media_type: "image",
         external_id: delivered.externalId ?? null,
@@ -2124,7 +2125,7 @@ async function handleDigitalOrderSupportIfNeeded(
 }
 
 
-const HOTBOX_WHATSAPP_FLOW_VERSION = "V18_ITEM_CONFIRMATION_GUARD_20260907";
+const HOTBOX_WHATSAPP_FLOW_VERSION = "V19_AUTO_MENU_AFTER_NEIGHBORHOOD_20260907";
 
 type ActiveWhatsappOrder = {
   id: string;
@@ -2675,13 +2676,13 @@ ${conversationStageText}
 - Não ofereça adicionais pagos, bordas, molhos ou complementos que não existam como produto/opção estruturada no sistema. Observações como “sem ingrediente” podem ser registradas, mas nunca invente cobrança adicional.
 - Não confirme Pix apenas por foto de comprovante: informe somente que o comprovante foi recebido e será conferido.
 
-🙏 EDUCAÇÃO OBRIGATÓRIA EM TODA SOLICITAÇÃO: sempre que pedir qualquer dado, confirmação ou esclarecimento ao cliente, use linguagem cordial e inclua "por favor" ou uma construção equivalente realmente educada (ex.: "poderia me informar ..., por favor?"). Nunca dê ordens secas como "informe o endereço", "mande o bairro" ou "diga o número". Ao receber uma informação solicitada, agradeça quando for natural. A frase oficial após um bairro atendido é: "Obrigado pela informação! Em que posso ajudar? Gostaria de ver nosso cardápio?".
+🙏 EDUCAÇÃO OBRIGATÓRIA EM TODA SOLICITAÇÃO: sempre que pedir qualquer dado, confirmação ou esclarecimento ao cliente, use linguagem cordial e inclua "por favor" ou uma construção equivalente realmente educada (ex.: "poderia me informar ..., por favor?"). Nunca dê ordens secas como "informe o endereço", "mande o bairro" ou "diga o número". Ao receber uma informação solicitada, agradeça quando for natural. Depois que um bairro atendido for validado, o BACKEND envia automaticamente a imagem do cardápio com a legenda "Obrigado pela informação! Aqui está nosso cardápio 👇". NÃO pergunte se o cliente quer ver o cardápio.
 
 🧠 NÃO SEJA REPETITIVO: antes de responder, compare sua resposta com as últimas mensagens enviadas no histórico. Se a mesma orientação já foi dada e o cliente insistir, responda de forma mais curta e com palavras diferentes, sem copiar a mensagem anterior. Nunca repita saudação, links, regras ou explicações desnecessariamente. O cardápio em imagem só pode ser enviado novamente quando o cliente pedir explicitamente o cardápio de novo.
 
 📱 FORMATAÇÃO DAS MENSAGENS — MUITO IMPORTANTE: você está escrevendo no WhatsApp, formate como atendente profissional:\n- Use *asterisco* pra destacar valores, produtos e confirmações (ex: *R$ 45,00*, *pedido confirmado*).\n- Use quebra de linha SIMPLES (sem linha em branco) entre itens de lista. Só use parágrafo separado (linha em branco) quando mudar completamente de assunto — no máximo uma vez por mensagem.\n- Emojis com moderação (🍔 📍 💳 ✅) — 1 a 2 por mensagem, só onde faz sentido.\n- Itens do pedido: uma linha por item, sem espaço entre eles.\n- Mensagem profissional é compacta e direta — evite espaçamentos excessivos.
 
-📍 INÍCIO DA CONVERSA: para atendimento de ENTREGA, a primeira informação operacional é sempre o BAIRRO. Não pergunte nome, endereço completo, forma de pagamento ou itens antes de validar o bairro. Depois que o bairro for validado como atendido pelo WhatsApp, agradeça e pergunte de forma natural em que pode ajudar. Em conversa já em andamento, nunca repita saudação nem volte a pedir um dado já confirmado.
+📍 INÍCIO DA CONVERSA: para atendimento de ENTREGA, a primeira informação operacional é sempre o BAIRRO. Não pergunte nome, endereço completo, forma de pagamento ou itens antes de validar o bairro. Assim que o bairro for validado como atendido pelo WhatsApp, o BACKEND agradece e envia automaticamente o cardápio em imagem. NÃO pergunte "Gostaria de ver nosso cardápio?". Depois do envio, aguarde a escolha ou pergunta do cliente e continue do ponto correto. Em conversa já em andamento, nunca repita saudação nem volte a pedir um dado já confirmado.
 
 ⚡ COLETA INTELIGENTE E ORGANIZADA — REGRA OBRIGATÓRIA: depois que o cliente escolher os itens, peça NOME DE QUEM VAI RECEBER + ENDEREÇO COMPLETO (rua e número) na mesma mensagem, com quebras de linha e campos visualmente separados. NÃO coloque endereço, nome, pagamento e observações todos no mesmo parágrafo. Assim que o cliente responder, registre imediatamente todo dado válido que ele tiver informado — inclusive pagamento, caso ele informe espontaneamente. Com o endereço completo, primeiro confirme a taxa de entrega pelo fluxo existente. SOMENTE depois da taxa confirmada, verifique o que ainda falta e peça apenas esses campos. Se faltar pagamento, pergunte pagamento de forma organizada. Se qualquer dado já estiver salvo, NUNCA pergunte novamente. A partir do momento em que o nome for conhecido, trate o cliente pelo primeiro nome nas mensagens seguintes de forma natural. Essa regra não altera BAIRRO PRIMEIRO nem a regra existente dos 30 segundos da confirmação da taxa.
 
@@ -3738,6 +3739,71 @@ function pendingSpecialNeighborhoodFromHistory(history: { role: string; content:
   if (t.includes("gramacho") && (t.includes("estacao") || t.includes("centro"))) return "Gramacho";
   if ((t.includes("corte 8") || t.includes("corte oito")) && (t.includes("itatiaia") || t.includes("presidente kennedy"))) return "Corte 8";
   return null;
+}
+
+
+async function acceptServedNeighborhoodAndSendMenu(
+  supabaseAdmin: any,
+  conversation: any,
+  draft: Draft,
+  phone: string,
+  neighborhood: string,
+  action: string,
+): Promise<Response> {
+  draft.delivery_mode = "delivery";
+  draft.address_neighborhood = neighborhood;
+  draft.out_of_delivery_area = false;
+
+  const { error: saveError } = await supabaseAdmin
+    .from("order_drafts")
+    .update({
+      delivery_mode: "delivery",
+      address_neighborhood: neighborhood,
+      out_of_delivery_area: false,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("conversation_id", conversation.id);
+
+  if (saveError) {
+    console.error("[DELIVERY_AREA] falha ao persistir bairro atendido:", saveError);
+  }
+
+  // A imagem é enviada automaticamente assim que o bairro é aceito.
+  // A própria legenda da mídia agradece e anuncia o cardápio, então o cliente
+  // nunca vê "Aqui está o cardápio" se a API de mídia realmente falhar.
+  const menuResult = await sendMenuImagesOnce(
+    supabaseAdmin,
+    conversation.id,
+    phone,
+    false,
+    "Obrigado pela informação! Aqui está nosso cardápio 👇",
+  );
+
+  if (!menuResult.ok) {
+    const { requestSilentHumanHandoff } = await import("@/lib/human-handoff.server");
+    await requestSilentHumanHandoff(supabaseAdmin, {
+      conversationId: conversation.id,
+      phone,
+      customerName: draft.customer_name ?? conversation.customer_name ?? null,
+      reason: `Falha confirmada no envio automático do cardápio após validar o bairro ${neighborhood} (${menuResult.reason || "erro desconhecido"}).`,
+      severity: "error",
+    });
+
+    // O cliente não recebe mensagem técnica de erro/handoff.
+    return Response.json({
+      ok: true,
+      action: `${action}_menu_send_failed_silent_handoff`,
+      reason: menuResult.reason,
+    });
+  }
+
+  return Response.json({
+    ok: true,
+    action,
+    neighborhood,
+    menu_sent: true,
+    sent: menuResult.sent,
+  });
 }
 
 function formatOutOfAreaDirectReply(ifoodLink: string | null, nfoodLink: string | null): string {
@@ -7292,11 +7358,10 @@ async function handleIncomingMessageUnlocked(
   // primeiro identificamos o bairro: atendido => cardápio/preços do WhatsApp;
   // externo => plataformas, sem expor o cardápio/preços do WhatsApp. Retirada é exceção.
 
-  // ============ TRAVA DE BAIRRO ATENDIDO + "SIM" PARA CARDÁPIO ============
-  // Depois que o sistema aceitou um bairro atendido e perguntou
-  // "Gostaria de ver nosso cardápio?", uma resposta curta como "sim" NÃO pode
-  // voltar para a classificação de bairro. Esse era o bug que fazia Vila São Luís
-  // ser aceita e, no turno seguinte, o cliente ser redirecionado para iFood/99Food.
+  // ============ COMPATIBILIDADE COM CONVERSAS ANTIGAS ============
+  // A V19 envia o cardápio automaticamente após validar o bairro. Este trecho
+  // permanece apenas para conversas iniciadas antes do deploy que ainda tenham
+  // recebido a antiga pergunta "Gostaria de ver nosso cardápio?".
   const recentAssistantMessages = history
     .filter((m) => m.role === "assistant")
     .map((m) => String(m.content ?? ""));
@@ -7429,20 +7494,14 @@ async function handleIncomingMessageUnlocked(
       if (pendingSpecial) {
         const pendingActiveMatch = findConfiguredBairroMatch(pendingSpecial, bairrosAtendidos);
         if (pendingActiveMatch) {
-          draft.delivery_mode = "delivery";
-          draft.address_neighborhood = pendingActiveMatch;
-          draft.out_of_delivery_area = false;
-          await supabaseAdmin
-            .from("order_drafts")
-            .update({
-              delivery_mode: "delivery",
-              address_neighborhood: pendingActiveMatch,
-              out_of_delivery_area: false,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("conversation_id", conversation.id);
-          await replyAndLog(supabaseAdmin, conversation.id, phone, "Obrigado pela informação! Em que posso ajudar? Gostaria de ver nosso cardápio?");
-          return Response.json({ ok: true, action: "legacy_special_neighborhood_recovered_as_active" });
+          return await acceptServedNeighborhoodAndSendMenu(
+            supabaseAdmin,
+            conversation,
+            draft,
+            phone,
+            pendingActiveMatch,
+            "legacy_special_neighborhood_recovered_as_active",
+          );
         }
       }
 
@@ -7460,26 +7519,14 @@ async function handleIncomingMessageUnlocked(
           match: directActiveNeighborhoodMatch,
           decision: "WHATSAPP",
         });
-        draft.delivery_mode = "delivery";
-        draft.address_neighborhood = directActiveNeighborhoodMatch;
-        draft.out_of_delivery_area = false;
-        await supabaseAdmin
-          .from("order_drafts")
-          .update({
-            delivery_mode: "delivery",
-            address_neighborhood: directActiveNeighborhoodMatch,
-            out_of_delivery_area: false,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("conversation_id", conversation.id);
-
-        await replyAndLog(
+        return await acceptServedNeighborhoodAndSendMenu(
           supabaseAdmin,
-          conversation.id,
+          conversation,
+          draft,
           phone,
-          "Obrigado pela informação! Em que posso ajudar? Gostaria de ver nosso cardápio?",
+          directActiveNeighborhoodMatch,
+          "active_neighborhood_accepted_directly",
         );
-        return Response.json({ ok: true, action: "active_neighborhood_accepted_directly" });
       }
 
       const pendingNeighborhoodConfirmation = pendingNeighborhoodConfirmationFromHistory(history);
@@ -7550,13 +7597,14 @@ async function handleIncomingMessageUnlocked(
           similarity(normalizeNeighborhoodKey(text), normalizeNeighborhoodKey(attendedMatch)) >= 0.9 &&
           normalizeNeighborhoodKey(text).length <= normalizeNeighborhoodKey(attendedMatch).length + 8;
         if (onlyNeighborhood || awaitingNeighborhood) {
-          await replyAndLog(
+          return await acceptServedNeighborhoodAndSendMenu(
             supabaseAdmin,
-            conversation.id,
+            conversation,
+            draft,
             phone,
-            "Obrigado pela informação! Em que posso ajudar? Gostaria de ver nosso cardápio?",
+            attendedMatch,
+            "neighborhood_accepted",
           );
-          return Response.json({ ok: true, action: "neighborhood_accepted" });
         }
         // Se a mesma mensagem contém bairro + outro pedido/pergunta, segue o
         // fluxo normal da IA já com o bairro travado como atendido.
@@ -7579,13 +7627,14 @@ async function handleIncomingMessageUnlocked(
             })
             .eq("conversation_id", conversation.id);
           if (saveError) console.error("[DELIVERY_AREA] falha ao salvar recuperação autoritativa:", saveError);
-          await replyAndLog(
+          return await acceptServedNeighborhoodAndSendMenu(
             supabaseAdmin,
-            conversation.id,
+            conversation,
+            draft,
             phone,
-            "Obrigado pela informação! Em que posso ajudar? Gostaria de ver nosso cardápio?",
+            authoritativeCandidateMatch,
+            "active_neighborhood_authoritative_recovery",
           );
-          return Response.json({ ok: true, action: "active_neighborhood_authoritative_recovery" });
         }
 
         // Somente um bairro/localidade REALMENTE reconhecido e AUSENTE da lista
