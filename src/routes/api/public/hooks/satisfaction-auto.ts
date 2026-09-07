@@ -1,84 +1,116 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-// Chamado pelo pg_cron a cada minuto. Envia automaticamente o convite de
-// avaliação quando já se passaram pelo menos 10 minutos desde a entrega.
+// Chamado pelo pg_cron a cada minuto.
 //
-// IMPORTANTE: esta consulta prioriza os pedidos entregues mais recentes.
-// A versão anterior ordenava updated_at do mais antigo e limitava em 100;
-// quando existiam mais de 100 pedidos antigos entregues, pedidos novos podiam
-// nunca entrar no lote analisado e a avaliação automática ficava bloqueada.
+// A contagem de 10 minutos NÃO fica no navegador e NÃO depende do painel estar
+// aberto. O banco grava `satisfaction_due_at = delivered_at + 10 minutos`
+// exatamente quando o pedido muda para "delivered". Este hook só processa
+// pedidos cujo horário venceu.
+//
+// Idempotência:
+// - customer_feedback.sent_at impede convite duplicado;
+// - orders.satisfaction_auto_sent_at marca processamento automático concluído;
+// - falha de WhatsApp mantém o pedido pendente para uma próxima tentativa.
 export const Route = createFileRoute("/api/public/hooks/satisfaction-auto")({
   server: {
     handlers: {
       POST: async ({ request }) => {
         const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-        const cutoffISO = new Date(Date.now() - 10 * 60 * 1000).toISOString();
 
         const { data: cfg } = await supabaseAdmin
           .from("store_config")
           .select("app_public_url")
           .maybeSingle();
+
         let origin = String(cfg?.app_public_url ?? "").replace(/\/$/, "");
         if (!origin) {
-          try { origin = new URL(request.url).origin; } catch { origin = ""; }
+          try {
+            origin = new URL(request.url).origin;
+          } catch {
+            origin = "";
+          }
         }
-        if (!origin) return Response.json({ ok: false, error: "app_public_url não configurada" }, { status: 500 });
 
-        // Fluxo normal: delivered_at preenchido. Busca os elegíveis MAIS RECENTES,
-        // evitando que histórico antigo ocupe permanentemente o limite.
-        const { data: normalOrders, error: normalError } = await supabaseAdmin
+        if (!origin) {
+          return Response.json(
+            { ok: false, error: "app_public_url não configurada" },
+            { status: 500 },
+          );
+        }
+
+        const nowISO = new Date().toISOString();
+
+        const { data: dueOrders, error: dueError } = await supabaseAdmin
           .from("orders")
-          .select("id,delivered_at,updated_at,created_at")
+          .select("id,satisfaction_due_at,satisfaction_auto_sent_at,status")
           .eq("status", "delivered")
-          .not("delivered_at", "is", null)
-          .lte("delivered_at", cutoffISO)
-          .order("delivered_at", { ascending: false })
-          .limit(200);
-        if (normalError) return Response.json({ ok: false, error: normalError.message }, { status: 500 });
+          .not("satisfaction_due_at", "is", null)
+          .is("satisfaction_auto_sent_at", null)
+          .lte("satisfaction_due_at", nowISO)
+          .order("satisfaction_due_at", { ascending: true })
+          .limit(100);
 
-        // Compatibilidade com pedidos antigos nos quais delivered_at ficou nulo.
-        const { data: legacyOrders, error: legacyError } = await supabaseAdmin
-          .from("orders")
-          .select("id,delivered_at,updated_at,created_at")
-          .eq("status", "delivered")
-          .is("delivered_at", null)
-          .lte("updated_at", cutoffISO)
-          .order("updated_at", { ascending: false })
-          .limit(50);
-        if (legacyError) return Response.json({ ok: false, error: legacyError.message }, { status: 500 });
+        if (dueError) {
+          return Response.json(
+            { ok: false, error: dueError.message },
+            { status: 500 },
+          );
+        }
 
-        const unique = new Map<string, any>();
-        for (const o of [...(normalOrders ?? []), ...(legacyOrders ?? [])]) unique.set(o.id, o);
-        const candidateIds = [...unique.keys()];
-        if (!candidateIds.length) return Response.json({ ok: true, processed: 0, sent: 0, failed: 0 });
-
-        const { data: feedbackRows } = await supabaseAdmin
-          .from("customer_feedback")
-          .select("order_id,sent_at,submitted_at")
-          .in("order_id", candidateIds);
-        const done = new Set((feedbackRows ?? [])
-          .filter((f: any) => f.order_id && (f.sent_at || f.submitted_at))
-          .map((f: any) => f.order_id));
+        if (!dueOrders?.length) {
+          return Response.json({ ok: true, processed: 0, sent: 0, failed: 0, skipped: 0 });
+        }
 
         const { sendSatisfactionForOrder } = await import("@/lib/satisfaction.server");
 
         let sent = 0;
         let failed = 0;
         let skipped = 0;
-        for (const orderId of candidateIds) {
-          if (done.has(orderId)) { skipped++; continue; }
+
+        for (const order of dueOrders) {
           try {
-            const result = await sendSatisfactionForOrder({ supabaseAdmin, orderId, origin });
-            if (result.ok && !result.alreadySent) sent++;
-            else if (!result.ok) failed++;
-            else skipped++;
+            const result = await sendSatisfactionForOrder({
+              supabaseAdmin,
+              orderId: order.id,
+              origin,
+            });
+
+            if (result.ok) {
+              // Se já havia sido enviado manualmente, também considera resolvido:
+              // não há motivo para tentar de novo.
+              await supabaseAdmin
+                .from("orders")
+                .update({
+                  satisfaction_auto_sent_at: new Date().toISOString(),
+                })
+                .eq("id", order.id)
+                .is("satisfaction_auto_sent_at", null);
+
+              if (result.alreadySent) skipped++;
+              else sent++;
+            } else {
+              failed++;
+              console.error("[satisfaction-auto] envio falhou", {
+                orderId: order.id,
+                error: result.error,
+              });
+            }
           } catch (err) {
             failed++;
-            console.error("[satisfaction-auto] erro", { orderId, err });
+            console.error("[satisfaction-auto] erro inesperado", {
+              orderId: order.id,
+              err,
+            });
           }
         }
 
-        return Response.json({ ok: true, processed: candidateIds.length, sent, failed, skipped });
+        return Response.json({
+          ok: true,
+          processed: dueOrders.length,
+          sent,
+          failed,
+          skipped,
+        });
       },
     },
   },
