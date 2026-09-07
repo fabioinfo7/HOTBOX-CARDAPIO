@@ -582,6 +582,8 @@ async function resetDraftDeterministically(supabaseAdmin: any, conversationId: s
     freight_notification_value: null,
     freight_notification_address_key: null,
     freight_notification_at: null,
+    coupon_code: null,
+    coupon_discount: 0,
     stage: "collecting",
     updated_at: new Date().toISOString(),
   };
@@ -918,6 +920,8 @@ type Draft = {
   freight_notification_value?: number | null;
   freight_notification_address_key?: string | null;
   freight_notification_at?: string | null;
+  coupon_code?: string | null;
+  coupon_discount?: number | null;
 };
 
 // Se o rascunho ficou parado por muito tempo (cliente sumiu, teste antigo,
@@ -959,6 +963,8 @@ async function loadOrCreateDraft(supabaseAdmin: any, conversationId: string): Pr
         payment_method: null,
         card_type: null,
         payment_timing: null,
+        coupon_code: null,
+        coupon_discount: 0,
         change_for: null,
         notes: null,
         estimated_delivery_fee: null,
@@ -1585,10 +1591,163 @@ function enforceNaturalSalesProgression(finalText: string, userText: string, dra
   return "Perfeito! Pode me dizer o que você gostaria de pedir e a quantidade de cada item, por favor?";
 }
 
+
+function extractCouponCandidateFromText(text: string): string | null {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+
+  const explicit = raw.match(
+    /(?:cupom|c[oó]digo)(?:\s+de\s+desconto)?(?:\s+[ée])?\s*[:#-]?\s*([A-Za-z0-9][A-Za-z0-9_-]{2,39})/i,
+  );
+  if (explicit?.[1]) return explicit[1].trim().toUpperCase();
+
+  // Também aceita uma mensagem composta apenas pelo código, sem enumerar
+  // cupons existentes. A confirmação real continua sendo feita no banco.
+  if (/^[A-Za-z0-9][A-Za-z0-9_-]{2,39}$/.test(raw)) return raw.toUpperCase();
+
+  return null;
+}
+
+async function buildCouponCartForDraft(
+  supabaseAdmin: any,
+  d: Draft,
+): Promise<{
+  subtotal: number;
+  cart: Array<{
+    product_id: string;
+    product_name: string;
+    qty: number;
+    unit_price: number;
+    is_promotion_price: boolean;
+  }>;
+  unmatched: string[];
+}> {
+  const { data: products, error } = await supabaseAdmin
+    .from("products")
+    .select("id,name,sale_price,promotion_active,promotion_price,promotion_type,promotion_start_at,promotion_end_at,promotion_days_of_week,promotion_time_start,promotion_time_end,promotion_label")
+    .eq("active", true);
+
+  if (error) throw new Error(`Falha ao carregar catálogo para validar cupom: ${error.message}`);
+
+  const productList = products ?? [];
+  const { findProductMatch } = await import("@/lib/product-match.server");
+  const unmatched: string[] = [];
+  const cart = (d.items ?? []).map((it) => {
+    const match = findProductMatch(productList, it.product_name);
+    if (!match) unmatched.push(it.product_name);
+    const pricing = match ? getEffectivePrice(match) : { price: 0, isPromotion: false };
+    return {
+      product_id: match?.id ? String(match.id) : "",
+      product_name: match?.name ?? it.product_name,
+      qty: Math.max(1, Math.round(Number(it.quantity) || 1)),
+      unit_price: Number(pricing.price || 0),
+      is_promotion_price: Boolean(pricing.isPromotion),
+    };
+  });
+
+  return {
+    subtotal: cart.reduce((sum, it) => sum + it.unit_price * it.qty, 0),
+    cart,
+    unmatched,
+  };
+}
+
+async function validateCouponForDraft(
+  supabaseAdmin: any,
+  d: Draft,
+  customerPhone: string,
+  code: string,
+): Promise<
+  | { ok: true; code: string; discount: number; subtotal: number }
+  | { ok: false; reason: string; subtotal: number }
+> {
+  const normalizedCode = String(code || "").trim().toUpperCase();
+  if (!normalizedCode) return { ok: false, reason: "Cupom inválido.", subtotal: 0 };
+
+  const priced = await buildCouponCartForDraft(supabaseAdmin, d);
+  if (priced.unmatched.length) {
+    return {
+      ok: false,
+      reason: "Ainda preciso confirmar os itens do pedido antes de validar o cupom.",
+      subtotal: priced.subtotal,
+    };
+  }
+  if (!priced.cart.length || priced.subtotal <= 0) {
+    return {
+      ok: false,
+      reason: "Primeiro escolha os itens do pedido para eu validar o cupom.",
+      subtotal: priced.subtotal,
+    };
+  }
+
+  const { data, error } = await supabaseAdmin.rpc("validate_coupon_public", {
+    p_code: normalizedCode,
+    p_subtotal: priced.subtotal,
+    p_customer_phone: String(customerPhone || "").replace(/\D/g, ""),
+    p_cart: priced.cart,
+  });
+
+  if (error) {
+    console.error("[coupon] validate_coupon_public failed:", error);
+    return { ok: false, reason: "Não consegui validar esse cupom agora.", subtotal: priced.subtotal };
+  }
+
+  if (!data?.ok) {
+    return {
+      ok: false,
+      reason: String(data?.reason || "Cupom inválido."),
+      subtotal: priced.subtotal,
+    };
+  }
+
+  return {
+    ok: true,
+    code: String(data.code || normalizedCode).toUpperCase(),
+    discount: Math.max(0, Number(data.discount || 0)),
+    subtotal: priced.subtotal,
+  };
+}
+
+async function persistCouponOnDraft(
+  supabaseAdmin: any,
+  conversationId: string,
+  d: Draft,
+  code: string | null,
+  discount: number,
+) {
+  d.coupon_code = code;
+  d.coupon_discount = Math.max(0, Number(discount || 0));
+  d.awaiting_final_confirmation = false;
+
+  const { error } = await supabaseAdmin
+    .from("order_drafts")
+    .update({
+      coupon_code: code,
+      coupon_discount: d.coupon_discount,
+      awaiting_final_confirmation: false,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("conversation_id", conversationId);
+
+  if (error) throw new Error(`Falha ao salvar cupom no rascunho: ${error.message}`);
+}
+
 async function buildFinalConfirmationSummary(
   supabaseAdmin: any,
   d: Draft,
-): Promise<{ text: string; subtotal: number; deliveryFee: number | null; total: number | null; unmatched: string[]; freightInvalid: boolean }> {
+  customerPhone = "",
+  conversationId?: string,
+): Promise<{
+  text: string;
+  subtotal: number;
+  deliveryFee: number | null;
+  couponCode: string | null;
+  couponDiscount: number;
+  couponInvalidReason: string | null;
+  total: number | null;
+  unmatched: string[];
+  freightInvalid: boolean;
+}> {
   const { data: products } = await supabaseAdmin
     .from("products")
     .select("id,name,sale_price,promotion_active,promotion_price,promotion_type,promotion_start_at,promotion_end_at,promotion_days_of_week,promotion_time_start,promotion_time_end,promotion_label")
@@ -1620,7 +1779,46 @@ async function buildFinalConfirmationSummary(
   // não transforma null em 0, não usa fallback e não permite resumo/total sem
   // uma taxa realmente confirmada. Retirada continua com taxa 0.
   const deliveryFee = freightInvalid ? null : rawDeliveryFee;
-  const total = deliveryFee == null ? null : subtotal + deliveryFee;
+
+  let couponCode = d.coupon_code ? String(d.coupon_code).trim().toUpperCase() : null;
+  let couponDiscount = Math.max(0, Number(d.coupon_discount || 0));
+  let couponInvalidReason: string | null = null;
+
+  // Revalida SEMPRE o cupom com o telefone e o carrinho atuais. Assim mudança
+  // de itens, promoção, pedido mínimo, limite por telefone, validade e primeira
+  // compra nunca ficam usando um desconto antigo.
+  if (couponCode) {
+    const quote = await validateCouponForDraft(supabaseAdmin, d, customerPhone, couponCode);
+    if (quote.ok) {
+      couponCode = quote.code;
+      couponDiscount = Math.min(subtotal, quote.discount);
+      d.coupon_code = couponCode;
+      d.coupon_discount = couponDiscount;
+    } else {
+      couponInvalidReason = 'reason' in quote ? quote.reason : 'Cupom inválido.';
+      couponCode = null;
+      couponDiscount = 0;
+      d.coupon_code = null;
+      d.coupon_discount = 0;
+    }
+
+    if (conversationId) {
+      await supabaseAdmin
+        .from("order_drafts")
+        .update({
+          coupon_code: couponCode,
+          coupon_discount: couponDiscount,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("conversation_id", conversationId);
+    }
+  }
+
+  const total =
+    deliveryFee == null
+      ? null
+      : Math.max(0, subtotal - couponDiscount) + deliveryFee;
+
   const itemsText = pricedItems
     .map((it) => `- ${it.quantity}x ${it.name}${it.notes ? ` (${it.notes})` : ""} — ${brl(it.price * it.quantity)}`)
     .join("\n");
@@ -1642,11 +1840,27 @@ async function buildFinalConfirmationSummary(
     `*Nome:* ${d.customer_name ?? "—"}\n` +
     (d.delivery_mode === "delivery" ? `*Endereço:* ${addressText || "—"}\n` : "") +
     `*Itens:*\n${itemsText || "—"}\n` +
+    `*Subtotal:* ${brl(subtotal)}\n` +
+    (couponCode && couponDiscount > 0
+      ? `*Cupom:* ${couponCode}\n*Desconto:* -${brl(couponDiscount)}\n`
+      : couponInvalidReason
+        ? `*Cupom não aplicado:* ${couponInvalidReason}\n`
+        : "") +
     `*Taxa de entrega:* ${deliveryFee == null ? "aguardando confirmação" : brl(deliveryFee)}\n` +
     `*Forma de pagamento:* ${d.payment_method === "pix" ? "Pix" : d.payment_method === "card" ? "Cartão" : "—"}\n` +
     `*Total a pagar:* ${total == null ? "aguardando confirmação da entrega" : brl(total)}\n\n` +
     `Está tudo certo? Posso fechar o pedido?`;
-  return { text, subtotal, deliveryFee, total, unmatched, freightInvalid };
+  return {
+    text,
+    subtotal,
+    deliveryFee,
+    couponCode,
+    couponDiscount,
+    couponInvalidReason,
+    total,
+    unmatched,
+    freightInvalid,
+  };
 }
 
 
@@ -1940,11 +2154,13 @@ async function handlePostOrderGuard(
         return Response.json({ ok: true, action: "active_order_cancelled", order_id: activeOrder.id });
       } catch (err: any) {
         console.error("[post-order] falha ao cancelar pedido ativo:", err);
-        await createHumanHandoff(supabaseAdmin, {
+        const { requestSilentHumanHandoff } = await import("@/lib/human-handoff.server");
+        await requestSilentHumanHandoff(supabaseAdmin, {
           conversationId: conversation.id,
-          reason: "Falha ao cancelar pedido ativo solicitado pelo cliente",
-          details: err?.message || String(err),
-          priority: "high",
+          phone,
+          customerName: activeOrder.customer_name ?? conversation.customer_name ?? null,
+          reason: `Falha ao cancelar pedido ativo solicitado pelo cliente: ${err?.message || String(err)}`,
+          severity: "error",
         });
         return Response.json({ ok: true, action: "active_order_cancel_handoff" });
       }
@@ -2367,6 +2583,8 @@ ${conversationStageText}
 ⚡ COLETA INTELIGENTE E ORGANIZADA — REGRA OBRIGATÓRIA: depois que o cliente escolher os itens, peça NOME DE QUEM VAI RECEBER + ENDEREÇO COMPLETO (rua e número) na mesma mensagem, com quebras de linha e campos visualmente separados. NÃO coloque endereço, nome, pagamento e observações todos no mesmo parágrafo. Assim que o cliente responder, registre imediatamente todo dado válido que ele tiver informado — inclusive pagamento, caso ele informe espontaneamente. Com o endereço completo, primeiro confirme a taxa de entrega pelo fluxo existente. SOMENTE depois da taxa confirmada, verifique o que ainda falta e peça apenas esses campos. Se faltar pagamento, pergunte pagamento de forma organizada. Se qualquer dado já estiver salvo, NUNCA pergunte novamente. A partir do momento em que o nome for conhecido, trate o cliente pelo primeiro nome nas mensagens seguintes de forma natural. Essa regra não altera BAIRRO PRIMEIRO nem a regra existente dos 30 segundos da confirmação da taxa.
 
 🚫 ZERO LOOP DE DADOS JÁ INFORMADOS — REGRA INVIOLÁVEL: endereço, nome, pagamento, bairro, itens, quantidade, taxa e qualquer outro dado presente em "O QUE JÁ SEI DO PEDIDO" são fatos persistidos e NUNCA podem ser solicitados novamente, salvo se o próprio cliente disser que deseja corrigir/alterar aquele dado. Antes de fazer qualquer pergunta, confira os campos já preenchidos. Se uma resposta trouxer várias informações de uma vez, absorva todas na mesma rodada. Se faltar apenas UM campo, peça só esse campo. Se não faltar nenhum, avance imediatamente. Nunca reinicie uma sequência de perguntas porque o cliente respondeu em formato diferente do esperado.
+
+🎟️ CUPONS — REGRA ABSOLUTA: se o cliente informar um cupom/código de desconto, NÃO diga que é válido, inválido, percentual, valor ou regras por conta própria. O backend valida o código usando o telefone do WhatsApp, carrinho atual e as regras reais do cadastro (validade, uso total, limite por cliente, primeira compra, pedido mínimo, produto aplicável e promoções). Quando houver cupom válido no rascunho, considere o desconto já oficial e não recalcule. Nunca invente cupom ou desconto.
 
 🧱 PÓS-PEDIDO — REGRA ABSOLUTA: se houver pedido ATIVO/CONFIRMADO do cliente, NÃO reinicie coleta de produtos, nome, endereço, taxa ou pagamento por causa de mensagens como "me avisa quando sair", "já fiz o pedido", "não", "sim", "moro numa avenida", "ok" ou perguntas sobre andamento. Trate essas mensagens como contexto do pedido já criado. Só comece um NOVO pedido quando o cliente pedir explicitamente "novo pedido", "outro pedido" ou equivalente. Se pedir cancelamento do pedido ativo, use o fluxo de cancelamento com confirmação. Se pedir alteração de item do pedido ativo, use as ferramentas de atualização de pedido ativo. Nunca volte silenciosamente para um rascunho vazio depois de confirmar uma venda.
 
@@ -3476,6 +3694,8 @@ async function executeTool(
       payment_method: draft.payment_method ?? null,
       notes: draft.notes ?? null,
       estimated_delivery_fee: draft.estimated_delivery_fee ?? null,
+      coupon_code: draft.coupon_code ?? null,
+      coupon_discount: draft.coupon_discount ?? 0,
     });
     // Guarda o endereço ANTES de aplicar o patch, pra comparar com o que
     // realmente for diferente depois. Isso é essencial: a IA às vezes reenvia
@@ -3783,6 +4003,8 @@ async function executeTool(
       address_reference: draft.address_reference ?? null, items: draft.items ?? [],
       payment_method: draft.payment_method ?? null, notes: draft.notes ?? null,
       estimated_delivery_fee: draft.estimated_delivery_fee ?? null,
+      coupon_code: draft.coupon_code ?? null,
+      coupon_discount: draft.coupon_discount ?? 0,
     });
     if (confirmationStateAfter !== confirmationStateBefore) {
       patch.awaiting_final_confirmation = false;
@@ -3818,7 +4040,7 @@ async function executeTool(
           Boolean(draft.address_street && draft.address_number && draft.address_neighborhood && draft.estimated_delivery_fee != null));
 
       if (drinkOfferAnswered && structurallyComplete) {
-        const finalSummary = await buildFinalConfirmationSummary(supabaseAdmin, draft);
+        const finalSummary = await buildFinalConfirmationSummary(supabaseAdmin, draft, conversation.phone, conversation.id);
         if (!finalSummary.unmatched.length) {
           draft.awaiting_final_confirmation = true;
           await supabaseAdmin
@@ -4047,7 +4269,7 @@ async function executeTool(
           },
         };
       }
-      const finalSummary = await buildFinalConfirmationSummary(supabaseAdmin, draft);
+      const finalSummary = await buildFinalConfirmationSummary(supabaseAdmin, draft, conversation.phone, conversation.id);
 
       if (finalSummary.freightInvalid) {
         // Nunca envia resumo com taxa 0/ausente e nunca entra em
@@ -4315,7 +4537,45 @@ async function executeTool(
     }
 
     const delivery_fee = resolvedDeliveryFee;
-    const total = subtotal + delivery_fee;
+
+    // Revalida o cupom imediatamente antes de criar o pedido. O valor salvo no
+    // rascunho é apenas um snapshot de UX; a autorização financeira vem deste
+    // novo quote com telefone + carrinho atual.
+    let couponCode: string | null = draft.coupon_code
+      ? String(draft.coupon_code).trim().toUpperCase()
+      : null;
+    let couponDiscount = 0;
+
+    if (couponCode) {
+      const quote = await validateCouponForDraft(
+        supabaseAdmin,
+        draft,
+        conversation.phone,
+        couponCode,
+      );
+      if (!quote.ok) {
+        await persistCouponOnDraft(supabaseAdmin, conversation.id, draft, null, 0);
+        return {
+          result: {
+            status: "coupon_revalidation_failed",
+            reason: 'reason' in quote ? quote.reason : 'Cupom inválido.',
+            instruction:
+              "O cupom deixou de ser válido para o pedido atual. Informe o motivo ao cliente e gere um novo resumo sem o desconto.",
+          },
+        };
+      }
+      couponCode = quote.code;
+      couponDiscount = Math.min(subtotal, Number(quote.discount || 0));
+      await persistCouponOnDraft(
+        supabaseAdmin,
+        conversation.id,
+        draft,
+        couponCode,
+        couponDiscount,
+      );
+    }
+
+    const total = Math.max(0, subtotal - couponDiscount) + delivery_fee;
 
     const changeForValue: number | null = null;
 
@@ -4351,10 +4611,12 @@ async function executeTool(
       !Number.isFinite(subtotal) ||
       !Number.isFinite(delivery_fee) ||
       !Number.isFinite(total) ||
-      total !== subtotal + delivery_fee
+      Math.abs(total - (Math.max(0, subtotal - couponDiscount) + delivery_fee)) > 0.009
     ) {
       console.error("[FINALIZE_ORDER] invariantes financeiros inválidos", {
         subtotal,
+        coupon_code: couponCode,
+        coupon_discount: couponDiscount,
         delivery_fee,
         total,
       });
@@ -4386,6 +4648,8 @@ async function executeTool(
       change_for: null,
       pix_code: draft.payment_method === "pix" ? cfg?.pix_copia_cola || cfg?.pix_key || null : null,
       subtotal,
+      coupon_code: couponCode,
+      coupon_discount: couponDiscount,
       delivery_fee,
       total,
       delivery_distance_km: draft.estimated_distance_km ?? null,
@@ -4408,6 +4672,20 @@ async function executeTool(
     // Compatibilidade durante implantação: se a migration ainda não foi
     // aplicada, usa o fluxo antigo com rollback compensatório dos itens.
     if (atomicError && /create_whatsapp_order_atomic|PGRST202|schema cache/i.test(String(atomicError.message ?? atomicError.code))) {
+      // Cupom não pode cair no caminho legado: o resgate precisa acontecer na
+      // MESMA transação do pedido para respeitar limite por cliente/uso total.
+      // Se a migration V17 ainda não estiver aplicada, bloqueia o fechamento
+      // em vez de conceder desconto sem registrar o resgate.
+      if (couponCode && couponDiscount > 0) {
+        console.error("[coupon] create_whatsapp_order_atomic desatualizada; fechamento com cupom bloqueado");
+        return {
+          result: {
+            status: "coupon_atomic_migration_required",
+            detail: "A migration V17 de cupom WhatsApp ainda não está ativa no banco.",
+          },
+        };
+      }
+
       const { data: legacyOrder, error: legacyError } = await supabaseAdmin
         .from("orders")
         .insert(orderPayload)
@@ -4440,28 +4718,35 @@ async function executeTool(
     if (order?.id) {
       const { data: persistedOrder, error: persistedOrderError } = await supabaseAdmin
         .from("orders")
-        .select("id,subtotal,delivery_fee,total")
+        .select("id,subtotal,delivery_fee,coupon_code,coupon_discount,total")
         .eq("id", order.id)
         .maybeSingle();
 
       const persistedSubtotal = Number(persistedOrder?.subtotal);
       const persistedFee = Number(persistedOrder?.delivery_fee);
+      const persistedDiscount = Number(persistedOrder?.coupon_discount || 0);
       const persistedTotal = Number(persistedOrder?.total);
+      const persistedCouponCode = persistedOrder?.coupon_code
+        ? String(persistedOrder.coupon_code).toUpperCase()
+        : null;
 
       const persistedInvalid =
         persistedOrderError ||
         !persistedOrder ||
         !Number.isFinite(persistedSubtotal) ||
         !Number.isFinite(persistedFee) ||
+        !Number.isFinite(persistedDiscount) ||
         !Number.isFinite(persistedTotal) ||
         Math.abs(persistedSubtotal - subtotal) > 0.009 ||
         Math.abs(persistedFee - delivery_fee) > 0.009 ||
+        Math.abs(persistedDiscount - couponDiscount) > 0.009 ||
+        persistedCouponCode !== (couponCode ? couponCode.toUpperCase() : null) ||
         Math.abs(persistedTotal - total) > 0.009;
 
       if (persistedInvalid) {
         console.error("[FINALIZE_ORDER] divergência financeira após persistência", {
           order_id: order.id,
-          expected: { subtotal, delivery_fee, total },
+          expected: { subtotal, coupon_code: couponCode, coupon_discount: couponDiscount, delivery_fee, total },
           persisted: persistedOrder,
           error: persistedOrderError?.message ?? null,
         });
@@ -6130,6 +6415,94 @@ async function handleIncomingMessageUnlocked(
   const draft = await loadOrCreateDraft(supabaseAdmin, conversation.id);
   const lastOrderText = await loadLastOrderText(supabaseAdmin, phone);
   const lastAddressText = await loadLastAddressText(supabaseAdmin, phone);
+
+  // ============ CUPOM INFORMADO NO CHAT ============
+  // O código é capturado de forma determinística e a validação usa EXATAMENTE
+  // as mesmas regras do sistema (telefone, validade, limite global/cliente,
+  // primeira compra, pedido mínimo, produto aplicável e acúmulo com promoção).
+  // A IA nunca decide se um cupom é válido nem calcula o desconto.
+  const couponCandidate = extractCouponCandidateFromText(text);
+  if (couponCandidate) {
+    // Primeiro confirma que o código realmente existe sem enumerar outros cupons.
+    const { data: couponRow } = await supabaseAdmin
+      .from("coupons")
+      .select("code")
+      .ilike("code", couponCandidate)
+      .limit(1)
+      .maybeSingle();
+
+    const looksExplicitlyLikeCoupon =
+      /\b(?:cupom|c[oó]digo)\b/i.test(String(text || "")) || Boolean(couponRow);
+
+    if (looksExplicitlyLikeCoupon) {
+      const normalizedCode = String(couponRow?.code || couponCandidate).trim().toUpperCase();
+
+      if (!(draft.items ?? []).length) {
+        await persistCouponOnDraft(supabaseAdmin, conversation.id, draft, normalizedCode, 0);
+
+        // Se a mensagem era só o cupom, responde e segue o funil. Se ela também
+        // contém intenção de produto, apenas salva e deixa a mesma mensagem ser
+        // interpretada normalmente para não perder "quero costela + cupom X".
+        const couponOnly =
+          String(text || "")
+            .replace(/(?:cupom|c[oó]digo)(?:\s+de\s+desconto)?(?:\s+[ée])?\s*[:#-]?\s*/i, "")
+            .replace(normalizedCode, "")
+            .replace(/[.,;:!?-]+/g, " ")
+            .trim().length === 0;
+
+        if (couponOnly) {
+          await replyAndLog(
+            supabaseAdmin,
+            conversation.id,
+            phone,
+            `Cupom *${normalizedCode}* anotado. Assim que os itens do pedido estiverem definidos, vou validar automaticamente pelas regras do cupom e pelo seu WhatsApp.`,
+            { systemMessage: true },
+          );
+          return Response.json({ ok: true, action: "coupon_saved_pending_cart", coupon_code: normalizedCode });
+        }
+      } else {
+        const quote = await validateCouponForDraft(supabaseAdmin, draft, phone, normalizedCode);
+
+        if (quote.ok) {
+          await persistCouponOnDraft(
+            supabaseAdmin,
+            conversation.id,
+            draft,
+            quote.code,
+            quote.discount,
+          );
+
+          await replyAndLog(
+            supabaseAdmin,
+            conversation.id,
+            phone,
+            `Cupom *${quote.code}* validado ✅ Desconto de *${brl(quote.discount)}* será aplicado ao pedido.\\n\\n${buildContinuityFallback(draft)}`,
+            { systemMessage: true },
+          );
+          return Response.json({
+            ok: true,
+            action: "coupon_applied_chat",
+            coupon_code: quote.code,
+            discount: quote.discount,
+          });
+        }
+
+        await persistCouponOnDraft(supabaseAdmin, conversation.id, draft, null, 0);
+        await replyAndLog(
+          supabaseAdmin,
+          conversation.id,
+          phone,
+          `Esse cupom não pôde ser aplicado: *${"reason" in quote ? quote.reason : "Cupom inválido."}*\\n\\n${buildContinuityFallback(draft)}`,
+          { systemMessage: true },
+        );
+        return Response.json({
+          ok: true,
+          action: "coupon_rejected_chat",
+          reason: 'reason' in quote ? quote.reason : 'Cupom inválido.',
+        });
+      }
+    }
+  }
 
   // carrega instruções ativas da IA — globais + as do dia de hoje (fuso Brasília)
   // resiliente: se a tabela ainda não existir no banco, ignora e continua
