@@ -51,9 +51,16 @@ export function normalizeWhatsappStreetKey(value: string | null | undefined) {
 
 export function normalizeWhatsappNeighborhoodKey(value: string | null | undefined) {
   return normalizeBase(value)
+    .replace(/^bairro\s+/, "")
+    .replace(/^doutor\s+/, "dr ")
+    .replace(/^laureano$/, "dr laureano")
     .replace(/\bjardim\b/g, "jd")
     .replace(/\bparque\b/g, "pq")
     .replace(/\bvila\b/g, "vl")
+    .replace(/\bluiz\b/g, "luis")
+    .replace(/\bsao luiz\b/g, "sao luis")
+    .replace(/\beliseos\b/g, "elisios")
+    .replace(/\bcorte oito\b/g, "corte 8")
     .replace(/\bsao\b/g, "sao")
     .replace(/\s+/g, " ")
     .trim();
@@ -68,8 +75,21 @@ function neighborhoodEquivalent(a: string | null | undefined, b: string | null |
   const kb = normalizeWhatsappNeighborhoodKey(b);
   if (!ka || !kb) return false;
   if (ka === kb) return true;
-  // Permite "Laureano" casar com "Doutor Laureano" sem abrir demais a comparação.
-  return ka.length >= 5 && kb.length >= 5 && (ka.endsWith(kb) || kb.endsWith(ka));
+
+  const aliases = (k: string) => {
+    const set = new Set<string>([k]);
+    const stripped = k.replace(/^(jd|pq|vl)\s+/, "");
+    if (stripped.length >= 4) set.add(stripped);
+    if (k.startsWith("dr ")) set.add(k.replace(/^dr\s+/, ""));
+    if (k === "jd gramacho") set.add("gramacho");
+    return set;
+  };
+
+  const aa = aliases(ka);
+  const bb = aliases(kb);
+  for (const x of aa) if (bb.has(x)) return true;
+
+  return false;
 }
 
 export async function resolveWhatsappDeliveryPolicy(
