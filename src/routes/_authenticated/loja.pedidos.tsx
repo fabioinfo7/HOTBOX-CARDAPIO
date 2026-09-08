@@ -39,7 +39,7 @@ const SOURCE_OPTIONS = [
   { value: "whatsapp", label: "WhatsApp" },
   { value: "ifood", label: "iFood" },
   { value: "99food", label: "99Food" },
-  { value: "site", label: "Site" },
+  { value: "site", label: "Cardápio Hotbox" },
 ];
 
 const PAYMENT_OPTIONS = [
@@ -264,9 +264,13 @@ function OrdersHistoryPage() {
                     <span className="inline-flex items-center gap-1 rounded-full bg-yellow-100 px-2 py-0.5 text-[11px] font-bold text-yellow-800">
                       <UtensilsCrossed className="size-3" /> 99Food
                     </span>
+                  ) : r.source === "site" ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-orange-50 px-2 py-0.5 text-[11px] font-bold text-orange-700">
+                      <Globe className="size-3" /> Cardápio Hotbox
+                    </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold text-muted-foreground">
-                      <Globe className="size-3" /> Site
+                      <Globe className="size-3" /> {r.source || "Outro"}
                     </span>
                   )}
                 </td>
