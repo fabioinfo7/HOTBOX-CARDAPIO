@@ -577,6 +577,11 @@ function OrderDetail() {
                   <UtensilsCrossed className="size-3" /> 99Food
                 </span>
               )}
+              {order.source === "site" && (
+                <span className="flex items-center gap-1 rounded-full bg-orange-400/20 px-1.5 py-0.5 text-[10px] font-bold text-orange-300">
+                  <Store className="size-3" /> Cardápio Hotbox
+                </span>
+              )}
               Pedido: {orderDisplayRef(order)} · {formatDateTime(order.created_at)}
             </span>
             <StatusBadge
