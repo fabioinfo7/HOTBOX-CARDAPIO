@@ -436,7 +436,7 @@ export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallme
       </div>
     );
   }
-
+//
   return (
     <div className="space-y-3">
       {environment === "test" && (
