@@ -140,16 +140,62 @@ export type IfoodOrderPayload = {
   total?: { orderAmount?: number; deliveryFee?: number };
 };
 
-/** Cria o pedido no banco a partir de um payload da iFood, com mapeamento de cardápio. Idempotente. */
-export async function createOrderFromIfoodPayload(supabaseAdmin: any, payload: IfoodOrderPayload) {
-  if (!payload?.id) return { ignored: "no_order_id" as const };
+/** Cria o pedido no banco a partir de um payload REAL de pedido da iFood.
+ *
+ * Blindagens importantes:
+ * - eventos (KEEPALIVE/PLC/CAN/etc.) nunca podem ser tratados como pedido;
+ * - deduplicação por external_id;
+ * - claim transacional no banco evita corrida webhook + polling simultâneos.
+ */
+export async function createOrderFromIfoodPayload(supabaseAdmin: any, payload: IfoodOrderPayload & Record<string, any>) {
+  const externalId = String(payload?.id ?? "").trim();
+  if (!externalId) return { ignored: "no_order_id" as const };
+
+  const eventCode = String(payload?.code ?? payload?.fullCode ?? "").trim().toUpperCase();
+  const looksLikeEventEnvelope = Boolean(eventCode) && !Array.isArray(payload?.items);
+  if (looksLikeEventEnvelope) {
+    return { ignored: "event_envelope_not_order" as const };
+  }
+
+  // Um pedido real da iFood deve ter itens. Isso impede que um payload de
+  // homologação/heartbeat com apenas { id, code, fullCode } vire pedido vazio.
+  if (!Array.isArray(payload?.items) || payload.items.length === 0) {
+    return { ignored: "order_without_items" as const };
+  }
 
   const { data: existing } = await supabaseAdmin
     .from("orders")
     .select("id")
-    .eq("external_id", payload.id)
+    .eq("source", "ifood")
+    .eq("external_id", externalId)
     .maybeSingle();
   if (existing) return { already_exists: true as const, order_id: existing.id };
+
+  let claimAcquired = false;
+  try {
+    const { data: claimed, error: claimError } = await supabaseAdmin.rpc("claim_ifood_order_import", {
+      p_external_id: externalId,
+    });
+    if (!claimError) {
+      claimAcquired = claimed === true;
+      if (!claimAcquired) {
+        const { data: afterClaimExisting } = await supabaseAdmin
+          .from("orders")
+          .select("id")
+          .eq("source", "ifood")
+          .eq("external_id", externalId)
+          .maybeSingle();
+        if (afterClaimExisting) return { already_exists: true as const, order_id: afterClaimExisting.id };
+        return { ignored: "import_already_in_progress" as const };
+      }
+    } else {
+      // Compatibilidade temporária antes da migration V30: mantém a proteção
+      // antiga, mas registra que a trava transacional ainda não está disponível.
+      console.warn("[ifood] claim_ifood_order_import indisponível; usando dedupe simples", claimError.message);
+    }
+  } catch (claimErr) {
+    console.warn("[ifood] falha ao adquirir claim de importação", claimErr);
+  }
 
   const rawItems = payload.items ?? [];
   const ifoodItemIds = rawItems.map((it) => it.id).filter(Boolean) as string[];
@@ -205,7 +251,7 @@ export async function createOrderFromIfoodPayload(supabaseAdmin: any, payload: I
     .from("orders")
     .insert({
       source: "ifood",
-      external_id: payload.id,
+      external_id: externalId,
       customer_name: payload.customer?.name || "Cliente iFood",
       customer_phone: (payload.customer?.phone?.number || "").replace(/\D/g, "") || "00000000000",
       delivery_mode: isTakeout ? "pickup" : "delivery",
@@ -217,7 +263,7 @@ export async function createOrderFromIfoodPayload(supabaseAdmin: any, payload: I
       address_reference: isTakeout ? null : (payload.delivery?.deliveryAddress?.reference ?? null),
       address_cep: isTakeout ? null : (payload.delivery?.deliveryAddress?.postalCode ?? null),
       ifood_billing_address: billingAddress,
-      external_display_id: payload.displayId || payload.id.slice(-8).toUpperCase(),
+      external_display_id: payload.displayId || externalId.slice(-8).toUpperCase(),
       order_timing: payload.orderTiming || "IMMEDIATE",
       scheduled_start_at: payload.schedule?.deliveryDateTimeStart || null,
       scheduled_end_at: payload.schedule?.deliveryDateTimeEnd || null,
@@ -232,13 +278,20 @@ export async function createOrderFromIfoodPayload(supabaseAdmin: any, payload: I
     .single();
 
   if (error || !order) {
+    if (claimAcquired) {
+      try {
+        await supabaseAdmin.from("ifood_order_import_claims").delete().eq("external_id", externalId);
+      } catch {
+        // best-effort: uma claim antiga expira e pode ser retomada após 5 minutos
+      }
+    }
     console.error("[ifood] falha ao criar pedido:", error);
     await logApi(supabaseAdmin, {
       source: "ifood_order_create",
       direction: "in",
       error_message: String(error?.message ?? "erro desconhecido"),
       request_payload: payload as any,
-      order_id: payload.id,
+      order_id: externalId,
       event_type: payload.orderType ?? "DELIVERY",
     });
     return { error: String(error?.message ?? "erro desconhecido") };
@@ -248,13 +301,20 @@ export async function createOrderFromIfoodPayload(supabaseAdmin: any, payload: I
     await supabaseAdmin.from("order_items").insert(items.map((i) => ({ ...i, order_id: order.id })));
   }
 
+  if (claimAcquired) {
+    await supabaseAdmin
+      .from("ifood_order_import_claims")
+      .update({ completed_at: new Date().toISOString(), local_order_id: order.id })
+      .eq("external_id", externalId);
+  }
+
   await logApi(supabaseAdmin, {
     source: "ifood_order_create",
     direction: "in",
     response_status: 200,
     response_body: `Pedido #${order.order_number} criado com sucesso — subtotal ${subtotal}, entrega ${delivery_fee}, total ${total} (total veio ${payload.total?.orderAmount != null ? "do payload da iFood" : "calculado por soma"})`,
     request_payload: payload as any,
-    order_id: payload.id,
+    order_id: externalId,
     event_type: payload.orderType ?? "DELIVERY",
   });
   return { ok: true as const, order_id: order.id, order_number: order.order_number };
