@@ -1704,9 +1704,26 @@ async function persistObviousProductMemoryFromTurn(
     }
   }
 
-  if (qty == null && !previousAskedQuantity) return;
+  // 3) Produto escolhido sem quantidade explícita = 1 unidade por padrão.
+  // Isso reduz uma pergunta desnecessária do funil. A única exceção é quando
+  // ainda não conseguimos identificar com segurança qual produto foi escolhido.
+  if (qty == null && !previousAskedQuantity) {
+    const implicitCandidates = candidatesFrom(userText);
+    if (implicitCandidates.length === 1) {
+      upsert(String((implicitCandidates[0] as any).name), 1);
+      draft.items = existing;
+      draft.awaiting_final_confirmation = false;
+      const { error } = await supabaseAdmin
+        .from("order_drafts")
+        .update({ items: existing, awaiting_final_confirmation: false, updated_at: new Date().toISOString() })
+        .eq("conversation_id", conversationId);
+      if (error) throw new Error(`Falha ao persistir item com quantidade padrão: ${error.message}`);
+      return;
+    }
+    if (implicitCandidates.length === 0) return;
+  }
 
-  // 3) Caso simples: um produto + uma quantidade, inclusive quantidade isolada
+  // 4) Caso simples: um produto + uma quantidade, inclusive quantidade isolada
   // em resposta à pergunta anterior.
   let candidates = candidatesFrom(userText);
   if (!candidates.length && qty != null && previousAskedQuantity) {
@@ -1735,6 +1752,93 @@ async function persistObviousProductMemoryFromTurn(
     .update({ items: existing, awaiting_final_confirmation: false, updated_at: new Date().toISOString() })
     .eq("conversation_id", conversationId);
   if (error) throw new Error(`Falha ao persistir memória de itens: ${error.message}`);
+}
+
+async function persistProductsMentionedByAssistantAsDefaultOne(
+  supabaseAdmin: any,
+  conversationId: string,
+  assistantText: string,
+  draft: Draft,
+): Promise<boolean> {
+  const normalized = normalizeStreet(assistantText);
+  if (!normalized || !/quantas unidades|quantos gostaria|quantas gostaria|qual a quantidade/.test(normalized)) {
+    return false;
+  }
+
+  const { data: products, error } = await supabaseAdmin
+    .from("products")
+    .select("name")
+    .eq("active", true);
+
+  if (error || !products?.length) return false;
+
+  const mentioned = (products ?? []).filter((p: any) => {
+    const canonical = normalizeStreet(String(p?.name ?? ""));
+    return canonical.length >= 4 && normalized.includes(canonical);
+  });
+
+  if (!mentioned.length) return false;
+
+  const merged = normalizeDraftItems(draft.items ?? []);
+  for (const product of mentioned) {
+    const canonicalName = String((product as any).name ?? "").trim();
+    if (!canonicalName) continue;
+    const key = normalizeStreet(canonicalName);
+    const idx = merged.findIndex((it) => normalizeStreet(it.product_name) === key);
+    if (idx < 0) merged.push({ product_name: canonicalName, quantity: 1 });
+  }
+
+  if (!merged.length) return false;
+
+  draft.items = merged;
+  draft.awaiting_final_confirmation = false;
+
+  const { error: saveError } = await supabaseAdmin
+    .from("order_drafts")
+    .update({
+      items: merged,
+      awaiting_final_confirmation: false,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("conversation_id", conversationId);
+
+  if (saveError) {
+    console.error("[DEFAULT_QTY_ONE] falha ao persistir item reconhecido:", saveError);
+    return false;
+  }
+
+  console.info("[DEFAULT_QTY_ONE] produto identificado sem quantidade; assumido 1", {
+    conversation_id: conversationId,
+    products: mentioned.map((p: any) => p.name),
+  });
+  return true;
+}
+
+async function hasRecentOfficialOrderSummary(
+  supabaseAdmin: any,
+  conversationId: string,
+): Promise<boolean> {
+  try {
+    const { data } = await supabaseAdmin
+      .from("whatsapp_messages")
+      .select("body,direction,media_type,created_at")
+      .eq("conversation_id", conversationId)
+      .eq("direction", "out")
+      .not("body", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(10);
+
+    return (data ?? []).some((m: any) => {
+      const body = String(m?.body ?? "");
+      return m?.media_type === "system" &&
+        /resumo do (?:seu )?pedido/i.test(body) &&
+        /total a pagar/i.test(body) &&
+        /(posso fechar o pedido|est[aá] tudo certo)/i.test(body);
+    });
+  } catch (err) {
+    console.error("[FINAL_SUMMARY_GUARD] falha ao consultar resumo oficial:", err);
+    return false;
+  }
 }
 
 function assistantPromisesActionButDoesNothing(text: string): boolean {
@@ -2209,7 +2313,7 @@ async function handleDigitalOrderSupportIfNeeded(
 }
 
 
-const HOTBOX_WHATSAPP_FLOW_VERSION = "V26_STRICT_ORDER_STATE_MACHINE_20260908";
+const HOTBOX_WHATSAPP_FLOW_VERSION = "V28_DEFAULT_QTY_SUMMARY_BEVERAGES_20260908";
 
 type ActiveWhatsappOrder = {
   id: string;
@@ -2822,7 +2926,7 @@ Sua missão é coletar os dados necessários para fechar o pedido com o MENOR N�
 - Se for entrega: depois que os itens estiverem definidos, peça numa única mensagem ORGANIZADA o nome de quem vai receber + o endereço (rua e número), somente se esses campos ainda estiverem faltando. Não peça a forma de pagamento nessa mesma mensagem; ela vem depois da confirmação da taxa, salvo se o cliente já a informar espontaneamente. Para o endereço atual do pedido, rua e número precisam ser informados pelo cliente. O BAIRRO JÁ VALIDADO NO INÍCIO DA CONVERSA CONTINUA VÁLIDO E DEVE SER REUTILIZADO AUTOMATICAMENTE — NUNCA peça o bairro novamente se ele já foi confirmado neste atendimento. Exemplo: bairro validado = "Chacrinha"; cliente depois responde "Rua Andaraí, 10" → registre rua=Rua Andaraí, número=10 e mantenha bairro=Chacrinha. Só pergunte bairro novamente se nenhum bairro tiver sido validado ainda ou se o próprio cliente disser que quer corrigir/mudar o bairro. NUNCA revele ao cliente um endereço salvo de pedidos anteriores e nunca pergunte se é "o mesmo endereço". Se quiser passar referência, ótimo, mas não é obrigatório. NUNCA pergunte a cidade. Se for retirada, NÃO precisa de endereço nenhum — pula direto pros itens.
 - 🚨 CHAME update_order_draft NA HORA ASSIM QUE TIVER RUA + NÚMERO E JÁ EXISTIR BAIRRO VALIDADO NA CONVERSA. Não espere o cliente repetir o bairro. O sistema deve combinar rua+número recém-informados com o bairro validado no início e calcular a taxa imediatamente. Se o cliente informar um novo bairro explicitamente, aí sim atualize o bairro e revalide antes de calcular.
 - Itens do pedido — use SOMENTE os nomes e preços exatos do cardápio abaixo, nunca invente produto nem preço
-- QUANTIDADE INTELIGENTE — NUNCA pergunte quantidade quando ela já estiver explícita na frase do cliente. Artigos e números contam como quantidade: "uma de costela", "uma costela", "1 costela" = 1 unidade; "duas de pizza", "2 de pizza" = 2 unidades; "quero uma" = 1 unidade. Absorva a quantidade junto com o produto e chame update_order_draft. Só pergunte quantidade se realmente nenhuma quantidade puder ser inferida do que o cliente disse.
+- QUANTIDADE AUTOMÁTICA — REGRA ABSOLUTA: quando o cliente escolher um sabor/produto e NÃO disser quantidade, registre automaticamente *1 unidade*. Exemplos: "quero a número 4", "número 4", "quero costela", "uma de costela" = 1 unidade. Se disser "2 número 4", "duas de costela", "3 unidades", use exatamente a quantidade informada. Depois que o produto estiver identificado, É PROIBIDO perguntar "quantas unidades?". Chame update_order_draft imediatamente com quantity=1 quando nenhuma quantidade tiver sido informada.
 - Forma de pagamento: quando esse dado estiver faltando, envie a pergunta de pagamento em uma mensagem organizada: "*Qual será a forma de pagamento?*\nAceitamos cartão de crédito, cartão de débito ou Pix.\n\n*Observação:* Não aceitamos dinheiro em espécie, para segurança do nosso entregador." Não favoreça nenhuma opção. Se o cliente disser "cartão", registre CARTÃO e continue — NUNCA pergunte crédito ou débito. Se disser "Pix", registre PIX e continue — NUNCA pergunte se será agora ou na entrega. Se ele espontaneamente disser "Pix agora", respeite essa informação.
 - Se o cliente pedir dinheiro em espécie, explique com educação que, por segurança do entregador, a loja não trabalha com dinheiro e peça para escolher Pix, crédito à vista ou débito. Nunca pergunte sobre troco.
 
@@ -4551,13 +4655,13 @@ async function executeTool(
         if (!customerAnsweredOffer) {
           const options = drinks
             .slice(0, 8)
-            .map((p: any) => `${p.name} — ${brl(getEffectivePrice(p).price)}`)
-            .join("; ");
+            .map((p: any) => `• ${p.name} — *${brl(getEffectivePrice(p).price)}*`)
+            .join("\n");
           await replyAndLog(
             supabaseAdmin,
             conversation.id,
             conversation.phone,
-            `${draft.customer_name ? `${String(draft.customer_name).trim().split(/\s+/)[0]}, ` : ""}Essas são as bebidas que temos:\n${options.replace(/; /g, "\n")}\n\nDeseja acrescentar alguma ao pedido?`,
+            `${draft.customer_name ? `${String(draft.customer_name).trim().split(/\s+/)[0]}, ` : ""}gostaria de alguma bebida?\n\n${options}`,
             { systemMessage: true },
           );
           if (ctx.flags) ctx.flags.silenced = true;
@@ -5906,6 +6010,27 @@ async function runConversationalTurn(opts: {
     }
   }
 
+  // BLINDAGEM DO RESUMO FINAL:
+  // `awaiting_final_confirmation=true` só é válido quando existe um resumo
+  // oficial realmente enviado. Se o flag ficou preso por deploy/erro anterior,
+  // corrige o estado e obriga o backend a gerar o resumo novamente.
+  if (!opts.forceNoTools && opts.draft.awaiting_final_confirmation) {
+    const summaryActuallySent = await hasRecentOfficialOrderSummary(
+      opts.supabaseAdmin,
+      opts.conversation.id,
+    );
+    if (!summaryActuallySent) {
+      opts.draft.awaiting_final_confirmation = false;
+      await opts.supabaseAdmin
+        .from("order_drafts")
+        .update({
+          awaiting_final_confirmation: false,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("conversation_id", opts.conversation.id);
+    }
+  }
+
   // Resposta negativa à oferta de bebida: não depende da IA. Se o cliente
   // disser que não quer bebida, o backend gera imediatamente o resumo oficial
   // com TOTAL e pede a única confirmação final.
@@ -6297,8 +6422,20 @@ async function runConversationalTurn(opts: {
         break;
       }
       if (opts.draft.awaiting_final_confirmation) {
-        finalText = "Posso fechar o pedido?";
-        break;
+        const summaryActuallySent = await hasRecentOfficialOrderSummary(
+          opts.supabaseAdmin,
+          opts.conversation.id,
+        );
+        if (summaryActuallySent) {
+          finalText = "Posso fechar o pedido?";
+          break;
+        }
+
+        opts.draft.awaiting_final_confirmation = false;
+        await opts.supabaseAdmin
+          .from("order_drafts")
+          .update({ awaiting_final_confirmation: false, updated_at: new Date().toISOString() })
+          .eq("conversation_id", opts.conversation.id);
       }
 
       const deterministicClose = await executeTool("finalize_order", {}, {
@@ -6311,6 +6448,25 @@ async function runConversationalTurn(opts: {
       }
       messages.push({ role: "system", content: `[continuidade determinística] ${JSON.stringify(deterministicClose.result)}` });
       continue;
+    }
+
+    // Se a IA reconheceu o produto mas tentou perguntar a quantidade, o backend
+    // aplica a regra comercial: quantidade ausente = 1. O cliente não recebe
+    // uma pergunta desnecessária; o fluxo avança imediatamente.
+    if (
+      /quantas unidades|quantos gostaria|quantas gostaria|qual a quantidade/i.test(cleanedText) &&
+      !opts.forceNoTools
+    ) {
+      const savedDefaultOne = await persistProductsMentionedByAssistantAsDefaultOne(
+        opts.supabaseAdmin,
+        opts.conversation.id,
+        cleanedText,
+        opts.draft,
+      );
+      if (savedDefaultOne) {
+        finalText = buildContinuityFallback(opts.draft);
+        break;
+      }
     }
 
     // Nunca permita que a IA anuncie pedido confirmado/finalizado por texto.
@@ -6379,6 +6535,55 @@ async function runConversationalTurn(opts: {
       finalText = "Só um instante, vou confirmar essa informação para você.";
     } else {
       finalText = buildContinuityFallback(opts.draft);
+    }
+  }
+
+  const triesToAskForFinalConfirmation =
+    /(posso fechar o pedido|pode fechar o pedido|podemos fechar o pedido|est[aá] tudo certo\??)/i.test(finalText);
+
+  if (triesToAskForFinalConfirmation && !opts.forceNoTools) {
+    const summaryActuallySent = await hasRecentOfficialOrderSummary(
+      opts.supabaseAdmin,
+      opts.conversation.id,
+    );
+
+    if (!summaryActuallySent) {
+      opts.draft.awaiting_final_confirmation = false;
+      await opts.supabaseAdmin
+        .from("order_drafts")
+        .update({
+          awaiting_final_confirmation: false,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("conversation_id", opts.conversation.id);
+
+      const forcedSummary = await executeTool("finalize_order", {}, {
+        supabaseAdmin: opts.supabaseAdmin,
+        conversation: opts.conversation,
+        draft: opts.draft,
+        flags,
+        finalConfirmationAllowed: false,
+        bairrosAtendidos: opts.bairrosAtendidos,
+        bairrosNaoAtendidos: opts.bairrosNaoAtendidos,
+        ruasNaoAtendidas: opts.ruasNaoAtendidas,
+        currentUserText: lastUserText,
+      });
+
+      if (
+        flags.silenced ||
+        ["final_confirmation_summary_sent", "beverage_offer_sent"].includes(
+          String(forcedSummary.result?.status ?? ""),
+        )
+      ) {
+        return {
+          silenced: true,
+          finalText: "",
+          pixBlock: null,
+          pixKeyLabel: null,
+          pixKeyMessage: null,
+          sendMenuImage: false,
+        };
+      }
     }
   }
 
