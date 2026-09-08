@@ -9,10 +9,16 @@ export const Route = createFileRoute("/obrigado")({ component: ObrigadoPage });
 
 const WHATSAPP_URL = "https://wa.me/5521984296288?text=" + encodeURIComponent("Olá! Acabei de fazer um pedido pelo cardápio digital da Hotbox.");
 const INSTAGRAM_URL = "https://www.instagram.com/hotboxbatata/";
+const CART_STORAGE_KEY = "hb_digital_cart_v1";
+const CHECKOUT_DRAFT_SESSION_KEY = "hb_digital_checkout_draft_v1";
 
 type State = "checking" | "paid" | "pending" | "delivery";
 
 function ObrigadoPage() {
+  function clearCompletedCheckoutPersistence() {
+    try { localStorage.removeItem(CART_STORAGE_KEY); } catch {}
+    try { sessionStorage.removeItem(CHECKOUT_DRAFT_SESSION_KEY); } catch {}
+  }
   function trackPurchaseOnce(order: string | null, checkout: string | null, total: number | null, method: string) {
     if (!order) return;
 
@@ -68,6 +74,9 @@ function ObrigadoPage() {
   const [deliveryMethod, setDeliveryMethod] = useState<"pix" | "card">("card");
   const [instagramQrUrl, setInstagramQrUrl] = useState("");
 
+  useEffect(() => {
+    if (state === "paid" || state === "delivery") clearCompletedCheckoutPersistence();
+  }, [state]);
 
   useEffect(() => {
     QRCode.toDataURL(INSTAGRAM_URL, { width: 260, margin: 1, errorCorrectionLevel: "M" })
