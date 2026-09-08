@@ -123,6 +123,101 @@ const NFOOD_URL = "https://oia.99app.com/dlp9/3SsCkm?area=BR";
 
 const MY_ORDERS_KEY = "hb_my_orders";
 const AREA_ACCESS_SESSION_KEY = "hb_area_access_session";
+const CART_STORAGE_KEY = "hb_digital_cart_v1";
+const CHECKOUT_DRAFT_SESSION_KEY = "hb_digital_checkout_draft_v1";
+const CART_TTL_MS = 24 * 60 * 60 * 1000;
+
+type PersistedCart = {
+  version: 1;
+  savedAt: number;
+  items: CartItem[];
+};
+
+type PersistedCheckoutDraft = {
+  savedAt: number;
+  form: {
+    name: string;
+    phone: string;
+    deliveryMode: "delivery" | "pickup";
+    street: string;
+    number: string;
+    complement: string;
+    neighborhood: string;
+    city: string;
+    cep: string;
+  };
+};
+
+function readPersistedCart(): CartItem[] {
+  try {
+    const raw = localStorage.getItem(CART_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as PersistedCart;
+    if (parsed?.version !== 1 || !Array.isArray(parsed.items)) return [];
+    if (!Number.isFinite(parsed.savedAt) || Date.now() - parsed.savedAt > CART_TTL_MS) {
+      localStorage.removeItem(CART_STORAGE_KEY);
+      return [];
+    }
+    return parsed.items
+      .filter((item) => item?.product?.id && Number(item.qty) > 0)
+      .map((item) => ({
+        ...item,
+        qty: Math.max(1, Math.min(99, Number(item.qty) || 1)),
+        notes: String(item.notes || ""),
+        addons: Array.isArray(item.addons) ? item.addons : [],
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function persistCart(items: CartItem[]) {
+  try {
+    if (!items.length) {
+      localStorage.removeItem(CART_STORAGE_KEY);
+      return;
+    }
+    const payload: PersistedCart = { version: 1, savedAt: Date.now(), items };
+    localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    // O carrinho em memória continua funcionando mesmo se o navegador bloquear armazenamento.
+  }
+}
+
+function clearPersistedCheckout() {
+  try { localStorage.removeItem(CART_STORAGE_KEY); } catch {}
+  try { sessionStorage.removeItem(CHECKOUT_DRAFT_SESSION_KEY); } catch {}
+}
+
+function readPersistedCheckoutDraft(): PersistedCheckoutDraft["form"] | null {
+  try {
+    const raw = sessionStorage.getItem(CHECKOUT_DRAFT_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PersistedCheckoutDraft;
+    if (!parsed?.form) return null;
+    return parsed.form;
+  } catch {
+    return null;
+  }
+}
+
+function persistCheckoutDraft(form: PersistedCheckoutDraft["form"]) {
+  try {
+    sessionStorage.setItem(CHECKOUT_DRAFT_SESSION_KEY, JSON.stringify({ savedAt: Date.now(), form } satisfies PersistedCheckoutDraft));
+  } catch {
+    // Dados continuam em memória se sessionStorage estiver indisponível.
+  }
+}
+
+function productMenuPriority(product: Product): number {
+  const kind = String(product.kind || "").toLowerCase();
+  const category = String(product.category || "").toLowerCase().normalize("NFD").replace(/[\\u0300-\\u036f]/g, "");
+  const name = String(product.name || "").toLowerCase().normalize("NFD").replace(/[\\u0300-\\u036f]/g, "");
+  if (kind === "beverage" || /bebida|refrigerante|suco|agua|coca|guarana/.test(category)) return 30;
+  if (/batata/.test(category) || /batata/.test(name)) return 0;
+  if (kind === "recipe") return 10;
+  return 20;
+}
 
 type SavedAreaAccess = {
   cep?: string;
@@ -180,6 +275,7 @@ function CustomerHome() {
   const [storeName, setStoreName] = useState("HotBox Delivery");
   const [deliveryFee, setDeliveryFee] = useState(0);
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [cartHydrated, setCartHydrated] = useState(false);
   const [placing, setPlacing] = useState(false);
   const [bannerUrl, setBannerUrl] = useState<string | null>(null);
   const [bannerTagline, setBannerTagline] = useState(
@@ -230,6 +326,7 @@ function CustomerHome() {
   const [detailAddonIds, setDetailAddonIds] = useState<string[]>([]);
   const [detailOrderBumpId, setDetailOrderBumpId] = useState<string | null>(null);
   const [detailReturnView, setDetailReturnView] = useState<"list" | "cart" | "checkout">("list");
+  const [detailEditingIndex, setDetailEditingIndex] = useState<number | null>(null);
   const [ingredientNames, setIngredientNames] = useState<string[]>([]);
   const [addonGroupsByProduct, setAddonGroupsByProduct] = useState<Record<string, AddonGroup[]>>({});
   const [orderBumps, setOrderBumps] = useState<OrderBump[]>([]);
@@ -252,6 +349,38 @@ function CustomerHome() {
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setCustomerSession(session));
     return () => listener.subscription.unsubscribe();
   }, []);
+
+  // Carrinho persistente: sobrevive a reloads, troca de páginas e retornos de pagamento.
+  // O carrinho só é limpo depois que o pedido é realmente confirmado.
+  useEffect(() => {
+    const savedCart = readPersistedCart();
+    if (savedCart.length) setCart(savedCart);
+    const savedDraft = readPersistedCheckoutDraft();
+    if (savedDraft) {
+      setForm((current) => ({ ...current, ...savedDraft }));
+    }
+    setCartHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!cartHydrated) return;
+    persistCart(cart);
+  }, [cart, cartHydrated]);
+
+  useEffect(() => {
+    if (!cartHydrated) return;
+    persistCheckoutDraft({
+      name: form.name,
+      phone: form.phone,
+      deliveryMode: form.deliveryMode,
+      street: form.street,
+      number: form.number,
+      complement: form.complement,
+      neighborhood: form.neighborhood,
+      city: form.city,
+      cep: form.cep,
+    });
+  }, [cartHydrated, form.name, form.phone, form.deliveryMode, form.street, form.number, form.complement, form.neighborhood, form.city, form.cep]);
 
   // O login OAuth do Google sai do site e volta para a página inicial.
   // Preservamos a área que JÁ foi validada nesta mesma aba para não obrigar
@@ -357,6 +486,37 @@ function CustomerHome() {
       setConfigLoaded(true);
     });
   }, []);
+
+  // Reidrata o carrinho com os produtos atuais do banco para nunca confiar em preço/foto antigos.
+  useEffect(() => {
+    if (!cartHydrated || !products.length) return;
+    setCart((current) => current
+      .map((item) => {
+        const fresh = products.find((p) => String(p.id) === String(item.product?.id));
+        if (!fresh || !fresh.active) return null;
+        return { ...item, product: fresh };
+      })
+      .filter(Boolean) as CartItem[]);
+  }, [products, cartHydrated]);
+
+  // Também reconcilia adicionais persistidos com as opções ativas atuais.
+  useEffect(() => {
+    if (!cartHydrated || !Object.keys(addonGroupsByProduct).length) return;
+    setCart((current) => current.map((item) => {
+      const liveOptions = new Map<string, AddonOption>(
+        (addonGroupsByProduct[item.product.id] || [])
+          .flatMap((group) => group.options)
+          .map((option): [string, AddonOption] => [String(option.id), option]),
+      );
+      const addons = item.addons
+        .map((addon) => {
+          const live = liveOptions.get(String(addon.option_id));
+          return live ? { option_id: String(live.id), group_id: String(live.group_id), name: live.name, price: Number(live.price || 0) } : null;
+        })
+        .filter(Boolean) as CartAddon[];
+      return { ...item, addons };
+    }));
+  }, [addonGroupsByProduct, cartHydrated]);
 
   useEffect(() => {
     if (form.payment !== paymentProvider) setForm((current) => ({ ...current, payment: paymentProvider }));
@@ -570,24 +730,41 @@ function CustomerHome() {
     setDeliveryDistanceKm(null);
     setManualNeighborhood("");
     setManualAreaMode(false);
-    setCart([]);
+    // Trocar/corrigir a área de entrega não apaga os itens já escolhidos.
     setView("list");
     setForm((current) => ({ ...current, street: "", number: "", complement: "", neighborhood: "", city: "", cep: "" }));
   }
 
-  const categories = useMemo(
-    () => ["Tudo", ...Array.from(new Set(products.map((p) => p.category || "Outros")))],
+  const categories = useMemo(() => {
+    const unique: string[] = Array.from(new Set<string>(products.map((p) => p.category || "Outros")));
+    unique.sort((a, b) => {
+      const aProducts = products.filter((p) => (p.category || "Outros") === a);
+      const bProducts = products.filter((p) => (p.category || "Outros") === b);
+      const ap = Math.min(...aProducts.map(productMenuPriority));
+      const bp = Math.min(...bProducts.map(productMenuPriority));
+      return ap - bp || a.localeCompare(b, "pt-BR");
+    });
+    return ["Tudo", ...unique];
+  }, [products]);
+  const featured = useMemo(
+    () => products.filter((p) => p.featured).sort((a, b) => productMenuPriority(a) - productMenuPriority(b) || a.name.localeCompare(b.name, "pt-BR")),
     [products],
   );
-  const featured = useMemo(() => products.filter((p) => p.featured), [products]);
   const filtered = useMemo(() => {
-    return products.filter((p) => {
-      const matchesCategory = activeCategory === "Tudo" || (p.category || "Outros") === activeCategory;
-      const matchesQuery = !query.trim() || p.name.toLowerCase().includes(query.toLowerCase());
-      const matchesStatus =
-        activeFilter === "todos" || (activeFilter === "ativos" && p.active) || (activeFilter === "inativos" && !p.active);
-      return matchesCategory && matchesQuery && matchesStatus;
-    });
+    return products
+      .filter((p) => {
+        const matchesCategory = activeCategory === "Tudo" || (p.category || "Outros") === activeCategory;
+        const matchesQuery = !query.trim() || `${p.name} ${p.description || ""}`.toLowerCase().includes(query.toLowerCase());
+        const matchesStatus =
+          activeFilter === "todos" || (activeFilter === "ativos" && p.active) || (activeFilter === "inativos" && !p.active);
+        return matchesCategory && matchesQuery && matchesStatus;
+      })
+      .sort((a, b) => {
+        // Em "Tudo", batatas recheadas vêm primeiro e bebidas por último.
+        // Ao escolher uma categoria, respeitamos a escolha do cliente e só ordenamos pelo nome.
+        if (activeCategory !== "Tudo") return a.name.localeCompare(b.name, "pt-BR");
+        return productMenuPriority(a) - productMenuPriority(b) || a.name.localeCompare(b.name, "pt-BR");
+      });
   }, [products, activeCategory, query, activeFilter]);
 
   function basePriceForCartItem(item: CartItem) {
@@ -832,6 +1009,7 @@ function CustomerHome() {
     setDetailAddonIds([]);
     setDetailOrderBumpId(orderBumpId || null);
     setDetailReturnView(returnView);
+    setDetailEditingIndex(null);
     setIngredientNames([]);
     setView("detail");
     supabase
@@ -847,6 +1025,10 @@ function CustomerHome() {
       const selectedInGroup = current.filter((id) => groupOptionIds.has(id));
       const optionId = String(option.id);
       if (group.max_select === 1) {
+        const min = Math.max(0, Number(group.min_select || 0), group.required ? 1 : 0);
+        if (current.includes(optionId)) {
+          return min === 0 ? current.filter((id) => id !== optionId) : current;
+        }
         return [...current.filter((id) => !groupOptionIds.has(id)), optionId];
       }
       if (current.includes(optionId)) return current.filter((id) => id !== optionId);
@@ -872,11 +1054,31 @@ function CustomerHome() {
       const selected = group.options.filter((o) => detailAddonIds.includes(String(o.id))).length;
       const min = Math.max(0, Number(group.min_select || 0), group.required ? 1 : 0);
       if (selected < min) {
-        toast.error(`Escolha pelo menos ${min} opção(ões) em ${group.name}.`);
+        toast.error(`Complete a opção obrigatória: ${group.name}.`);
+        document.getElementById(`addon-group-${group.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
         return false;
       }
     }
     return true;
+  }
+
+  function editCartItem(index: number) {
+    const item = cart[index];
+    if (!item) return;
+    setSelectedProduct(item.product);
+    setDetailQty(item.qty);
+    setDetailNotes(item.notes || "");
+    setDetailAddonIds(item.addons.map((addon) => String(addon.option_id)));
+    setDetailOrderBumpId(item.orderBumpId || null);
+    setDetailReturnView("cart");
+    setDetailEditingIndex(index);
+    setIngredientNames([]);
+    setView("detail");
+    supabase
+      .from("recipe_items")
+      .select("ingredients(name)")
+      .eq("product_id", item.product.id)
+      .then(({ data }) => setIngredientNames((data ?? []).map((r: any) => r.ingredients?.name).filter(Boolean)));
   }
 
   function addToCartFromDetail() {
@@ -887,6 +1089,10 @@ function CustomerHome() {
     const bumpPrice = bump?.price_override == null ? null : Number(bump.price_override);
     const signature = addons.map((a) => a.option_id).sort().join(",");
     setCart((c) => {
+      const nextItem: CartItem = { product: selectedProduct, qty: detailQty, notes: detailNotes, addons, orderBumpId: detailOrderBumpId, bumpPrice };
+      if (detailEditingIndex != null && c[detailEditingIndex]) {
+        return c.map((item, index) => index === detailEditingIndex ? nextItem : item);
+      }
       const ex = c.find((i) =>
         i.product.id === selectedProduct.id &&
         i.notes === detailNotes &&
@@ -894,7 +1100,7 @@ function CustomerHome() {
         i.addons.map((a) => a.option_id).sort().join(",") === signature
       );
       if (ex) return c.map((i) => (i === ex ? { ...i, qty: i.qty + detailQty } : i));
-      return [...c, { product: selectedProduct, qty: detailQty, notes: detailNotes, addons, orderBumpId: detailOrderBumpId, bumpPrice }];
+      return [...c, nextItem];
     });
     const basePrice = Number(detailOrderBumpId && bumpPrice != null ? bumpPrice : getEffectivePrice(selectedProduct).price || 0);
     const addonTotal = addons.reduce((sum, a) => sum + Number(a.price || 0), 0);
@@ -929,8 +1135,9 @@ function CustomerHome() {
         order_bump_id: detailOrderBumpId || null,
       },
     });
-    toast.success(`${selectedProduct.name} adicionado`);
+    toast.success(detailEditingIndex != null ? "Item atualizado" : `${selectedProduct.name} adicionado`);
     setDetailOrderBumpId(null);
+    setDetailEditingIndex(null);
     setView(detailReturnView);
   }
 
@@ -1054,6 +1261,7 @@ function CustomerHome() {
           }),
         });
         pushMyOrder(String(created.order_id));
+        clearPersistedCheckout();
         setCart([]);
         removeCoupon();
         window.location.href = `/obrigado?provider=delivery&order_id=${encodeURIComponent(String(created.order_id))}&method=${encodeURIComponent(String(created.payment_method || ""))}`;
@@ -1081,8 +1289,8 @@ function CustomerHome() {
       }
 
       trackAnalytics("payment_redirect", { event_category: "payment", checkout_id: String(created.checkout.id), payment_method: "infinitepay", value: Number(created.checkout.total || total) });
-      setCart([]);
-      removeCoupon();
+      // Não limpa o carrinho antes de sair para o gateway. Se o cliente voltar,
+      // cancelar ou o pagamento falhar, tudo continua exatamente como estava.
       window.location.href = payment.url;
     } catch (err: any) {
       console.error(err);
@@ -1107,6 +1315,7 @@ function CustomerHome() {
   function finishMercadoPago(orderId?: string | null) {
     if (orderId) pushMyOrder(orderId);
     const checkoutId = mpCheckout?.id || "";
+    clearPersistedCheckout();
     setCart([]);
     removeCoupon();
     setMpCheckout(null);
@@ -1276,7 +1485,7 @@ function CustomerHome() {
       <div className="min-h-screen bg-background pb-28">
         <div className="relative">
           <button
-            onClick={() => setView("list")}
+            onClick={() => { setDetailEditingIndex(null); setView(detailReturnView); }}
             className="absolute left-4 top-4 z-10 grid size-9 place-items-center rounded-full bg-black/50 text-white backdrop-blur"
           >
             <ArrowLeft className="size-5" />
@@ -1285,7 +1494,7 @@ function CustomerHome() {
             <img src={HOTBOX_LOGO_URL} alt="HotBox Delivery" className="size-9 rounded-xl object-contain" />
           </div>
           {p.image_url ? (
-            <img src={p.image_url} alt={p.name} className="h-64 w-full object-cover sm:h-80" />
+            <img src={p.image_url} alt={p.name} fetchPriority="high" decoding="async" className="h-64 w-full object-cover sm:h-80" />
           ) : (
             <div className="grid h-64 w-full place-items-center bg-muted text-sm text-muted-foreground sm:h-80">
               Sem foto
@@ -1326,20 +1535,29 @@ function CustomerHome() {
           )}
 
           {(addonGroupsByProduct[p.id] || []).length > 0 && (
-            <div className="mt-5 space-y-4">
+            <div className="mt-6 space-y-4">
+              <div>
+                <h2 className="text-lg font-black">Personalize seu pedido</h2>
+                <p className="mt-1 text-xs text-muted-foreground">Escolha os adicionais abaixo. Itens marcados como obrigatórios precisam ser preenchidos para continuar.</p>
+              </div>
               {(addonGroupsByProduct[p.id] || []).map((group) => {
                 const selectedCount = group.options.filter((o) => detailAddonIds.includes(String(o.id))).length;
                 const min = Math.max(0, Number(group.min_select || 0), group.required ? 1 : 0);
                 return (
-                  <div key={group.id} className="overflow-hidden rounded-2xl border bg-white shadow-sm">
+                  <div id={`addon-group-${group.id}`} key={group.id} className={`overflow-hidden rounded-2xl border bg-white shadow-sm ${selectedCount < min ? "border-amber-300" : ""}`}>
                     <div className="flex items-start justify-between gap-3 border-b bg-muted/30 px-4 py-3">
                       <div>
                         <p className="font-black">{group.name}</p>
                         {group.description && <p className="mt-0.5 text-xs text-muted-foreground">{group.description}</p>}
                       </div>
-                      <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-black ${min > 0 ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
-                        {min > 0 ? `ESCOLHA ${min}${group.max_select > min ? `–${group.max_select}` : ""}` : `ATÉ ${group.max_select}`}
-                      </span>
+                      <div className="flex shrink-0 flex-col items-end gap-1">
+                        <span className={`rounded-full px-2 py-1 text-[10px] font-black ${min > 0 ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
+                          {min > 0 ? "OBRIGATÓRIO" : "OPCIONAL"}
+                        </span>
+                        <span className="text-[10px] font-bold text-muted-foreground">
+                          {min > 0 ? `Escolha ${min}${group.max_select > min ? ` a ${group.max_select}` : ""}` : `Escolha até ${group.max_select}`}
+                        </span>
+                      </div>
                     </div>
                     <div className="divide-y">
                       {group.options.map((option) => {
@@ -1348,6 +1566,7 @@ function CustomerHome() {
                           <button
                             type="button"
                             key={option.id}
+                            aria-pressed={selected}
                             onClick={() => toggleDetailAddon(group, option)}
                             className={`flex w-full items-center gap-3 px-4 py-3 text-left transition ${selected ? "bg-primary/5" : "hover:bg-muted/30"}`}
                           >
@@ -1400,7 +1619,7 @@ function CustomerHome() {
               onClick={addToCartFromDetail}
               className="flex-1 justify-between rounded-full bg-[#ffd400] py-6 text-base font-black text-black shadow-md hover:bg-[#f4ca00]"
             >
-              <span>Adicionar</span>
+              <span>{detailEditingIndex != null ? "Salvar alterações" : "Adicionar"}</span>
               <span>{brl((
                 (detailOrderBumpId
                   ? Number(orderBumps.find((b) => b.id === detailOrderBumpId)?.price_override ?? getEffectivePrice(p).price)
@@ -1436,6 +1655,8 @@ function CustomerHome() {
                     <img
                       src={i.product.image_url}
                       alt={i.product.name}
+                      loading="lazy"
+                      decoding="async"
                       className="size-24 shrink-0 rounded-2xl object-contain"
                     />
                   ) : (
@@ -1446,12 +1667,15 @@ function CustomerHome() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-start justify-between gap-2">
                       <h4 className="font-bold uppercase leading-tight">{i.product.name}</h4>
-                      <button
-                        onClick={() => removeItem(idx)}
-                        className="shrink-0 text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="size-4" />
-                      </button>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button onClick={() => editCartItem(idx)} className="rounded-full px-2 py-1 text-[11px] font-black text-primary hover:bg-primary/5">Editar</button>
+                        <button
+                          onClick={() => removeItem(idx)}
+                          className="grid size-8 place-items-center rounded-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                        >
+                          <Trash2 className="size-4" />
+                        </button>
+                      </div>
                     </div>
                     <p className="mt-0.5 font-black text-primary">{brl(cartUnitPrice(i))}</p>
                     {i.orderBumpId && <span className="mt-1 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black uppercase text-amber-800">Oferta especial</span>}
@@ -1485,6 +1709,21 @@ function CustomerHome() {
             ))
           )}
 
+          {cart.length > 0 && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setQuery("");
+                setView("list");
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
+              className="w-full rounded-2xl border-2 py-5 font-black"
+            >
+              <Plus className="mr-2 size-4" /> Continuar comprando
+            </Button>
+          )}
+
           {cart.length > 0 && orderBumps.filter((b) =>
             b.placement === "cart" &&
             !cart.some((i) => String(i.product.id) === String(b.product_id))
@@ -1507,7 +1746,7 @@ function CustomerHome() {
                   const bumpPrice = bump.price_override == null ? getEffectivePrice(product).price : Number(bump.price_override);
                   return (
                     <div key={bump.id} className="flex items-center gap-3 rounded-2xl border bg-white p-3">
-                      {product.image_url ? <img src={product.image_url} alt={product.name} className="size-14 rounded-xl object-cover" /> : <div className="size-14 rounded-xl bg-muted" />}
+                      {product.image_url ? <img src={product.image_url} alt={product.name} loading="lazy" decoding="async" className="size-14 rounded-xl object-cover" /> : <div className="size-14 rounded-xl bg-muted" />}
                       <div className="min-w-0 flex-1">
                         <p className="text-xs font-black uppercase text-amber-700">{bump.title}</p>
                         <p className="truncate text-sm font-black">{product.name}</p>
@@ -1638,6 +1877,37 @@ function CustomerHome() {
         </header>
 
         <div className="mx-auto max-w-2xl space-y-6 px-4 py-5">
+          <div className="rounded-3xl border bg-card p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Resumo do pedido</p>
+                <p className="mt-1 font-black">{totalQty} {totalQty === 1 ? "item" : "itens"} • {brl(total)}</p>
+              </div>
+              <Button type="button" variant="outline" size="sm" className="rounded-full font-black" onClick={() => setView("cart")}>
+                Editar
+              </Button>
+            </div>
+            <div className="mt-3 space-y-2 border-t pt-3">
+              {cart.map((item, index) => (
+                <div key={`${item.product.id}-${index}`} className="flex items-start justify-between gap-3 text-sm">
+                  <div className="min-w-0">
+                    <p className="font-bold">{item.qty}x {item.product.name}</p>
+                    {item.addons.length > 0 && <p className="mt-0.5 truncate text-xs text-muted-foreground">{item.addons.map((addon) => `+ ${addon.name}`).join(" • ")}</p>}
+                  </div>
+                  <span className="shrink-0 font-black">{brl(cartUnitPrice(item) * item.qty)}</span>
+                </div>
+              ))}
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              className="mt-3 w-full rounded-2xl font-black text-primary"
+              onClick={() => { setQuery(""); setView("list"); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+            >
+              <Plus className="mr-2 size-4" /> Continuar comprando
+            </Button>
+          </div>
+
           <div>
             <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">Seus dados</h3>
             <div className="space-y-3">
@@ -1782,7 +2052,7 @@ function CustomerHome() {
                   const bumpPrice = bump.price_override == null ? getEffectivePrice(product).price : Number(bump.price_override);
                   return (
                     <div key={bump.id} className="flex items-center gap-3 rounded-2xl border bg-white p-3">
-                      {product.image_url ? <img src={product.image_url} alt={product.name} className="size-12 rounded-xl object-cover" /> : <div className="size-12 rounded-xl bg-muted" />}
+                      {product.image_url ? <img src={product.image_url} alt={product.name} loading="lazy" decoding="async" className="size-12 rounded-xl object-cover" /> : <div className="size-12 rounded-xl bg-muted" />}
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-black">{product.name}</p>
                         <p className="truncate text-[11px] text-muted-foreground">{bump.subtitle || bump.title}</p>
@@ -2092,6 +2362,8 @@ function CustomerHome() {
                         <img
                           src={p.image_url}
                           alt={p.name}
+                          loading="lazy"
+                          decoding="async"
                           className="absolute inset-0 size-full object-cover transition group-hover:scale-105"
                         />
                       ) : (
@@ -2134,7 +2406,7 @@ function CustomerHome() {
                       className="flex w-full items-center gap-4 rounded-[24px] border border-black/5 bg-white p-3.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
                     >
                       {p.image_url ? (
-                        <img src={p.image_url} alt={p.name} className="size-24 shrink-0 rounded-2xl object-contain" />
+                        <img src={p.image_url} alt={p.name} loading="lazy" decoding="async" className="size-24 shrink-0 rounded-2xl object-contain" />
                       ) : (
                         <div className="grid size-16 shrink-0 place-items-center rounded-xl bg-muted text-[9px] text-muted-foreground">
                           Sem foto
