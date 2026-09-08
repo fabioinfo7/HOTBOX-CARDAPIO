@@ -445,6 +445,7 @@ function OrdersDashboard() {
                         {o.source === "whatsapp" && <MessageCircle className="size-3 text-emerald-600" />}
                         {o.source === "ifood" && <UtensilsCrossed className="size-3 text-red-600" />}
                         {o.source === "99food" && <UtensilsCrossed className="size-3 text-yellow-700" />}
+                        {o.source === "site" && <Store className="size-3 text-orange-600" />}
                         <span className="font-semibold">{o.customer_name}</span>
                       </div>
                       <div className="text-[11px] text-muted-foreground">{formatDateTime(o.created_at)}</div>
@@ -549,6 +550,11 @@ function OrdersDashboard() {
                       {o.source === "99food" && (
                         <span className="flex items-center gap-1 rounded-full bg-yellow-100 px-1.5 py-0.5 text-[10px] font-bold text-yellow-800">
                           <UtensilsCrossed className="size-3" /> 99Food
+                        </span>
+                      )}
+                      {o.source === "site" && (
+                        <span className="flex items-center gap-1 rounded-full bg-orange-50 px-1.5 py-0.5 text-[10px] font-bold text-orange-700">
+                          <Store className="size-3" /> Cardápio Hotbox
                         </span>
                       )}
                       Pedido: {orderDisplayRef(o)}
