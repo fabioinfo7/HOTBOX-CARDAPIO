@@ -23,7 +23,7 @@ export function MenuSalesTools() {
   const [links, setLinks] = useState<any[]>([]);
   const [bumps, setBumps] = useState<any[]>([]);
   const [newGroup, setNewGroup] = useState({ name: "", description: "", required: false, min_select: 0, max_select: 1 });
-  const [newOptionByGroup, setNewOptionByGroup] = useState<Record<string, { name: string; price: string }>>({});
+  const [newOptionByGroup, setNewOptionByGroup] = useState<Record<string, { name: string; description: string; price: string }>>({});
   const [newBump, setNewBump] = useState({ product_id: "", title: "Que tal completar seu pedido?", subtitle: "", placement: "cart", price_override: "" });
 
   async function load() {
@@ -89,19 +89,20 @@ export function MenuSalesTools() {
   }
 
   async function addOption(groupId: string) {
-    const draft = newOptionByGroup[groupId] || { name: "", price: "" };
+    const draft = newOptionByGroup[groupId] || { name: "", description: "", price: "" };
     const name = draft.name.trim();
     if (!name) return toast.error("Informe o nome do adicional.");
     const price = Math.max(0, num(String(draft.price).replace(",", ".")));
     const { error } = await (supabase as any).from("menu_addon_options").insert({
       group_id: groupId,
       name,
+      description: draft.description.trim() || null,
       price,
       active: true,
       sort_order: options.filter((o) => o.group_id === groupId).length,
     });
     if (error) return toast.error(error.message);
-    setNewOptionByGroup((s) => ({ ...s, [groupId]: { name: "", price: "" } }));
+    setNewOptionByGroup((s) => ({ ...s, [groupId]: { name: "", description: "", price: "" } }));
     await load();
   }
 
@@ -109,6 +110,7 @@ export function MenuSalesTools() {
     const next = { ...option, ...patch };
     const { error } = await (supabase as any).from("menu_addon_options").update({
       name: String(next.name || "").trim(),
+      description: String(next.description || "").trim() || null,
       price: Math.max(0, num(next.price)),
       active: next.active !== false,
     }).eq("id", option.id);
@@ -199,6 +201,16 @@ export function MenuSalesTools() {
                   <label className="flex items-center gap-2 text-xs font-bold"><Switch checked={group.active !== false} onCheckedChange={(v) => updateGroup(group, { active: v })} /> Ativo</label>
                   <Button size="icon" variant="ghost" className="text-destructive" onClick={() => deleteGroup(group.id)}><Trash2 className="size-4" /></Button>
                 </div>
+                <div className="mt-3">
+                  <Label className="text-[11px]">Descrição exibida no cardápio</Label>
+                  <Input
+                    className="mt-1"
+                    value={group.description || ""}
+                    onChange={(e) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, description: e.target.value } : g))}
+                    onBlur={() => updateGroup(group, { description: groups.find((g) => g.id === group.id)?.description })}
+                    placeholder="Ex.: escolha sua borda preferida"
+                  />
+                </div>
                 <div className="mt-3 grid gap-2 sm:grid-cols-4">
                   <div><Label className="text-[11px]">Mínimo</Label><Input type="number" min="0" value={group.min_select} onChange={(e) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, min_select: num(e.target.value) } : g))} onBlur={() => updateGroup(group, { min_select: groups.find((g) => g.id === group.id)?.min_select })} /></div>
                   <div><Label className="text-[11px]">Máximo</Label><Input type="number" min="1" value={group.max_select} onChange={(e) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, max_select: num(e.target.value, 1) } : g))} onBlur={() => updateGroup(group, { max_select: groups.find((g) => g.id === group.id)?.max_select })} /></div>
@@ -208,15 +220,17 @@ export function MenuSalesTools() {
                 <div className="mt-4 space-y-2">
                   <p className="text-xs font-black uppercase tracking-wide text-muted-foreground">Opções deste grupo</p>
                   {groupOptions.map((option) => (
-                    <div key={option.id} className="grid gap-2 rounded-xl border p-2 sm:grid-cols-[1fr_140px_auto_auto] sm:items-center">
-                      <Input value={option.name} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, name: e.target.value } : o))} onBlur={() => updateOption(option, { name: options.find((o) => o.id === option.id)?.name })} />
+                    <div key={option.id} className="grid gap-2 rounded-xl border p-2 sm:grid-cols-[1fr_1fr_120px_auto_auto] sm:items-center">
+                      <Input value={option.name} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, name: e.target.value } : o))} onBlur={() => updateOption(option, { name: options.find((o) => o.id === option.id)?.name })} placeholder="Nome" />
+                      <Input value={option.description || ""} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, description: e.target.value } : o))} onBlur={() => updateOption(option, { description: options.find((o) => o.id === option.id)?.description })} placeholder="Descrição curta (opcional)" />
                       <Input type="number" step="0.01" min="0" value={option.price} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, price: e.target.value } : o))} onBlur={() => updateOption(option, { price: options.find((o) => o.id === option.id)?.price })} />
                       <Switch checked={option.active !== false} onCheckedChange={(v) => updateOption(option, { active: v })} />
                       <Button size="icon" variant="ghost" className="text-destructive" onClick={() => deleteOption(option.id)}><Trash2 className="size-4" /></Button>
                     </div>
                   ))}
-                  <div className="grid gap-2 sm:grid-cols-[1fr_140px_auto]">
+                  <div className="grid gap-2 sm:grid-cols-[1fr_1fr_120px_auto]">
                     <Input value={draft.name} onChange={(e) => setNewOptionByGroup((s) => ({ ...s, [group.id]: { ...draft, name: e.target.value } }))} placeholder="Ex.: Borda de requeijão" />
+                    <Input value={draft.description} onChange={(e) => setNewOptionByGroup((s) => ({ ...s, [group.id]: { ...draft, description: e.target.value } }))} placeholder="Descrição curta (opcional)" />
                     <Input value={draft.price} onChange={(e) => setNewOptionByGroup((s) => ({ ...s, [group.id]: { ...draft, price: e.target.value } }))} placeholder="Preço" inputMode="decimal" />
                     <Button onClick={() => addOption(group.id)}><Plus className="mr-1 size-4" /> Adicionar</Button>
                   </div>
