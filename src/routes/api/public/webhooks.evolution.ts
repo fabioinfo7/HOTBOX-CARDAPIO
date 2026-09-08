@@ -10,7 +10,7 @@ import { detectPublicFaqIntent, renderPublicFaq, resumePromptForDraft, menuSendF
 // Envia todas as imagens do cardápio cadastradas em /loja/config → Imagens do
 // cardápio, uma de cada vez, com um pequeno intervalo. Quando o cliente pede
 // explicitamente o cardápio/menu, a imagem pode ser enviada independentemente
-// do bairro. Esse envio nunca deve incluir links de iFood/99Food.
+// do bairro. Esse envio nunca deve incluir links de iFood/99Food.//
 async function sendMenuImagesOnce(
   supabaseAdmin: any,
   conversationId: string,
