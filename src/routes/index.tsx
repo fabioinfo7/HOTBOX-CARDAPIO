@@ -604,6 +604,50 @@ function CustomerHome() {
   const couponDiscount = appliedCoupon?.discount ?? 0;
   const total = Math.max(0, subtotal - couponDiscount) + (cart.length && isDelivery ? deliveryFee : 0);
 
+  const paymentSupportWhatsappUrl = useMemo(() => {
+    const itemLines = cart.map((item) => {
+      const addons = item.addons.length
+        ? ` | Adicionais: ${item.addons.map((a) => a.name).join(", ")}`
+        : "";
+      const notes = item.notes?.trim() ? ` | Obs.: ${item.notes.trim()}` : "";
+      return `• ${item.qty}x ${item.product.name} — ${brl(cartUnitPrice(item) * item.qty)}${addons}${notes}`;
+    });
+
+    const address = isDelivery
+      ? [
+          `${form.street || "—"}, ${form.number || "—"}`,
+          form.complement?.trim() ? `Complemento: ${form.complement.trim()}` : null,
+          form.neighborhood || null,
+          form.city || null,
+          form.cep ? `CEP: ${form.cep}` : null,
+        ].filter(Boolean).join(" | ")
+      : "Retirada no local";
+
+    const lines = [
+      "Olá, vim pelo cardápio digital e preciso do link de pagamento.",
+      "",
+      "*DADOS DO PEDIDO*",
+      `Nome: ${form.name || "—"}`,
+      `Telefone: ${formatPhone(form.phone) || form.phone || "—"}`,
+      `Entrega: ${isDelivery ? "Sim" : "Retirada"}`,
+      `Endereço: ${address}`,
+      "",
+      "*ITENS*",
+      ...(itemLines.length ? itemLines : ["• Pedido sem itens carregados"]),
+      "",
+      `Subtotal: ${brl(subtotal)}`,
+      ...(appliedCoupon?.code ? [`Cupom: ${appliedCoupon.code} (-${brl(couponDiscount)})`] : []),
+      `Taxa de entrega: ${isDelivery ? brl(deliveryFee) : "R$ 0,00"}`,
+      `*Total: ${brl(mpCheckout?.total ?? total)}*`,
+      "Forma de pagamento escolhida: Cartão",
+      ...(mpCheckout?.id ? [`Referência do checkout: ${mpCheckout.id}`] : []),
+      "",
+      "Preciso receber um link para concluir o pagamento.",
+    ];
+
+    return `https://wa.me/5521984296288?text=${encodeURIComponent(lines.join("\n"))}`;
+  }, [cart, form, isDelivery, subtotal, couponDiscount, appliedCoupon?.code, deliveryFee, total, mpCheckout?.total, mpCheckout?.id]);
+
   const couponCartPayload = () =>
     cart.map((i) => {
       const eff = getEffectivePrice(i.product);
@@ -1772,6 +1816,7 @@ function CustomerHome() {
                 customerEmail={customerSession?.user?.email || null}
                 environment={mercadoPagoEnvironment}
                 origin={typeof window !== "undefined" ? window.location.origin : ""}
+                supportWhatsappUrl={paymentSupportWhatsappUrl}
                 onPaid={finishMercadoPago}
                 onCancel={cancelMercadoPagoCheckout}
               />
