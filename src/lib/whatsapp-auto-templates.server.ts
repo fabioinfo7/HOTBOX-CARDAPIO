@@ -16,6 +16,7 @@ export type AutoTemplateConfig = {
   deliveryTimeMinutes?: number | null;
   businessHoursEnabled?: boolean | null;
   businessHours?: BusinessHourRange[] | null;
+  storeAddress?: string | null;
 };
 
 export function detectPublicFaqIntent(input: string): PublicFaqIntent | null {
@@ -40,9 +41,8 @@ export function detectPublicFaqIntent(input: string): PublicFaqIntent | null {
   if (/(posso retirar|tem retirada|faz retirada|retirar no local|buscar no local|pegar no local)/.test(t)) {
     return "pickup";
   }
-  if (/(vai chegar quente|chega quente|chegar quente|vem quente|vai vir quente|quentinha|quentinho)/.test(t)) {
-    return "food_temperature";
-  }
+  // Temperatura/embalagem não é respondida sem fonte oficial cadastrada.
+
   if (
     /(?:metade|meio|parte).{0,35}(?:pix|cartao).{0,35}(?:metade|meio|parte|pix|cartao)|(?:pix).{0,35}(?:cartao).{0,35}(?:mesmo pedido|mesma compra|metade|parte)|(?:cartao).{0,35}(?:pix).{0,35}(?:mesmo pedido|mesma compra|metade|parte)|(?:duas|2).{0,20}(?:formas|forma).{0,20}pagamento|dividir.{0,25}pagamento/.test(t)
   ) {
@@ -63,7 +63,9 @@ export function renderPublicFaq(intent: PublicFaqIntent, cfg: AutoTemplateConfig
     case "delivery_time":
       return `Nosso prazo de entrega é de até *${safeTime} minutos* e normalmente chega antes. Durante o pedido você também recebe as atualizações pelo WhatsApp.`;
     case "store_location":
-      return `${store} fica na *Rua Carlos Chagas, Jardim Gramacho – Duque de Caxias*. Trabalhamos somente com delivery e retirada combinada.`;
+      return cfg.storeAddress
+        ? `${store} fica em *${String(cfg.storeAddress).trim()}*.`
+        : `Ainda não tenho um endereço oficial cadastrado para informar com segurança.`;
     case "business_hours":
       return hoursText
         ? `Nosso horário de atendimento é:\n${hoursText}`
@@ -77,7 +79,7 @@ export function renderPublicFaq(intent: PublicFaqIntent, cfg: AutoTemplateConfig
     case "pickup":
       return `Sim, você pode escolher *retirada*. Nesse caso não há taxa de entrega e não é necessário informar bairro para continuar o pedido.`;
     case "food_temperature":
-      return `Sim 😊 Preparamos o pedido próximo ao momento da saída e enviamos bem acondicionado para chegar quentinho. O prazo de entrega é de até *${safeTime} minutos* e normalmente chega antes.`;
+      return `O prazo cadastrado de entrega é de até *${safeTime} minutos*. Sobre temperatura/embalagem, só posso confirmar o que estiver cadastrado nas informações oficiais da loja.`;
     case "split_payment":
       return `No atendimento automático, cada pedido precisa ficar registrado com *uma única forma de pagamento*. Posso manter em *Pix* ou alterar para *cartão*.`;
   }
