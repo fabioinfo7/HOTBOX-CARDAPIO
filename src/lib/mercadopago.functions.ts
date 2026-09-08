@@ -41,6 +41,18 @@ function firstPayment(order: any) {
   return Array.isArray(order?.transactions?.payments) ? order.transactions.payments[0] || null : null;
 }
 
+const CARD_REJECTED_CUSTOMER_MESSAGE =
+  "O Mercado Pago não autorizou esta transação. Você pode tentar outro cartão ou pagar via PIX. O que prefere?";
+
+function looksLikeRejectedCardResponse(value: unknown) {
+  const text = String(value ?? "").toLowerCase();
+  return /(transactions? failed|following transactions failed|rejected|cc_rejected|not authorized|not authorised|não autoriz|nao autoriz|high.?risk|security)/i.test(text);
+}
+
+function safeProviderFailureMessage() {
+  return "Não conseguimos processar o pagamento agora. Tente novamente ou fale com a Hotbox pelo WhatsApp.";
+}
+
 export function mercadoPagoOrderState(order: any) {
   const payment = firstPayment(order) || {};
   const orderStatus = String(order?.status || "");
@@ -73,7 +85,7 @@ function statusMessage(order: any) {
     cc_rejected_high_risk: "O pagamento não pôde ser aprovado pela análise de segurança. Tente outro cartão ou Pix.",
     cc_rejected_3ds_challenge: "Não foi possível confirmar a autenticação do banco. Tente novamente ou use outro meio de pagamento.",
   };
-  return map[detail] || "O pagamento não foi aprovado. Você pode tentar novamente ou escolher outro meio de pagamento.";
+  return map[detail] || CARD_REJECTED_CUSTOMER_MESSAGE;
 }
 
 export async function fetchMercadoPagoOrder(accessToken: string, orderId: string) {
@@ -319,12 +331,34 @@ export const createMercadoPagoPayment = createServerFn({ method: "POST" })
             .join(" · ")
         : "";
       const cause = errors || created?.message || created?.error;
-      const rawMessage = String(cause || "Não foi possível iniciar a order pelo Mercado Pago.");
-      const environmentHint =
-        cfg.environment === "test" && /Unauthorized use of live credentials/i.test(rawMessage)
-          ? " O Mercado Pago recusou a credencial no ambiente de teste. Confirme se Public Key e Access Token vieram da mesma tela 'Credenciais de teste' desta aplicação."
-          : "";
-      return { ok: false, error: `${rawMessage}${environmentHint}` } as const;
+      const rawMessage = String(cause || "Mercado Pago request failed");
+
+      // Nunca devolve texto técnico da API para o cliente. Em produção o Brick
+      // pode receber respostas como "the following transactions failed" quando
+      // a análise de segurança recusa o cartão. Isso é uma recusa comercial,
+      // não um erro que deva aparecer cru na tela.
+      console.error("[mercadopago] order create rejected/failed", {
+        checkoutId: checkout.id,
+        status: response.status,
+        paymentMethodId,
+        response: created,
+      });
+
+      if (!isPix && (looksLikeRejectedCardResponse(rawMessage) || response.status === 400 || response.status === 422)) {
+        await (supabaseAdmin as any)
+          .from("site_checkout_sessions")
+          .update({ mercadopago_attempt_no: attemptNo + 1, updated_at: new Date().toISOString() })
+          .eq("id", checkout.id);
+        return {
+          ok: false,
+          rejected: true,
+          status: "rejected",
+          statusDetail: "card_not_authorized",
+          error: CARD_REJECTED_CUSTOMER_MESSAGE,
+        } as const;
+      }
+
+      return { ok: false, technical: true, error: safeProviderFailureMessage() } as const;
     }
 
     await storeMercadoPagoSnapshot(supabaseAdmin, checkout.id, created);
@@ -340,7 +374,7 @@ export const createMercadoPagoPayment = createServerFn({ method: "POST" })
       await (supabaseAdmin as any).from("site_checkout_sessions")
         .update({ mercadopago_attempt_no: attemptNo + 1, updated_at: new Date().toISOString() })
         .eq("id", checkout.id);
-      return { ok: false, rejected: true, orderId: result.orderId, paymentId: result.paymentId, status: result.status, statusDetail: result.statusDetail, error: result.message } as const;
+      return { ok: false, rejected: true, orderId: result.orderId, paymentId: result.paymentId, status: result.status, statusDetail: result.statusDetail, error: CARD_REJECTED_CUSTOMER_MESSAGE } as const;
     }
 
     return { ok: true, ...result } as const;
