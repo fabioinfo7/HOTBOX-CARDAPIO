@@ -72,9 +72,7 @@ type AddonOption = {
   id: string;
   group_id: string;
   name: string;
-  display_name?: string | null;
   description?: string | null;
-  image_url?: string | null;
   price: number;
   linked_product_id?: string | null;
   use_linked_product_price?: boolean | null;
@@ -85,7 +83,6 @@ type AddonOption = {
 type AddonGroup = {
   id: string;
   name: string;
-  display_title?: string | null;
   description?: string | null;
   required: boolean;
   min_select: number;
@@ -120,6 +117,14 @@ type ActiveFilter = "ativos" | "inativos" | "todos";
 type CheckoutPayment = "infinitepay" | "mercadopago" | "appmax";
 type PaymentChoice = "online" | "delivery_card" | "delivery_pix";
 type AreaStatus = "idle" | "checking" | "needs_number" | "supported" | "unsupported" | "error";
+
+type ActiveOrderSummary = {
+  id: string;
+  order_number: number | null;
+  status: string;
+  created_at: string;
+  delivery_mode?: string | null;
+};
 
 import hotboxLogoUrl from "@/assets/logo-hotbox.jpeg";
 
@@ -178,6 +183,35 @@ function pushMyOrder(id: string) {
   } catch {
     /* localStorage indisponível */
   }
+}
+
+const ACTIVE_ORDER_STATUSES = new Set([
+  "pending_review",
+  "pending",
+  "preparing",
+  "ready_pickup",
+  "out_for_delivery",
+]);
+
+function readMyOrderIds(): string[] {
+  try {
+    const raw = localStorage.getItem(MY_ORDERS_KEY);
+    const ids = raw ? JSON.parse(raw) : [];
+    return Array.isArray(ids) ? ids.map(String).filter(Boolean).slice(0, 30) : [];
+  } catch {
+    return [];
+  }
+}
+
+function activeOrderStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    pending_review: "Aguardando confirmação",
+    pending: "Pedido confirmado",
+    preparing: "Em preparação",
+    ready_pickup: "Pedido pronto",
+    out_for_delivery: "Saiu para entrega",
+  };
+  return labels[status] || "Pedido em andamento";
 }
 
 
@@ -320,6 +354,8 @@ function CustomerHome() {
   const [deliveryFee, setDeliveryFee] = useState(0);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [placing, setPlacing] = useState(false);
+  const [activeOrders, setActiveOrders] = useState<ActiveOrderSummary[]>([]);
+  const [checkingActiveOrders, setCheckingActiveOrders] = useState(false);
   const [bannerUrl, setBannerUrl] = useState<string | null>(null);
   const [bannerTagline, setBannerTagline] = useState(
     "Batatas recheadas, hambúrgueres artesanais e porções irresistíveis. Direto do forno pra sua casa.",
@@ -430,6 +466,58 @@ function CustomerHome() {
       });
   }, []);
 
+  async function refreshActiveOrders() {
+    const ids = readMyOrderIds();
+    if (!ids.length) {
+      setActiveOrders([]);
+      return;
+    }
+
+    setCheckingActiveOrders(true);
+    try {
+      const { data, error } = await (supabase as any)
+        .from("orders")
+        .select("id,order_number,status,created_at,delivery_mode")
+        .in("id", ids)
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        console.error("[cardapio] não foi possível verificar pedidos em andamento", error);
+        return;
+      }
+
+      setActiveOrders(
+        (((data as ActiveOrderSummary[]) || []).filter((order) =>
+          ACTIVE_ORDER_STATUSES.has(String(order.status || "")),
+        )),
+      );
+    } finally {
+      setCheckingActiveOrders(false);
+    }
+  }
+
+  useEffect(() => {
+    void refreshActiveOrders();
+
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refreshActiveOrders();
+    }, 15000);
+
+    const onFocus = () => void refreshActiveOrders();
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void refreshActiveOrders();
+    };
+
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
+
   useEffect(() => {
     supabase
       .from("products")
@@ -447,8 +535,8 @@ function CustomerHome() {
         )
         .maybeSingle(),
       (supabase as any).rpc("get_public_payment_config"),
-      (supabase as any).from("menu_addon_groups").select("id,name,display_title,description,required,min_select,max_select,active,sort_order").eq("active", true).order("sort_order"),
-      (supabase as any).from("menu_addon_options").select("id,group_id,name,display_name,description,image_url,price,linked_product_id,use_linked_product_price,active,sort_order").eq("active", true).order("sort_order"),
+      (supabase as any).from("menu_addon_groups").select("id,name,description,required,min_select,max_select,active,sort_order").eq("active", true).order("sort_order"),
+      (supabase as any).from("menu_addon_options").select("id,group_id,name,description,price,linked_product_id,use_linked_product_price,active,sort_order").eq("active", true).order("sort_order"),
       (supabase as any).from("product_addon_groups").select("product_id,group_id,sort_order").order("sort_order"),
       (supabase as any).from("menu_order_bumps").select("id,product_id,title,subtitle,placement,price_override,active,sort_order").eq("active", true).order("sort_order"),
     ]).then(([storeResult, paymentResult, groupResult, optionResult, linkResult, bumpResult]: any[]) => {
@@ -1154,6 +1242,7 @@ function CustomerHome() {
       if (created?.pay_on_delivery && created?.order_id) {
         trackAnalytics("purchase", { event_category: "commerce", checkout_id: String(created.checkout.id), order_id: String(created.order_id), customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: String(created.payment_method || paymentChoice), value: Number(created.checkout.total || total), properties: { payment_timing: "delivery" } });
         pushMyOrder(String(created.order_id));
+        void refreshActiveOrders();
         setCart([]);
         removeCoupon();
         window.location.href = `/obrigado?provider=delivery&order_id=${encodeURIComponent(String(created.order_id))}&method=${encodeURIComponent(String(created.payment_method || ""))}`;
@@ -1214,7 +1303,7 @@ function CustomerHome() {
   }
 
   function finishMercadoPago(orderId?: string | null) {
-    if (orderId) pushMyOrder(orderId);
+    if (orderId) { pushMyOrder(orderId); void refreshActiveOrders(); }
     const checkoutId = mpCheckout?.id || "";
     setCart([]);
     removeCoupon();
@@ -1232,13 +1321,46 @@ function CustomerHome() {
   }
 
   function finishAppmax(orderId?: string | null) {
-    if (orderId) pushMyOrder(orderId);
+    if (orderId) { pushMyOrder(orderId); void refreshActiveOrders(); }
     const checkoutId = appmaxCheckout?.id || "";
     setCart([]);
     removeCoupon();
     setAppmaxCheckout(null);
     window.location.href = `/obrigado?provider=appmax&checkout_id=${encodeURIComponent(checkoutId)}`;
   }
+
+  const currentActiveOrder = activeOrders[0] || null;
+
+  const activeOrderBanner = currentActiveOrder ? (
+    <button
+      type="button"
+      onClick={() => nav({ to: "/pedido/$id", params: { id: currentActiveOrder.id } })}
+      className="w-full text-left"
+    >
+      <div className="mx-auto flex max-w-2xl items-center gap-3 rounded-2xl border border-amber-200 bg-gradient-to-r from-amber-50 via-white to-orange-50 px-4 py-3 shadow-sm ring-1 ring-amber-100 transition hover:shadow-md">
+        <div className="relative grid size-11 shrink-0 place-items-center rounded-2xl bg-[#ffd400] text-black shadow-sm">
+          <Bike className="size-5" />
+          <span className="absolute -right-1 -top-1 size-3 rounded-full bg-emerald-500 ring-2 ring-white" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm font-black text-foreground">Você tem um pedido em andamento</p>
+            {currentActiveOrder.order_number != null && (
+              <span className="rounded-full bg-black px-2 py-0.5 text-[10px] font-black text-white">
+                #{currentActiveOrder.order_number}
+              </span>
+            )}
+          </div>
+          <p className="mt-0.5 text-xs font-semibold text-amber-900">
+            {activeOrderStatusLabel(currentActiveOrder.status)}
+            {activeOrders.length > 1 ? ` • +${activeOrders.length - 1} pedido(s)` : ""}
+          </p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">Toque para acompanhar em tempo real.</p>
+        </div>
+        <ChevronRight className="size-5 shrink-0 text-amber-700" />
+      </div>
+    </button>
+  ) : null;
 
   if (!configLoaded) {
     return (
@@ -1272,6 +1394,7 @@ function CustomerHome() {
     const outside = areaStatus === "unsupported";
     return (
       <div className="min-h-screen bg-gradient-to-b from-[#160805] via-[#4f0f0c] to-[#f7f7f7] px-4 py-8 sm:py-12">
+        {activeOrderBanner && <div className="mx-auto mb-4 max-w-2xl">{activeOrderBanner}</div>}
         <div className="mx-auto max-w-lg">
           <div className="rounded-[34px] border border-white/10 bg-white p-6 shadow-2xl sm:p-8">
             <div className="flex items-center gap-3">
@@ -1468,7 +1591,7 @@ function CustomerHome() {
                     <div className="flex items-start justify-between gap-3 border-b bg-zinc-50/80 px-4 py-3">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
-                          <p className="font-black text-zinc-950">{group.display_title || group.name}</p>
+                          <p className="font-black text-zinc-950">{group.name}</p>
                           <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${
                             group.required
                               ? "bg-red-100 text-red-700"
@@ -1510,20 +1633,10 @@ function CustomerHome() {
                                   ? "border-primary bg-primary text-primary-foreground"
                                   : "border-zinc-300 bg-white"
                               }`}
-                              aria-label={selected ? `Remover ${option.display_name || option.name}` : `Adicionar ${option.display_name || option.name}`}
+                              aria-label={selected ? `Remover ${option.name}` : `Adicionar ${option.name}`}
                             >
                               {selected && <CheckCircle2 className="size-4" />}
                             </button>
-
-                            {option.image_url && (
-                              <img
-                                src={option.image_url}
-                                alt={option.display_name || option.name}
-                                loading="lazy"
-                                decoding="async"
-                                className="size-14 shrink-0 rounded-xl border border-black/5 object-cover"
-                              />
-                            )}
 
                             <button
                               type="button"
@@ -1531,7 +1644,7 @@ function CustomerHome() {
                               className="min-w-0 flex-1 text-left"
                             >
                               <div className="flex flex-wrap items-center gap-1.5">
-                                <p className="text-sm font-bold text-zinc-900">{option.display_name || option.name}</p>
+                                <p className="text-sm font-bold text-zinc-900">{option.name}</p>
                                 {option.linked_product_id && (
                                   <span className="rounded-full bg-sky-50 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-sky-700">
                                     Produto do cardápio
@@ -1551,7 +1664,7 @@ function CustomerHome() {
                                   onClick={() => setDetailAddonQuantity(group, option, quantity - 1)}
                                   disabled={quantity <= 0}
                                   className="grid size-7 place-items-center rounded-full text-zinc-700 disabled:opacity-30"
-                                  aria-label={`Diminuir ${option.display_name || option.name}`}
+                                  aria-label={`Diminuir ${option.name}`}
                                 >
                                   <Minus className="size-3.5" />
                                 </button>
@@ -1561,7 +1674,7 @@ function CustomerHome() {
                                   onClick={() => setDetailAddonQuantity(group, option, quantity + 1)}
                                   disabled={selectedCount >= max}
                                   className="grid size-7 place-items-center rounded-full bg-zinc-900 text-white disabled:opacity-30"
-                                  aria-label={`Aumentar ${option.display_name || option.name}`}
+                                  aria-label={`Aumentar ${option.name}`}
                                 >
                                   <Plus className="size-3.5" />
                                 </button>
@@ -2165,6 +2278,12 @@ function CustomerHome() {
           </div>
         </div>
       </div>
+
+      {activeOrderBanner && (
+        <div className="bg-white px-4 pb-3 pt-2">
+          {activeOrderBanner}
+        </div>
+      )}
 
       {/* ============ BANNER ============ */}
       <div
