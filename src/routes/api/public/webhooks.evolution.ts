@@ -5,6 +5,7 @@ import { brl, orderNumberFmt } from "@/lib/formatters";
 import { sendWhatsappText, sendWhatsappMedia } from "@/lib/whatsapp-send.server";
 import { isWithinBusinessHours, formatBusinessHoursText, type BusinessHourRange } from "@/lib/business-hours";
 import { getEffectivePrice } from "@/lib/promotions";
+import { requestSilentHumanHandoff } from "@/lib/human-handoff.server";
 
 // Envia todas as imagens do cardápio cadastradas em /loja/config → Imagens do
 // cardápio, uma de cada vez, com um pequeno intervalo. Quando o cliente pede
@@ -1309,6 +1310,29 @@ async function buildFinalConfirmationSummary(
 }
 
 
+
+
+function isDigitalPaymentLinkRequest(text: string): boolean {
+  const t = normalizeStreet(String(text ?? ""));
+  const cameFromDigitalMenu =
+    /\bvim pelo cardapio digital da hotbox\b/.test(t) ||
+    /\bcardapio digital\b/.test(t);
+  const asksPaymentLink =
+    /\blink de pagamento\b/.test(t) ||
+    /\breceber um link\b/.test(t);
+  const paymentProblem =
+    /\bpagamento nao foi autorizado\b/.test(t) ||
+    /\bajuda para concluir o pagamento\b/.test(t) ||
+    /\bconcluir o pagamento\b/.test(t);
+
+  return cameFromDigitalMenu && asksPaymentLink && paymentProblem;
+}
+
+function customerNameFromDigitalPaymentMessage(text: string): string | null {
+  const match = String(text ?? "").match(/(?:^|\n)\s*Nome:\s*([^\n\r]+)/i);
+  const name = String(match?.[1] ?? "").trim();
+  return name || null;
+}
 
 // ============================================================
 // SUPORTE A PEDIDOS DO CARDÁPIO DIGITAL / SITE
@@ -4956,6 +4980,34 @@ async function handleIncomingMessageUnlocked(
       sender_type: "customer",
       body: text,
       external_id: data?.key?.id ?? null,
+    });
+  }
+
+
+  // ============ CARDÁPIO DIGITAL → LINK DE PAGAMENTO ============
+  // Este caso NÃO entra no fluxo comercial comum e NÃO pede bairro.
+  // O cliente já montou o pedido no cardápio e está pedindo ajuda para pagar.
+  // Responde uma única vez, pausa a IA e chama atendimento manual com alarme.
+  if (!botGloballyOff && !conversation.bot_paused && isDigitalPaymentLinkRequest(text)) {
+    const greeting = greetingByTimeBR();
+    await replyAndLog(
+      supabaseAdmin,
+      conversation.id,
+      phone,
+      `${greeting}! Só um momento, por favor, que iremos gerar seu link de pagamento.`,
+    );
+
+    await requestSilentHumanHandoff(supabaseAdmin, {
+      conversationId: conversation.id,
+      phone,
+      customerName: customerNameFromDigitalPaymentMessage(text) || conversation.customer_name || null,
+      reason: "CLIENTE SOLICITANDO LINK DE PAGAMENTO",
+      severity: "warn",
+    });
+
+    return Response.json({
+      ok: true,
+      action: "digital_payment_link_handoff",
     });
   }
 
