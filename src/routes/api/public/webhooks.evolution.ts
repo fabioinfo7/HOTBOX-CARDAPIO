@@ -4988,13 +4988,19 @@ async function handleIncomingMessageUnlocked(
   // Este caso NÃO entra no fluxo comercial comum e NÃO pede bairro.
   // O cliente já montou o pedido no cardápio e está pedindo ajuda para pagar.
   // Responde uma única vez, pausa a IA e chama atendimento manual com alarme.
-  if (!botGloballyOff && !conversation.bot_paused && isDigitalPaymentLinkRequest(text)) {
+  if (isDigitalPaymentLinkRequest(text)) {
+    // IMPORTANTE:
+    // Este retorno é operacional, não depende da IA estar ativa. Mesmo que a
+    // conversa já esteja pausada por um handoff anterior, o cliente deve
+    // receber a confirmação e o atendimento humano deve ser acionado.
     const greeting = greetingByTimeBR();
+
     await replyAndLog(
       supabaseAdmin,
       conversation.id,
       phone,
       `${greeting}! Só um momento, por favor, que iremos gerar seu link de pagamento.`,
+      { systemMessage: true },
     );
 
     await requestSilentHumanHandoff(supabaseAdmin, {
