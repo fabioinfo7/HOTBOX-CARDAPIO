@@ -363,13 +363,13 @@ export const submitPublicFeedbackFn = createServerFn({ method: "POST" })
 
 
 /**
- * Avaliações públicas usadas como prova social no cardápio digital.
- * PRIVACIDADE: o telefone bruto nunca sai do servidor. O final do número
- * é ocultado antes de qualquer dado ser enviado ao navegador.
+ * Avaliações públicas usadas no cardápio digital como prova social.
+ * O telefone bruto NUNCA é retornado ao navegador.
  */
 export const getPublicTestimonialsFn = createServerFn({ method: "GET" })
   .handler(async () => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
     const { data, error } = await supabaseAdmin
       .from("customer_feedback")
       .select("id,customer_name,phone,submitted_at,service_rating,delivery_rating,flavor_rating,appearance_rating,comment")
@@ -391,20 +391,25 @@ export const getPublicTestimonialsFn = createServerFn({ method: "GET" })
     };
 
     const reviews = (data ?? []).map((row: any) => {
-      const ratings = [row.service_rating, row.delivery_rating, row.flavor_rating, row.appearance_rating]
+      const ratings = [
+        row.service_rating,
+        row.delivery_rating,
+        row.flavor_rating,
+        row.appearance_rating,
+      ]
         .map(Number)
         .filter((value) => Number.isFinite(value) && value >= 1 && value <= 5);
-      const average = ratings.length ? ratings.reduce((sum, value) => sum + value, 0) / ratings.length : 0;
+
+      const average = ratings.length
+        ? ratings.reduce((sum, value) => sum + value, 0) / ratings.length
+        : 0;
+
       return {
         id: String(row.id),
         customerName: String(row.customer_name || "Cliente Hotbox").trim(),
         phoneMasked: maskPhoneForPublic(row.phone),
         submittedAt: String(row.submitted_at),
         rating: Number(average.toFixed(1)),
-        serviceRating: Number(row.service_rating || 0),
-        deliveryRating: Number(row.delivery_rating || 0),
-        flavorRating: Number(row.flavor_rating || 0),
-        appearanceRating: Number(row.appearance_rating || 0),
         comment: String(row.comment || "").trim() || null,
       };
     });
