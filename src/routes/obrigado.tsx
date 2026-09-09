@@ -89,6 +89,23 @@ function ObrigadoPage() {
     const params = new URLSearchParams(window.location.search);
     const provider = params.get("provider") || "infinitepay";
 
+    async function confirmAppmax() {
+      if (!checkoutId) { setState("error"); return; }
+      try {
+        const { checkAppmaxPayment } = await import("@/lib/appmax.functions");
+        const checked: any = await checkAppmaxPayment({ data: { checkoutId } });
+        if (checked?.approved) {
+          setOrderId(checked.order_id || null);
+          trackPurchaseOnce(checked.order_id || null, checked.checkout_id || checkoutId, Number(checked.total || 0), checked.payment_method || "appmax");
+          setState("paid");
+          return;
+        }
+        setState("pending");
+      } catch {
+        setState("pending");
+      }
+    }
+
     async function confirmMercadoPago() {
       const checkoutId = params.get("checkout_id") || "";
       if (!checkoutId) { if (alive) setState("pending"); return; }
@@ -133,7 +150,7 @@ function ObrigadoPage() {
       } catch { if (alive) setState("pending"); }
     }
 
-    void (provider === "delivery" ? confirmPayOnDelivery() : provider === "mercadopago" ? confirmMercadoPago() : confirmInfinitePay());
+    void (provider === "delivery" ? confirmPayOnDelivery() : provider === "mercadopago" ? confirmMercadoPago() : provider === "appmax" ? confirmAppmax() : confirmInfinitePay());
     return () => { alive = false; };
   }, []);
 
