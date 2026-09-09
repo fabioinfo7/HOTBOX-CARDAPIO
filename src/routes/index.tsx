@@ -72,7 +72,9 @@ type AddonOption = {
   id: string;
   group_id: string;
   name: string;
+  display_name?: string | null;
   description?: string | null;
+  image_url?: string | null;
   price: number;
   linked_product_id?: string | null;
   use_linked_product_price?: boolean | null;
@@ -83,6 +85,7 @@ type AddonOption = {
 type AddonGroup = {
   id: string;
   name: string;
+  display_title?: string | null;
   description?: string | null;
   required: boolean;
   min_select: number;
@@ -444,8 +447,8 @@ function CustomerHome() {
         )
         .maybeSingle(),
       (supabase as any).rpc("get_public_payment_config"),
-      (supabase as any).from("menu_addon_groups").select("id,name,description,required,min_select,max_select,active,sort_order").eq("active", true).order("sort_order"),
-      (supabase as any).from("menu_addon_options").select("id,group_id,name,description,price,linked_product_id,use_linked_product_price,active,sort_order").eq("active", true).order("sort_order"),
+      (supabase as any).from("menu_addon_groups").select("id,name,display_title,description,required,min_select,max_select,active,sort_order").eq("active", true).order("sort_order"),
+      (supabase as any).from("menu_addon_options").select("id,group_id,name,display_name,description,image_url,price,linked_product_id,use_linked_product_price,active,sort_order").eq("active", true).order("sort_order"),
       (supabase as any).from("product_addon_groups").select("product_id,group_id,sort_order").order("sort_order"),
       (supabase as any).from("menu_order_bumps").select("id,product_id,title,subtitle,placement,price_override,active,sort_order").eq("active", true).order("sort_order"),
     ]).then(([storeResult, paymentResult, groupResult, optionResult, linkResult, bumpResult]: any[]) => {
@@ -1465,7 +1468,7 @@ function CustomerHome() {
                     <div className="flex items-start justify-between gap-3 border-b bg-zinc-50/80 px-4 py-3">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
-                          <p className="font-black text-zinc-950">{group.name}</p>
+                          <p className="font-black text-zinc-950">{group.display_title || group.name}</p>
                           <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${
                             group.required
                               ? "bg-red-100 text-red-700"
@@ -1507,10 +1510,20 @@ function CustomerHome() {
                                   ? "border-primary bg-primary text-primary-foreground"
                                   : "border-zinc-300 bg-white"
                               }`}
-                              aria-label={selected ? `Remover ${option.name}` : `Adicionar ${option.name}`}
+                              aria-label={selected ? `Remover ${option.display_name || option.name}` : `Adicionar ${option.display_name || option.name}`}
                             >
                               {selected && <CheckCircle2 className="size-4" />}
                             </button>
+
+                            {option.image_url && (
+                              <img
+                                src={option.image_url}
+                                alt={option.display_name || option.name}
+                                loading="lazy"
+                                decoding="async"
+                                className="size-14 shrink-0 rounded-xl border border-black/5 object-cover"
+                              />
+                            )}
 
                             <button
                               type="button"
@@ -1518,7 +1531,7 @@ function CustomerHome() {
                               className="min-w-0 flex-1 text-left"
                             >
                               <div className="flex flex-wrap items-center gap-1.5">
-                                <p className="text-sm font-bold text-zinc-900">{option.name}</p>
+                                <p className="text-sm font-bold text-zinc-900">{option.display_name || option.name}</p>
                                 {option.linked_product_id && (
                                   <span className="rounded-full bg-sky-50 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-sky-700">
                                     Produto do cardápio
@@ -1538,7 +1551,7 @@ function CustomerHome() {
                                   onClick={() => setDetailAddonQuantity(group, option, quantity - 1)}
                                   disabled={quantity <= 0}
                                   className="grid size-7 place-items-center rounded-full text-zinc-700 disabled:opacity-30"
-                                  aria-label={`Diminuir ${option.name}`}
+                                  aria-label={`Diminuir ${option.display_name || option.name}`}
                                 >
                                   <Minus className="size-3.5" />
                                 </button>
@@ -1548,7 +1561,7 @@ function CustomerHome() {
                                   onClick={() => setDetailAddonQuantity(group, option, quantity + 1)}
                                   disabled={selectedCount >= max}
                                   className="grid size-7 place-items-center rounded-full bg-zinc-900 text-white disabled:opacity-30"
-                                  aria-label={`Aumentar ${option.name}`}
+                                  aria-label={`Aumentar ${option.display_name || option.name}`}
                                 >
                                   <Plus className="size-3.5" />
                                 </button>
