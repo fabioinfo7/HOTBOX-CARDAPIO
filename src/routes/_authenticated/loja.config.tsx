@@ -1,10 +1,3 @@
-/* HOTBOX PRE-FLIGHT REQUIRED MARKERS
-digital_payment_provider
-mercadopago_public_key
-mercadopago_access_token
-digital_menu_pay_on_delivery_enabled
-mercadopago_environment
-*/
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -287,7 +280,7 @@ function ConfigPage() {
 
 
   async function save() {
-    const provider = c.digital_payment_provider === "mercadopago" ? "mercadopago" : "infinitepay";
+    const provider = c.digital_payment_provider === "mercadopago" ? "mercadopago" : c.digital_payment_provider === "appmax" ? "appmax" : "infinitepay";
     const onlinePaymentEnabled = c.digital_menu_pix_enabled !== false || c.digital_menu_card_enabled !== false;
     const payOnDeliveryEnabled = c.digital_menu_pay_on_delivery_enabled === true;
 
@@ -295,6 +288,11 @@ function ConfigPage() {
       if (c.mercadopago_enabled !== true) return toast.error("Ative o Mercado Pago antes de defini-lo como provedor principal.");
       if (!String(c.mercadopago_public_key || "").trim()) return toast.error("Informe a Public Key do Mercado Pago.");
       if (!String(c.mercadopago_access_token || "").trim()) return toast.error("Informe o Access Token do Mercado Pago.");
+    } else if (onlinePaymentEnabled && provider === "appmax") {
+      if (c.appmax_enabled !== true) return toast.error("Ative a Appmax antes de defini-la como provedor principal.");
+      if (!String(c.appmax_merchant_client_id || "").trim()) return toast.error("Informe o Merchant Client ID da Appmax.");
+      if (!String(c.appmax_merchant_client_secret || "").trim()) return toast.error("Informe o Merchant Client Secret da Appmax.");
+      if (!String(c.appmax_external_id || "").trim()) return toast.error("Informe o External ID da instalação Appmax.");
     } else if (onlinePaymentEnabled) {
       if (c.infinitepay_enabled !== true) return toast.error("Ative a InfinitePay antes de defini-la como provedor principal.");
       if (!String(c.infinitepay_handle || "").trim()) return toast.error("Informe a InfiniteTag / Handle da InfinitePay.");
@@ -314,13 +312,16 @@ function ConfigPage() {
       digital_payment_provider: provider,
       mercadopago_environment: c.mercadopago_environment === "production" ? "production" : "test",
       mercadopago_max_installments: Math.min(12, Math.max(1, Number(c.mercadopago_max_installments || 1))),
+      appmax_environment: c.appmax_environment === "production" ? "production" : "sandbox",
+      appmax_max_installments: Math.min(12, Math.max(1, Number(c.appmax_max_installments || 1))),
+      appmax_soft_descriptor: String(c.appmax_soft_descriptor || "HOTBOX").replace(/[^A-Za-z0-9 ]/g, "").slice(0, 13) || "HOTBOX",
       default_delivery_fee: Number(c.default_delivery_fee || 0),
       delivery_cost_per_km: Number(c.delivery_cost_per_km ?? 0.9),
     });
     const { error } = await supabase.from("store_config").upsert(payload);
     setSaving(false);
     if (error) toast.error(error.message);
-    else toast.success(`Configurações salvas. ${provider === "mercadopago" ? "Mercado Pago" : "InfinitePay"} está ativo para novos checkouts.`);
+    else toast.success(`Configurações salvas. ${provider === "mercadopago" ? "Mercado Pago" : provider === "appmax" ? "Appmax" : "InfinitePay"} está ativo para novos checkouts.`);
   }
 
 
@@ -764,9 +765,9 @@ function ConfigPage() {
               </div>
             </div>
             <p className="mb-2 text-xs text-muted-foreground">
-              Toca continuamente somente quando o backend realmente marcar uma conversa como necessitando de atendimento manual
-              (ex.: cliente pediu uma pessoa ou houve uma falha operacional insegura). Repetição comum e dúvida fora do fluxo
-              não devem acionar esse alerta. O cliente não recebe nenhuma mensagem técnica sobre o handoff.
+              Toca continuamente sempre que a IA não souber responder um cliente com segurança e pedir pra um
+              atendente assumir a conversa. Som próprio, diferente do alarme de pedidos — assim dá pra diferenciar
+              qual alerta está tocando.
             </p>
             <input
               ref={handoffFileRef}
@@ -788,24 +789,6 @@ function ConfigPage() {
             >
               <Upload className="size-4" /> {uploadingHandoff ? "Enviando..." : "Enviar .mp3"}
             </Button>
-            {c.handoff_alarm_sound_url && (
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                className="mt-2 w-full"
-                onClick={() => {
-                  try {
-                    const audio = new Audio(c.handoff_alarm_sound_url);
-                    audio.play().catch(() => toast.error("O navegador bloqueou o áudio. Clique novamente para testar."));
-                  } catch {
-                    toast.error("Não foi possível testar o áudio.");
-                  }
-                }}
-              >
-                <Volume2 className="size-4" /> Testar alarme de atendimento manual
-              </Button>
-            )}
             {c.handoff_alarm_sound_url && (
               <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
                 <Volume2 className="size-3.5" />{" "}
@@ -851,9 +834,10 @@ function ConfigPage() {
           <h2 className="mt-1 text-lg font-black">Provedor ativo do cardápio digital</h2>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">O cliente nunca escolhe a empresa de pagamento: ele vê apenas Pix ou cartão. A troca abaixo afeta somente novos checkouts. Pagamentos já iniciados continuam vinculados ao provedor original.</p>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-3">
           {[
             { key: "mercadopago", name: "Mercado Pago", ready: c.mercadopago_enabled === true && !!String(c.mercadopago_public_key || "").trim() && !!String(c.mercadopago_access_token || "").trim(), detail: "Checkout transparente: Pix e cartão dentro da HotBox." },
+            { key: "appmax", name: "Appmax", ready: c.appmax_enabled === true && !!String(c.appmax_merchant_client_id || "").trim() && !!String(c.appmax_merchant_client_secret || "").trim() && !!String(c.appmax_external_id || "").trim(), detail: "Checkout transparente: Appmax JS, Pix e cartão dentro da HotBox." },
             { key: "infinitepay", name: "InfinitePay", ready: c.infinitepay_enabled === true && !!String(c.infinitepay_handle || "").trim(), detail: "Checkout externo mantido como contingência." },
           ].map((item) => {
             const active = (c.digital_payment_provider || "infinitepay") === item.key;
@@ -934,6 +918,74 @@ function ConfigPage() {
         </div>
         <div className="rounded-xl border bg-muted/30 p-3 text-xs leading-relaxed text-muted-foreground">
           Webhook da Orders API em <code>{typeof window !== "undefined" ? `${window.location.origin}/api/public/webhooks/mercadopago` : "/api/public/webhooks/mercadopago"}</code>. A HotBox consulta a Order diretamente no Mercado Pago e confere status, valor, moeda e referência antes de criar o pedido.
+        </div>
+      </Card>
+
+      <Card className="space-y-4 p-5" style={tabStyle("pagamentos")}>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="font-semibold">Appmax — checkout transparente</h2>
+            <p className="mt-1 text-xs text-muted-foreground">Appmax JS tokeniza o cartão no navegador; Pix e cartão ficam dentro da HotBox. As credenciais do merchant permanecem no backend.</p>
+          </div>
+          <Switch checked={c.appmax_enabled === true} onCheckedChange={(v) => setC({ ...c, appmax_enabled: v })} />
+        </div>
+
+        <div className="space-y-2">
+          <Label>Ambiente Appmax</Label>
+          <Select value={c.appmax_environment === "production" ? "production" : "sandbox"} onValueChange={(v) => setC({ ...c, appmax_environment: v })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="sandbox">🧪 Sandbox — testes</SelectItem>
+              <SelectItem value="production">🟢 Produção — cobranças reais</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label>Merchant Client ID</Label>
+            <Input value={c.appmax_merchant_client_id || ""} onChange={(e) => setC({ ...c, appmax_merchant_client_id: e.target.value.trim() })} placeholder="Credencial do merchant" autoComplete="off" />
+          </div>
+          <div>
+            <Label>Merchant Client Secret</Label>
+            <Input type="password" value={c.appmax_merchant_client_secret || ""} onChange={(e) => setC({ ...c, appmax_merchant_client_secret: e.target.value.trim() })} placeholder="Secret do merchant" autoComplete="new-password" />
+          </div>
+          <div>
+            <Label>External ID</Label>
+            <Input value={c.appmax_external_id || ""} onChange={(e) => setC({ ...c, appmax_external_id: e.target.value.trim() })} placeholder="UUID da instalação" autoComplete="off" />
+            <p className="mt-1 text-[11px] text-muted-foreground">É o identificador usado pelo Appmax JS; não é uma senha.</p>
+          </div>
+          <div>
+            <Label>App Numerical ID</Label>
+            <Input inputMode="numeric" value={c.appmax_app_numerical_id || ""} onChange={(e) => setC({ ...c, appmax_app_numerical_id: e.target.value ? Number(e.target.value) : null })} placeholder="ID numérico do aplicativo" />
+            <p className="mt-1 text-[11px] text-muted-foreground">Cadastre antes de executar o health check/instalação.</p>
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label>Máximo de parcelas</Label>
+            <Select value={String(c.appmax_max_installments || 1)} onValueChange={(v) => setC({ ...c, appmax_max_installments: Number(v) })}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="1">Somente 1x — pronto</SelectItem>
+                <SelectItem value="2">Até 2x — preparar taxas</SelectItem>
+                <SelectItem value="3">Até 3x — preparar taxas</SelectItem>
+                <SelectItem value="6">Até 6x — preparar taxas</SelectItem>
+                <SelectItem value="12">Até 12x — preparar taxas</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label>Soft descriptor</Label>
+            <Input value={c.appmax_soft_descriptor || "HOTBOX"} onChange={(e) => setC({ ...c, appmax_soft_descriptor: e.target.value.toUpperCase().slice(0, 13) })} maxLength={13} placeholder="HOTBOX" />
+          </div>
+        </div>
+
+        <div className="space-y-2 rounded-xl border bg-muted/30 p-3 text-xs leading-relaxed text-muted-foreground">
+          <p><b>URL de validação:</b> <code>{typeof window !== "undefined" ? `${window.location.origin}/api/public/appmax/validation` : "/api/public/appmax/validation"}</code></p>
+          <p><b>Webhook:</b> <code>{typeof window !== "undefined" ? `${window.location.origin}/api/public/webhooks/appmax` : "/api/public/webhooks/appmax"}</code></p>
+          <p>Use as credenciais do <b>merchant</b> para operações de cliente, pedido e pagamento. O External ID é usado somente no front pelo Appmax JS.</p>
         </div>
       </Card>
 
@@ -1264,98 +1316,6 @@ function ConfigPage() {
               </p>
             </div>
           </div>
-        </div>
-      </Card>
-
-      <Card className="space-y-4 p-5" style={tabStyle("integracoes")}>
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="font-semibold">Meta Pixel — Cardápio Digital e Página da Bio</h2>
-            <p className="mt-1 max-w-3xl text-xs text-muted-foreground">
-              Cole aqui o código padrão do Meta Pixel fornecido pelo Gerenciador de Eventos.
-              Ao salvar, a HotBox identifica o Pixel ID e passa a carregar o Pixel automaticamente
-              nas páginas selecionadas.
-            </p>
-          </div>
-          <div className="flex items-center gap-2 rounded-xl border px-3 py-2">
-            <Label htmlFor="meta-pixel-enabled" className="cursor-pointer text-xs font-bold">
-              Pixel ativo
-            </Label>
-            <Switch
-              id="meta-pixel-enabled"
-              checked={(c as any).meta_pixel_enabled === true}
-              onCheckedChange={(checked) => setC({ ...c, meta_pixel_enabled: checked } as any)}
-            />
-          </div>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border bg-muted/20 p-3">
-            <div>
-              <p className="text-sm font-semibold">Cardápio Digital</p>
-              <p className="text-[11px] text-muted-foreground">Rastreia acessos e ações de compra no cardápio.</p>
-            </div>
-            <Switch
-              checked={(c as any).meta_pixel_on_menu !== false}
-              onCheckedChange={(checked) => setC({ ...c, meta_pixel_on_menu: checked } as any)}
-            />
-          </label>
-
-          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border bg-muted/20 p-3">
-            <div>
-              <p className="text-sm font-semibold">Página da Bio</p>
-              <p className="text-[11px] text-muted-foreground">Rastreia quem acessa a página de links da HotBox.</p>
-            </div>
-            <Switch
-              checked={(c as any).meta_pixel_on_bio !== false}
-              onCheckedChange={(checked) => setC({ ...c, meta_pixel_on_bio: checked } as any)}
-            />
-          </label>
-        </div>
-
-        <div>
-          <Label htmlFor="meta-pixel-script">Script do Meta Pixel</Label>
-          <Textarea
-            id="meta-pixel-script"
-            value={(c as any).meta_pixel_script || ""}
-            onChange={(e) => setC({ ...c, meta_pixel_script: e.target.value } as any)}
-            placeholder={`<!-- Meta Pixel Code -->
-<script>
-  !function(f,b,e,v,n,t,s){...}
-  fbq('init', 'SEU_PIXEL_ID');
-  fbq('track', 'PageView');
-</script>
-<!-- End Meta Pixel Code -->`}
-            className="mt-1 min-h-48 font-mono text-xs"
-            spellCheck={false}
-          />
-          <div className="mt-2 rounded-xl border bg-muted/20 p-3 text-[11px] leading-relaxed text-muted-foreground">
-            <b>Como funciona:</b> você cola o script completo uma única vez. O sistema extrai o Pixel ID,
-            carrega o Pixel somente nas páginas habilitadas e envia automaticamente eventos do funil.
-            Não é necessário editar arquivos do código a cada troca de Pixel.
-          </div>
-        </div>
-
-        <div className="grid gap-2 rounded-xl border p-3 text-xs sm:grid-cols-2">
-          <div>
-            <p className="font-bold">Eventos do cardápio enviados ao Meta</p>
-            <p className="mt-1 text-muted-foreground">
-              PageView, ViewContent, AddToCart, InitiateCheckout, AddPaymentInfo e Purchase — com produto, quantidade, preço, carrinho, adicionais, order bumps, cupom, desconto, taxa de entrega, total, forma de pagamento, checkout e pedido quando disponíveis.
-            </p>
-          </div>
-          <div>
-            <p className="font-bold">Página da Bio</p>
-            <p className="mt-1 text-muted-foreground">
-              O acesso à Bio envia PageView e continua compatível com os eventos internos do Analytics 360.
-            </p>
-          </div>
-        </div>
-
-        <div className="flex justify-end">
-          <Button onClick={save} disabled={saving} className="min-w-40">
-            <Save className="size-4" />
-            {saving ? "Salvando..." : "Salvar Meta Pixel"}
-          </Button>
         </div>
       </Card>
 
@@ -1884,59 +1844,8 @@ function ConfigPage() {
         <AiInstructionsCard />
       </div>
 
-      <Card className="space-y-4 p-5" style={tabStyle("entrega")}>
-        <div>
-          <h2 className="font-semibold">🏍️ Modo operacional da entrega no WhatsApp</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Define como o atendimento automático obtém a taxa de entrega naquela noite. Existe apenas <strong>um modo ativo por vez</strong>.
-            Exceções cadastradas por rua têm prioridade sobre esta escolha.
-          </p>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2">
-          <button
-            type="button"
-            onClick={() => setC({ ...c, whatsapp_delivery_dispatch_mode: "fixed_by_neighborhood" })}
-            className={`rounded-xl border p-4 text-left transition ${
-              (c.whatsapp_delivery_dispatch_mode || "fixed_by_neighborhood") === "fixed_by_neighborhood"
-                ? "border-primary bg-primary/10 ring-1 ring-primary"
-                : "hover:bg-muted/60"
-            }`}
-          >
-            <div className="font-semibold">📍 Taxa fixa por bairro</div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              O backend consulta o valor configurado em cada bairro e pode informar esse valor ao cliente sem pedir aprovação manual.
-            </p>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setC({ ...c, whatsapp_delivery_dispatch_mode: "partner_quote" })}
-            className={`rounded-xl border p-4 text-left transition ${
-              c.whatsapp_delivery_dispatch_mode === "partner_quote"
-                ? "border-primary bg-primary/10 ring-1 ring-primary"
-                : "hover:bg-muted/60"
-            }`}
-          >
-            <div className="font-semibold">🤝 Motoboy parceiro — cotação manual</div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              A automação nunca usa taxa fixa. Ela avisa o cliente que vai verificar a taxa e abre um popup para o operador consultar o parceiro,
-              digitar o valor e autorizar o envio.
-            </p>
-          </button>
-        </div>
-
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
-          <strong>Regra de segurança:</strong> estes modos são mutuamente exclusivos. A IA não escolhe o modo, não calcula taxa e não pode ignorar uma exceção de rua.
-        </div>
-      </Card>
-
       <div style={tabStyle("entrega")}>
         <BairrosAtendidosCard pricingMode={c.delivery_pricing_mode === "distance" ? "distance" : "neighborhood"} />
-      </div>
-
-      <div style={tabStyle("entrega")}>
-        <StreetDeliveryExceptionsCard />
       </div>
 
       <div style={tabStyle("entrega")}>
@@ -2098,20 +2007,11 @@ function AiInstructionsCard() {
   return (
     <Card className="space-y-4 p-5">
       <div>
-        <h2 className="flex items-center gap-2 font-semibold">🧠 Instruções e biblioteca da empresa</h2>
+        <h2 className="flex items-center gap-2 font-semibold">🧠 Instruções para a IA</h2>
         <p className="mt-1 text-xs text-muted-foreground">
-          Use esta área como fonte oficial de conhecimento do atendimento. Cadastre horário de funcionamento, informações
-          sobre entrega, localização, regras da loja, observações comerciais e avisos temporários. A IA pode consultar essas
-          informações quando o cliente perguntar, mas não pode inventar fatos que não estejam aqui ou nas configurações do sistema.
-          <strong> Globais</strong> valem todos os dias. <strong>Do dia</strong> valem só hoje (fuso Brasília).
+          Ensine a IA a seguir regras específicas. <strong>Globais</strong> valem todos os dias. <strong>Do dia</strong>{" "}
+          valem só hoje (fuso Brasília) e somem automaticamente.
         </p>
-      </div>
-
-      <div className="rounded-xl border bg-muted/30 p-3 text-xs leading-relaxed text-muted-foreground">
-        <strong>Fonte de verdade:</strong> preços, produtos, adicionais, taxa de entrega, bairros e formas de pagamento continuam
-        vindo do banco/configurações e nunca desta caixa de texto. Esta biblioteca serve para fatos da empresa e contexto comercial.
-        Quando uma informação não existir nem aqui nem nas configurações, o atendimento deve dizer que não possui a informação
-        confirmada em vez de criar uma resposta.
       </div>
 
       {/* form para adicionar */}
@@ -2139,7 +2039,7 @@ function AiInstructionsCard() {
           placeholder={
             newType === "daily"
               ? `Ex: Hoje estamos sem batata frita. Se pedirem, avise com educação e ofereça o onion rings como alternativa.`
-              : `Ex: Horário: terça a domingo, das 18h às 23h. Somos delivery. Retirada disponível no endereço cadastrado. Nunca inventar informações fora desta biblioteca.`
+              : `Ex: Sempre pergunte se o cliente tem o cartão fidelidade antes de fechar o pedido.`
           }
           value={newText}
           onChange={(e) => setNewText(e.target.value)}
@@ -2419,203 +2319,6 @@ function BairrosAtendidosCard({ pricingMode }: { pricingMode: "neighborhood" | "
                   </Button>
                 </>
               )}
-            </div>
-          ))}
-        </div>
-      )}
-    </Card>
-  );
-}
-
-
-function StreetDeliveryExceptionsCard() {
-  const [rows, setRows] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [newStreet, setNewStreet] = useState("");
-  const [newNeighborhood, setNewNeighborhood] = useState("");
-  const [newMode, setNewMode] = useState<"fixed" | "partner_quote">("partner_quote");
-  const [newFee, setNewFee] = useState("");
-  const [adding, setAdding] = useState(false);
-
-  async function load() {
-    setLoading(true);
-    const { data, error } = await (supabase as any)
-      .from("delivery_street_exceptions")
-      .select("*")
-      .order("neighborhood", { ascending: true })
-      .order("street_name", { ascending: true });
-    if (error) toast.error(error.message);
-    setRows(data ?? []);
-    setLoading(false);
-  }
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  async function add() {
-    const street = newStreet.trim();
-    const neighborhood = newNeighborhood.trim();
-    if (!street || !neighborhood) {
-      toast.error("Informe a rua e o bairro para evitar ambiguidades.");
-      return;
-    }
-
-    const fee = newMode === "fixed" ? Number(newFee.replace(",", ".")) : null;
-    if (newMode === "fixed" && (!Number.isFinite(fee) || Number(fee) <= 0)) {
-      toast.error("Para uma exceção com taxa fixa, informe um valor maior que zero.");
-      return;
-    }
-
-    setAdding(true);
-    const { error } = await (supabase as any)
-      .from("delivery_street_exceptions")
-      .insert({
-        street_name: street,
-        neighborhood,
-        dispatch_mode: newMode,
-        fixed_fee: newMode === "fixed" ? Number(Number(fee).toFixed(2)) : null,
-        active: true,
-      });
-
-    if (error) {
-      toast.error(error.message.includes("duplicate") ? "Essa rua já possui uma exceção nesse bairro." : error.message);
-      setAdding(false);
-      return;
-    }
-
-    setNewStreet("");
-    setNewNeighborhood("");
-    setNewFee("");
-    setNewMode("partner_quote");
-    toast.success("Exceção de rua adicionada.");
-    setAdding(false);
-    load();
-  }
-
-  async function toggle(id: string, active: boolean) {
-    await (supabase as any)
-      .from("delivery_street_exceptions")
-      .update({ active: !active, updated_at: new Date().toISOString() })
-      .eq("id", id);
-    load();
-  }
-
-  async function remove(id: string) {
-    if (!window.confirm("Remover esta exceção de rua?")) return;
-    const { error } = await (supabase as any).from("delivery_street_exceptions").delete().eq("id", id);
-    if (error) toast.error(error.message);
-    else toast.success("Exceção removida.");
-    load();
-  }
-
-  async function updateMode(row: any, mode: "fixed" | "partner_quote") {
-    let fixedFee = row.fixed_fee;
-    if (mode === "fixed" && !(Number(fixedFee) > 0)) {
-      const raw = window.prompt("Valor fixo dessa rua:", "");
-      if (!raw) return;
-      const parsed = Number(raw.replace(",", "."));
-      if (!Number.isFinite(parsed) || parsed <= 0) {
-        toast.error("Valor inválido.");
-        return;
-      }
-      fixedFee = Number(parsed.toFixed(2));
-    }
-
-    const { error } = await (supabase as any)
-      .from("delivery_street_exceptions")
-      .update({
-        dispatch_mode: mode,
-        fixed_fee: mode === "fixed" ? fixedFee : null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", row.id);
-    if (error) toast.error(error.message);
-    load();
-  }
-
-  async function editFee(row: any) {
-    const raw = window.prompt("Nova taxa fixa para essa rua:", row.fixed_fee == null ? "" : String(row.fixed_fee).replace(".", ","));
-    if (!raw) return;
-    const parsed = Number(raw.replace(",", "."));
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      toast.error("Valor inválido.");
-      return;
-    }
-    const { error } = await (supabase as any)
-      .from("delivery_street_exceptions")
-      .update({ fixed_fee: Number(parsed.toFixed(2)), updated_at: new Date().toISOString() })
-      .eq("id", row.id);
-    if (error) toast.error(error.message);
-    load();
-  }
-
-  return (
-    <Card className="space-y-4 p-5">
-      <div>
-        <h2 className="font-semibold">🛣️ Exceções de entrega por rua</h2>
-        <p className="mt-1 text-xs text-muted-foreground">
-          A regra da rua sempre vence o modo geral da noite. Assim, uma rua pode forçar <strong>motoboy parceiro</strong> mesmo quando o bairro usa taxa fixa,
-          ou pode forçar uma <strong>taxa fixa própria</strong> mesmo quando a noite inteira está em cotação com parceiros.
-        </p>
-      </div>
-
-      <div className="grid gap-2 lg:grid-cols-[1.4fr_1fr_1fr_0.7fr_auto]">
-        <Input placeholder="Rua / Avenida" value={newStreet} onChange={(e) => setNewStreet(e.target.value)} />
-        <Input placeholder="Bairro" value={newNeighborhood} onChange={(e) => setNewNeighborhood(e.target.value)} />
-        <Select value={newMode} onValueChange={(v) => setNewMode(v as "fixed" | "partner_quote")}>
-          <SelectTrigger><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="partner_quote">Motoboy parceiro</SelectItem>
-            <SelectItem value="fixed">Taxa fixa</SelectItem>
-          </SelectContent>
-        </Select>
-        <Input
-          placeholder="R$"
-          inputMode="decimal"
-          disabled={newMode !== "fixed"}
-          value={newFee}
-          onChange={(e) => setNewFee(e.target.value)}
-        />
-        <Button size="sm" onClick={add} disabled={adding}>
-          <Plus className="size-4" /> Adicionar
-        </Button>
-      </div>
-
-      <div className="rounded-xl bg-muted/40 p-3 text-[11px] text-muted-foreground">
-        O sistema normaliza abreviações comuns de endereço. Ex.: “Avenida Doutor Laureano”, “Av. Dr Laureano” e “AV DOUTOR LAUREANO” são comparadas de forma equivalente.
-      </div>
-
-      {loading ? (
-        <p className="text-xs text-muted-foreground">Carregando...</p>
-      ) : rows.length === 0 ? (
-        <p className="text-xs text-muted-foreground">Nenhuma exceção por rua cadastrada.</p>
-      ) : (
-        <div className="space-y-2">
-          {rows.map((row) => (
-            <div key={row.id} className={`rounded-xl border p-3 ${row.active ? "" : "opacity-50"}`}>
-              <div className="flex flex-wrap items-center gap-2">
-                <Switch checked={!!row.active} onCheckedChange={() => toggle(row.id, row.active)} />
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold">{row.street_name}</p>
-                  <p className="text-[11px] text-muted-foreground">{row.neighborhood}</p>
-                </div>
-                <Select value={row.dispatch_mode} onValueChange={(v) => updateMode(row, v as "fixed" | "partner_quote")}>
-                  <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="partner_quote">Motoboy parceiro</SelectItem>
-                    <SelectItem value="fixed">Taxa fixa</SelectItem>
-                  </SelectContent>
-                </Select>
-                {row.dispatch_mode === "fixed" && (
-                  <Button size="sm" variant="outline" onClick={() => editFee(row)}>
-                    R$ {Number(row.fixed_fee || 0).toFixed(2).replace(".", ",")}
-                  </Button>
-                )}
-                <Button size="icon" variant="ghost" className="text-destructive" onClick={() => remove(row.id)}>
-                  <Trash2 className="size-4" />
-                </Button>
-              </div>
             </div>
           ))}
         </div>
