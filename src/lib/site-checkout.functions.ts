@@ -2,7 +2,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getEffectivePrice } from "@/lib/promotions";
 
-export type SitePaymentKind = "infinitepay" | "mercadopago" | "delivery_card" | "delivery_pix";
+export type SitePaymentKind = "infinitepay" | "mercadopago" | "appmax" | "delivery_card" | "delivery_pix";
 
 type CheckoutAddonInput = {
   option_id: string;
@@ -142,19 +142,19 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
     if (!name) return { error: "Informe o nome de quem vai receber." };
     if (phone.length < 10) return { error: "Informe um telefone válido." };
     if (!Array.isArray(data.items) || data.items.length === 0) return { error: "Seu carrinho está vazio." };
-    if (!["infinitepay", "mercadopago", "delivery_card", "delivery_pix"].includes(String(data.payment_kind || ""))) {
+    if (!["infinitepay", "mercadopago", "appmax", "delivery_card", "delivery_pix"].includes(String(data.payment_kind || ""))) {
       return { error: "Forma de pagamento inválida." };
     }
 
     const { data: cfg } = await supabaseAdmin
       .from("store_config")
-      .select("digital_payment_provider,infinitepay_enabled,infinitepay_handle,mercadopago_enabled,mercadopago_public_key,mercadopago_access_token,digital_menu_card_enabled,digital_menu_pix_enabled,digital_menu_pay_on_delivery_enabled,digital_menu_pay_on_delivery_card_enabled,digital_menu_pay_on_delivery_pix_enabled,delivery_pricing_mode,store_lat,store_lng,google_maps_api_key,delivery_fee_tiers,default_delivery_fee,fixed_delivery_city")
+      .select("digital_payment_provider,infinitepay_enabled,infinitepay_handle,mercadopago_enabled,mercadopago_public_key,mercadopago_access_token,appmax_enabled,appmax_merchant_client_id,appmax_merchant_client_secret,appmax_external_id,digital_menu_card_enabled,digital_menu_pix_enabled,digital_menu_pay_on_delivery_enabled,digital_menu_pay_on_delivery_card_enabled,digital_menu_pay_on_delivery_pix_enabled,delivery_pricing_mode,store_lat,store_lng,google_maps_api_key,delivery_fee_tiers,default_delivery_fee,fixed_delivery_city")
       .eq("id", 1)
       .maybeSingle();
 
     const requestedPayment = String(data.payment_kind || "");
     const isPayOnDelivery = requestedPayment === "delivery_card" || requestedPayment === "delivery_pix";
-    const activeProvider = String(cfg?.digital_payment_provider || "infinitepay") === "mercadopago" ? "mercadopago" : "infinitepay";
+    const activeProvider = ["mercadopago", "appmax"].includes(String(cfg?.digital_payment_provider || "")) ? String(cfg.digital_payment_provider) : "infinitepay";
 
     if (isPayOnDelivery) {
       if (data.delivery_mode !== "delivery") return { error: "Pagamento na entrega só está disponível para pedidos com entrega." };
@@ -168,6 +168,15 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
     } else if (activeProvider === "mercadopago") {
       if (cfg?.mercadopago_enabled !== true || !String(cfg?.mercadopago_public_key || "").trim() || !String(cfg?.mercadopago_access_token || "").trim()) {
         return { error: "Mercado Pago está selecionado, mas a integração ainda não está completamente configurada." };
+      }
+    } else if (activeProvider === "appmax") {
+      if (
+        cfg?.appmax_enabled !== true ||
+        !String(cfg?.appmax_merchant_client_id || "").trim() ||
+        !String(cfg?.appmax_merchant_client_secret || "").trim() ||
+        !String(cfg?.appmax_external_id || "").trim()
+      ) {
+        return { error: "Appmax está selecionada, mas a integração ainda não está completamente configurada." };
       }
     } else if (cfg?.infinitepay_enabled !== true || !String(cfg?.infinitepay_handle || "").trim()) {
       return { error: "InfinitePay está selecionada, mas a integração ainda não está completamente configurada." };
