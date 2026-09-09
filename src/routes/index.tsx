@@ -210,9 +210,10 @@ function publicReviewDate(value: string) {
   }
 }
 
+
 function PublicReviewCard({ review }: { review: PublicReview }) {
   return (
-    <article className="w-[285px] shrink-0 rounded-[22px] border border-black/5 bg-white p-4 shadow-sm sm:w-[320px]">
+    <article className="rounded-2xl border border-black/5 bg-white p-3 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate text-sm font-black text-zinc-900">{review.customerName}</p>
@@ -220,56 +221,86 @@ function PublicReviewCard({ review }: { review: PublicReview }) {
             {review.phoneMasked} • {publicReviewDate(review.submittedAt)}
           </p>
         </div>
-        <span className="shrink-0 rounded-full bg-amber-50 px-2 py-1 text-[11px] font-black text-amber-700">
+        <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-black text-amber-700">
           {review.rating.toFixed(1)}
         </span>
       </div>
-      <div className="mt-2 flex items-center gap-2">
+
+      <div className="mt-1.5 flex items-center gap-2">
         <PublicReviewStars value={review.rating} />
-        <span className="text-[10px] font-bold uppercase tracking-wide text-zinc-400">Compra verificada</span>
+        <span className="text-[9px] font-bold uppercase tracking-wide text-zinc-400">Compra verificada</span>
       </div>
-      {review.comment ? (
-        <p className="mt-3 line-clamp-4 text-sm leading-relaxed text-zinc-700">“{review.comment}”</p>
-      ) : (
-        <p className="mt-3 text-xs font-medium text-zinc-400">
-          Cliente avaliou sua experiência com a Hotbox.
-        </p>
+
+      {review.comment && (
+        <p className="mt-2 line-clamp-3 text-[13px] leading-relaxed text-zinc-700">“{review.comment}”</p>
       )}
     </article>
   );
 }
 
-function PublicReviewsRail({
+function CompactInlineReview({ review }: { review: PublicReview }) {
+  return (
+    <div className="my-3 rounded-2xl border border-amber-200/70 bg-amber-50/60 px-3 py-2.5">
+      <div className="flex items-center gap-2">
+        <PublicReviewStars value={review.rating} />
+        <span className="text-xs font-black text-zinc-800">{review.rating.toFixed(1)}</span>
+        <span className="ml-auto text-[10px] font-bold uppercase tracking-wide text-zinc-400">Compra verificada</span>
+      </div>
+      {review.comment && (
+        <p className="mt-1.5 line-clamp-2 text-[12px] leading-relaxed text-zinc-700">“{review.comment}”</p>
+      )}
+      <p className="mt-1 text-[10px] text-zinc-400">
+        {review.customerName} • {publicReviewDate(review.submittedAt)}
+      </p>
+    </div>
+  );
+}
+
+function PublicReviewsModal({
+  open,
+  onClose,
   reviews,
-  title,
-  subtitle,
+  average,
 }: {
+  open: boolean;
+  onClose: () => void;
   reviews: PublicReview[];
-  title: string;
-  subtitle?: string;
+  average: number;
 }) {
-  if (!reviews.length) return null;
+  if (!open) return null;
 
   return (
-    <section className="overflow-hidden rounded-[28px] border border-amber-200/70 bg-gradient-to-br from-amber-50 via-white to-orange-50/60 py-5 shadow-sm">
-      <div className="flex items-end justify-between gap-3 px-4">
-        <div>
-          <p className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-[0.14em] text-amber-700">
-            <Star className="size-3.5 fill-amber-400 text-amber-400" /> Avaliações reais
-          </p>
-          <h2 className="mt-1 font-display text-xl font-black uppercase tracking-tight">{title}</h2>
-          {subtitle && <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>}
+    <div className="fixed inset-0 z-[80] bg-black/45 p-3 backdrop-blur-sm" onClick={onClose}>
+      <div
+        className="mx-auto mt-8 flex max-h-[86vh] w-full max-w-lg flex-col overflow-hidden rounded-[26px] bg-background shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b px-4 py-3">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-[0.14em] text-amber-700">Avaliações reais</p>
+            <div className="mt-0.5 flex items-center gap-2">
+              <PublicReviewStars value={average} />
+              <span className="text-sm font-black">{average.toFixed(1)}</span>
+              <span className="text-xs text-muted-foreground">• {reviews.length} avaliações</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="grid size-9 place-items-center rounded-full border bg-background"
+            aria-label="Fechar avaliações"
+          >
+            <X className="size-4" />
+          </button>
         </div>
-        <span className="shrink-0 rounded-full border border-amber-200 bg-white px-3 py-1.5 text-[10px] font-black text-amber-700">
-          Deslize →
-        </span>
+
+        <div className="space-y-2.5 overflow-y-auto p-3">
+          {reviews.map((review) => (
+            <PublicReviewCard key={review.id} review={review} />
+          ))}
+        </div>
       </div>
-      <div className="mt-4 flex gap-3 overflow-x-auto px-4 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {reviews.map((review) => (
-          <PublicReviewCard key={review.id} review={review} />
-        ))}
-      </div>
-    </section>
+    </div>
   );
 }
 
@@ -278,6 +309,7 @@ function CustomerHome() {
   const [products, setProducts] = useState<Product[]>([]);
   const [publicReviews, setPublicReviews] = useState<PublicReview[]>([]);
   const [publicReviewsAverage, setPublicReviewsAverage] = useState(0);
+  const [showPublicReviews, setShowPublicReviews] = useState(false);
   const [storeName, setStoreName] = useState("HotBox Delivery");
   const [deliveryFee, setDeliveryFee] = useState(0);
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -670,10 +702,6 @@ function CustomerHome() {
   const reviewsWithoutComments = useMemo(
     () => publicReviews.filter((review) => !review.comment),
     [publicReviews],
-  );
-  const strategicReviews = useMemo(
-    () => (reviewsWithComments.length ? reviewsWithComments : publicReviews).slice(0, 4),
-    [reviewsWithComments, publicReviews],
   );
   const filtered = useMemo(() => {
     return products.filter((p) => {
@@ -1940,21 +1968,19 @@ function CustomerHome() {
           </div>
         )}
         {!query && activeCategory === "Tudo" && publicReviews.length > 0 && (
-          <div className="mb-5 rounded-[24px] border border-black/5 bg-white px-4 py-3 shadow-sm">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs font-black uppercase tracking-wide text-zinc-500">Quem pede, recomenda</p>
-                <div className="mt-1 flex items-center gap-2">
-                  <PublicReviewStars value={publicReviewsAverage} />
-                  <span className="text-sm font-black">{publicReviewsAverage.toFixed(1)}</span>
-                  <span className="text-xs text-muted-foreground">
-                    • {publicReviews.length} {publicReviews.length === 1 ? "avaliação" : "avaliações"}
-                  </span>
-                </div>
-              </div>
-              <ShieldCheck className="size-7 text-emerald-600" />
-            </div>
-          </div>
+          <button
+            type="button"
+            onClick={() => setShowPublicReviews(true)}
+            className="mb-3 flex w-full items-center gap-2 rounded-2xl border border-black/5 bg-white px-3 py-2 shadow-sm transition hover:bg-muted/30"
+          >
+            <PublicReviewStars value={publicReviewsAverage} />
+            <span className="text-xs font-black">{publicReviewsAverage.toFixed(1)}</span>
+            <span className="min-w-0 flex-1 truncate text-left text-[11px] text-muted-foreground">
+              {publicReviews.length} {publicReviews.length === 1 ? "avaliação" : "avaliações"} de clientes
+            </span>
+            <span className="shrink-0 text-[11px] font-black text-primary">Ver avaliações</span>
+            <ChevronRight className="size-3.5 shrink-0 text-primary" />
+          </button>
         )}
 
         {!products.length ? (
@@ -1963,13 +1989,6 @@ function CustomerHome() {
           </div>
         ) : (
           <div className="space-y-8">
-            {!query && activeCategory === "Tudo" && strategicReviews.length > 0 && (
-              <PublicReviewsRail
-                reviews={strategicReviews}
-                title="O que estão falando da Hotbox"
-                subtitle="Comentários de clientes que já pediram com a gente."
-              />
-            )}
 
             {!query && activeCategory === "Tudo" && featured.length > 0 && (
               <section>
@@ -2016,13 +2035,6 @@ function CustomerHome() {
               </section>
             )}
 
-            {!query && activeCategory === "Tudo" && publicReviews.length > 0 && (
-              <PublicReviewsRail
-                reviews={publicReviews}
-                title="Avaliações dos nossos clientes"
-                subtitle="Comentários aparecem primeiro; depois, as avaliações só com estrelas."
-              />
-            )}
 
             <section>
               <h2 className="mb-3 font-display text-xl font-black uppercase tracking-tight">Cardápio</h2>
@@ -2030,9 +2042,9 @@ function CustomerHome() {
                 <p className="py-10 text-center text-sm text-muted-foreground">Nenhum produto encontrado.</p>
               ) : (
                 <div className="space-y-2.5">
-                  {filtered.map((p) => (
+                  {filtered.map((p, index) => (
+                    <div key={p.id}>
                     <button
-                      key={p.id}
                       onClick={() => openDetail(p)}
                       className="flex w-full items-center gap-4 rounded-[24px] border border-black/5 bg-white p-3.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
                     >
@@ -2069,21 +2081,43 @@ function CustomerHome() {
                         <Plus className="size-5 stroke-[3]" />
                       </span>
                     </button>
+                    {!query && activeCategory === "Tudo" && reviewsWithComments.length > 0 && index === 3 && (
+                      <CompactInlineReview review={reviewsWithComments[0]} />
+                    )}
+                    {!query && activeCategory === "Tudo" && reviewsWithComments.length > 1 && index === 7 && (
+                      <CompactInlineReview review={reviewsWithComments[1]} />
+                    )}
+                    </div>
                   ))}
                 </div>
               )}
             </section>
 
-            {!query && activeCategory === "Tudo" && reviewsWithoutComments.length > 0 && (
-              <PublicReviewsRail
-                reviews={reviewsWithoutComments}
-                title="Mais clientes que avaliaram"
-                subtitle="Avaliações sem comentário também entram na prova social."
-              />
+            {!query && activeCategory === "Tudo" && publicReviews.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowPublicReviews(true)}
+                className="flex w-full items-center justify-between rounded-2xl border border-black/5 bg-white px-4 py-3 text-left shadow-sm"
+              >
+                <div>
+                  <p className="text-xs font-black">Veja todas as avaliações</p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    Comentários primeiro • {publicReviews.length} avaliações no total
+                  </p>
+                </div>
+                <ChevronRight className="size-4 text-primary" />
+              </button>
             )}
           </div>
         )}
       </main>
+
+      <PublicReviewsModal
+        open={showPublicReviews}
+        onClose={() => setShowPublicReviews(false)}
+        reviews={publicReviews}
+        average={publicReviewsAverage}
+      />
 
       <footer className="mt-10 border-t bg-muted/40 py-6 text-center text-xs text-muted-foreground">
         <MapPin className="mx-auto mb-1 size-4" />
