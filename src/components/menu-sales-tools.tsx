@@ -370,8 +370,25 @@ export function MenuSalesTools() {
           <div className="grid gap-3 rounded-2xl border bg-muted/20 p-4 md:grid-cols-2">
             <div><Label>Nome do grupo</Label><Input value={newGroup.name} onChange={(e) => setNewGroup({ ...newGroup, name: e.target.value })} placeholder="Ex.: Escolha sua borda" /></div>
             <div><Label>Descrição</Label><Input value={newGroup.description} onChange={(e) => setNewGroup({ ...newGroup, description: e.target.value })} placeholder="Ex.: deixe ainda mais cremoso" /></div>
-            <div className="grid grid-cols-2 gap-2"><div><Label>Mínimo</Label><Input type="number" min="0" value={newGroup.min_select} onChange={(e) => setNewGroup({ ...newGroup, min_select: num(e.target.value) })} /></div><div><Label>Máximo</Label><Input type="number" min="1" value={newGroup.max_select} onChange={(e) => setNewGroup({ ...newGroup, max_select: num(e.target.value, 1) })} /></div></div>
-            <label className="flex items-center justify-between rounded-xl border bg-background p-3 text-sm font-bold">Obrigatório <Switch checked={newGroup.required} onCheckedChange={(v) => setNewGroup({ ...newGroup, required: v, min_select: v ? Math.max(1, newGroup.min_select) : newGroup.min_select })} /></label>
+            <div className="grid grid-cols-2 gap-2"><div><Label>Mínimo</Label><Input type="number" min="0" value={newGroup.min_select} onChange={(e) => setNewGroup({ ...newGroup, min_select: num(e.target.value) })} /></div><div><Label>Máximo de unidades</Label><Input type="number" min="1" value={newGroup.max_select} onChange={(e) => setNewGroup({ ...newGroup, max_select: num(e.target.value, 1) })} /></div></div>
+            <div className="rounded-xl border bg-background p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <Label>Tipo do grupo</Label>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    {newGroup.required ? "Obrigatório: o cliente precisa escolher antes de adicionar." : "Opcional: o cliente escolhe somente se quiser."}
+                  </p>
+                </div>
+                <Switch
+                  checked={newGroup.required}
+                  onCheckedChange={(v) => setNewGroup({ ...newGroup, required: v, min_select: v ? Math.max(1, newGroup.min_select) : 0 })}
+                />
+              </div>
+              <div className="mt-2 flex gap-2">
+                <span className={`rounded-full px-2 py-1 text-[10px] font-black ${newGroup.required ? "bg-red-100 text-red-700" : "bg-zinc-100 text-zinc-500"}`}>OBRIGATÓRIO</span>
+                <span className={`rounded-full px-2 py-1 text-[10px] font-black ${!newGroup.required ? "bg-emerald-100 text-emerald-700" : "bg-zinc-100 text-zinc-500"}`}>OPCIONAL</span>
+              </div>
+            </div>
 
             <div className="md:col-span-2 rounded-2xl border bg-background p-4">
               <Label>Em quais produtos este adicional deve aparecer?</Label>
@@ -452,8 +469,25 @@ export function MenuSalesTools() {
                 </div>
                 <div className="mt-3 grid gap-2 sm:grid-cols-4">
                   <div><Label className="text-[11px]">Mínimo</Label><Input type="number" min="0" value={group.min_select} onChange={(e) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, min_select: num(e.target.value) } : g))} onBlur={() => updateGroup(group, { min_select: groups.find((g) => g.id === group.id)?.min_select })} /></div>
-                  <div><Label className="text-[11px]">Máximo</Label><Input type="number" min="1" value={group.max_select} onChange={(e) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, max_select: num(e.target.value, 1) } : g))} onBlur={() => updateGroup(group, { max_select: groups.find((g) => g.id === group.id)?.max_select })} /></div>
-                  <label className="flex items-center justify-between rounded-xl border p-3 text-xs font-bold sm:col-span-2">Obrigatório <Switch checked={group.required === true} onCheckedChange={(v) => updateGroup(group, { required: v, min_select: v ? Math.max(1, num(group.min_select)) : num(group.min_select) })} /></label>
+                  <div><Label className="text-[11px]">Máximo de unidades</Label><Input type="number" min="1" value={group.max_select} onChange={(e) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, max_select: num(e.target.value, 1) } : g))} onBlur={() => updateGroup(group, { max_select: groups.find((g) => g.id === group.id)?.max_select })} /></div>
+                  <div className="rounded-xl border p-3 sm:col-span-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-black">Tipo do grupo</p>
+                        <p className="mt-0.5 text-[11px] text-muted-foreground">
+                          {group.required ? "Obrigatório — precisa escolher." : "Opcional — pode ignorar."}
+                        </p>
+                      </div>
+                      <Switch
+                        checked={group.required === true}
+                        onCheckedChange={(v) => updateGroup(group, { required: v, min_select: v ? Math.max(1, num(group.min_select)) : 0 })}
+                      />
+                    </div>
+                    <div className="mt-2 flex gap-2">
+                      <span className={`rounded-full px-2 py-1 text-[10px] font-black ${group.required ? "bg-red-100 text-red-700" : "bg-zinc-100 text-zinc-500"}`}>OBRIGATÓRIO</span>
+                      <span className={`rounded-full px-2 py-1 text-[10px] font-black ${!group.required ? "bg-emerald-100 text-emerald-700" : "bg-zinc-100 text-zinc-500"}`}>OPCIONAL</span>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="mt-4 space-y-2">
