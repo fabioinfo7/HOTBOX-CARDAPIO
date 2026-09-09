@@ -22,7 +22,7 @@ type Props = {
   customerEmail?: string | null;
   environment?: "test" | "production";
   origin: string;
-  supportWhatsappUrl: string;
+  supportWhatsappUrl?: string;
   onPaid: (orderId?: string | null) => void;
   onCancel: () => void;
 };
@@ -342,25 +342,40 @@ export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallme
 
   if (rejection) {
     return (
-      <div className="space-y-4 rounded-3xl border border-amber-200 bg-amber-50 p-5">
+      <div className="w-full max-w-full overflow-hidden rounded-3xl border border-amber-200 bg-amber-50 p-4 sm:p-5">
         <div>
           <p className="text-base font-black text-amber-950">Pagamento não autorizado</p>
           <p className="mt-1 text-sm leading-relaxed text-amber-900">{rejection.message}</p>
         </div>
-        <div className="grid gap-2 sm:grid-cols-3">
-          <Button className="min-h-12 rounded-xl" onClick={retryWithAnotherCard}>
-            <RefreshCw className="mr-2 size-4" /> Tentar outro cartão
+
+        <div className="mt-4 grid w-full min-w-0 grid-cols-1 gap-2">
+          <Button className="h-auto min-h-12 w-full min-w-0 whitespace-normal rounded-xl px-3 py-3 text-center" onClick={retryWithAnotherCard}>
+            <RefreshCw className="mr-2 size-4 shrink-0" /> <span className="min-w-0">Tentar outro cartão</span>
           </Button>
-          <Button className="min-h-12 rounded-xl bg-emerald-600 hover:bg-emerald-700" onClick={switchToPixNow} disabled={switchingToPix}>
-            {switchingToPix ? <Loader2 className="mr-2 size-4 animate-spin" /> : <QrCode className="mr-2 size-4" />} Pagar com PIX
+
+          <Button className="h-auto min-h-12 w-full min-w-0 whitespace-normal rounded-xl bg-emerald-600 px-3 py-3 text-center hover:bg-emerald-700" onClick={switchToPixNow} disabled={switchingToPix}>
+            {switchingToPix ? <Loader2 className="mr-2 size-4 shrink-0 animate-spin" /> : <QrCode className="mr-2 size-4 shrink-0" />}
+            <span className="min-w-0">Pagar com PIX</span>
           </Button>
-          <Button asChild variant="outline" className="min-h-12 rounded-xl border-emerald-500 bg-white text-emerald-800 hover:bg-emerald-50">
-            <a href={supportWhatsappUrl} target="_blank" rel="noreferrer">
-              <MessageCircle className="mr-2 size-4" /> Pedir link de pagamento à Hotbox (WhatsApp)
-            </a>
+
+          <Button
+            type="button"
+            variant="outline"
+            className="h-auto min-h-12 w-full min-w-0 whitespace-normal rounded-xl border-emerald-500 bg-white px-3 py-3 text-center text-emerald-800 hover:bg-emerald-50"
+            onClick={() => {
+              const fallback = "https://wa.me/5521984296288?text=" + encodeURIComponent("Olá! Vim pelo cardápio digital da Hotbox e preciso de ajuda para concluir o pagamento.");
+              const url = supportWhatsappUrl || fallback;
+              window.location.assign(url);
+            }}
+          >
+            <MessageCircle className="mr-2 size-4 shrink-0" />
+            <span className="min-w-0 break-words">Pedir link de pagamento à Hotbox (WhatsApp)</span>
           </Button>
         </div>
-        <p className="text-[11px] leading-relaxed text-amber-800">Seu pedido continua salvo. Você só precisa escolher outra forma para concluir o pagamento.</p>
+
+        <p className="mt-3 text-[11px] leading-relaxed text-amber-800">
+          Seu pedido continua salvo. Você só precisa escolher outra forma para concluir o pagamento.
+        </p>
       </div>
     );
   }
@@ -436,7 +451,7 @@ export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallme
       </div>
     );
   }
-//
+
   return (
     <div className="space-y-3">
       {environment === "test" && (
