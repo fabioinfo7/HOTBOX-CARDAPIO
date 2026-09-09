@@ -16,6 +16,38 @@ function num(v: unknown, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function productCurrentPrice(product: any) {
+  const base = Math.max(0, Number(product?.sale_price || 0));
+  const promo = Number(product?.promotion_price);
+  const now = new Date();
+  const startsOk = !product?.promotion_start_at || new Date(product.promotion_start_at) <= now;
+  const endsOk = !product?.promotion_end_at || new Date(product.promotion_end_at) >= now;
+  const dayOk =
+    !Array.isArray(product?.promotion_days_of_week) ||
+    !product.promotion_days_of_week.length ||
+    product.promotion_days_of_week.includes(now.getDay());
+
+  return product?.promotion_active === true &&
+    startsOk &&
+    endsOk &&
+    dayOk &&
+    Number.isFinite(promo) &&
+    promo >= 0
+      ? promo
+      : base;
+}
+
+function emptyOptionDraft() {
+  return {
+    source: "manual" as const,
+    name: "",
+    description: "",
+    price: "",
+    linked_product_id: "",
+    use_linked_product_price: true,
+  };
+}
+
 export function MenuSalesTools() {
   const [products, setProducts] = useState<any[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
@@ -31,12 +63,19 @@ export function MenuSalesTools() {
     availability: "all" as "all" | "specific",
     product_ids: [] as string[],
   });
-  const [newOptionByGroup, setNewOptionByGroup] = useState<Record<string, { name: string; description: string; price: string }>>({});
+  const [newOptionByGroup, setNewOptionByGroup] = useState<Record<string, {
+    source: "manual" | "product";
+    name: string;
+    description: string;
+    price: string;
+    linked_product_id: string;
+    use_linked_product_price: boolean;
+  }>>({});
   const [newBump, setNewBump] = useState({ product_id: "", title: "Que tal completar seu pedido?", subtitle: "", placement: "cart", price_override: "" });
 
   async function load() {
     const [p, g, o, l, b] = await Promise.all([
-      supabase.from("products").select("id,name,sale_price,active,kind,is_combo").eq("active", true).order("name"),
+      supabase.from("products").select("id,name,description,sale_price,active,kind,is_combo,promotion_active,promotion_price,promotion_type,promotion_start_at,promotion_end_at,promotion_days_of_week,promotion_time_start,promotion_time_end").eq("active", true).order("name"),
       (supabase as any).from("menu_addon_groups").select("*").order("sort_order").order("name"),
       (supabase as any).from("menu_addon_options").select("*").order("sort_order").order("name"),
       (supabase as any).from("product_addon_groups").select("*").order("sort_order"),
@@ -191,31 +230,75 @@ export function MenuSalesTools() {
   }
 
   async function addOption(groupId: string) {
-    const draft = newOptionByGroup[groupId] || { name: "", description: "", price: "" };
-    const name = draft.name.trim();
+    const draft = newOptionByGroup[groupId] || emptyOptionDraft();
+    const linkedProduct =
+      draft.source === "product"
+        ? products.find((product) => String(product.id) === String(draft.linked_product_id))
+        : null;
+
+    if (draft.source === "product" && !linkedProduct) {
+      return toast.error("Escolha qual produto existente será usado como adicional.");
+    }
+
+    const name =
+      draft.source === "product"
+        ? String(linkedProduct?.name || "").trim()
+        : draft.name.trim();
+
     if (!name) return toast.error("Informe o nome do adicional.");
-    const price = Math.max(0, num(String(draft.price).replace(",", ".")));
+
+    const price =
+      draft.source === "product" && draft.use_linked_product_price
+        ? productCurrentPrice(linkedProduct)
+        : Math.max(0, num(String(draft.price).replace(",", ".")));
+
+    const description =
+      draft.source === "product"
+        ? String(draft.description || linkedProduct?.description || "").trim() || null
+        : draft.description.trim() || null;
+
     const { error } = await (supabase as any).from("menu_addon_options").insert({
       group_id: groupId,
       name,
-      description: draft.description.trim() || null,
+      description,
       price,
+      linked_product_id: draft.source === "product" ? linkedProduct.id : null,
+      use_linked_product_price: draft.source === "product" ? draft.use_linked_product_price : false,
       active: true,
       sort_order: options.filter((o) => o.group_id === groupId).length,
     });
+
     if (error) return toast.error(error.message);
-    setNewOptionByGroup((s) => ({ ...s, [groupId]: { name: "", description: "", price: "" } }));
+
+    setNewOptionByGroup((state) => ({ ...state, [groupId]: emptyOptionDraft() }));
+    toast.success(
+      draft.source === "product"
+        ? `${name} também pode ser vendido como adicional.`
+        : "Adicional criado.",
+    );
     await load();
   }
 
   async function updateOption(option: any, patch: any) {
     const next = { ...option, ...patch };
+    const linkedProduct = next.linked_product_id
+      ? products.find((product) => String(product.id) === String(next.linked_product_id))
+      : null;
+
+    const price =
+      next.linked_product_id && next.use_linked_product_price === true && linkedProduct
+        ? productCurrentPrice(linkedProduct)
+        : Math.max(0, num(next.price));
+
     const { error } = await (supabase as any).from("menu_addon_options").update({
-      name: String(next.name || "").trim(),
+      name: String(next.name || linkedProduct?.name || "").trim(),
       description: String(next.description || "").trim() || null,
-      price: Math.max(0, num(next.price)),
+      price,
+      linked_product_id: next.linked_product_id || null,
+      use_linked_product_price: !!next.linked_product_id && next.use_linked_product_price === true,
       active: next.active !== false,
     }).eq("id", option.id);
+
     if (error) toast.error(error.message); else await load();
   }
 
@@ -349,7 +432,7 @@ export function MenuSalesTools() {
           {groups.map((group) => {
             const groupOptions = options.filter((o) => o.group_id === group.id);
             const linkedProducts = new Set(links.filter((l) => l.group_id === group.id).map((l) => String(l.product_id)));
-            const draft = newOptionByGroup[group.id] || { name: "", price: "" };
+            const draft = newOptionByGroup[group.id] || emptyOptionDraft();
             return (
               <div key={group.id} className="rounded-2xl border bg-background p-4 shadow-sm">
                 <div className="flex flex-wrap items-center gap-2">
@@ -375,20 +458,169 @@ export function MenuSalesTools() {
 
                 <div className="mt-4 space-y-2">
                   <p className="text-xs font-black uppercase tracking-wide text-muted-foreground">Opções deste grupo</p>
-                  {groupOptions.map((option) => (
-                    <div key={option.id} className="grid gap-2 rounded-xl border p-2 sm:grid-cols-[1fr_1fr_120px_auto_auto] sm:items-center">
-                      <Input value={option.name} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, name: e.target.value } : o))} onBlur={() => updateOption(option, { name: options.find((o) => o.id === option.id)?.name })} placeholder="Nome" />
-                      <Input value={option.description || ""} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, description: e.target.value } : o))} onBlur={() => updateOption(option, { description: options.find((o) => o.id === option.id)?.description })} placeholder="Descrição curta (opcional)" />
-                      <Input type="number" step="0.01" min="0" value={option.price} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, price: e.target.value } : o))} onBlur={() => updateOption(option, { price: options.find((o) => o.id === option.id)?.price })} />
-                      <Switch checked={option.active !== false} onCheckedChange={(v) => updateOption(option, { active: v })} />
-                      <Button size="icon" variant="ghost" className="text-destructive" onClick={() => deleteOption(option.id)}><Trash2 className="size-4" /></Button>
+                  {groupOptions.map((option) => {
+                    const linkedProduct = option.linked_product_id
+                      ? products.find((product) => String(product.id) === String(option.linked_product_id))
+                      : null;
+                    return (
+                      <div key={option.id} className="rounded-xl border p-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`rounded-full px-2 py-1 text-[10px] font-black ${linkedProduct ? "bg-sky-100 text-sky-800" : "bg-muted text-muted-foreground"}`}>
+                            {linkedProduct ? "PRODUTO DO CARDÁPIO" : "ADICIONAL MANUAL"}
+                          </span>
+                          <span className="ml-auto flex items-center gap-2 text-xs font-bold">
+                            Ativo <Switch checked={option.active !== false} onCheckedChange={(v) => updateOption(option, { active: v })} />
+                          </span>
+                          <Button size="icon" variant="ghost" className="text-destructive" onClick={() => deleteOption(option.id)}><Trash2 className="size-4" /></Button>
+                        </div>
+
+                        {linkedProduct ? (
+                          <div className="mt-3 grid gap-2 md:grid-cols-[1.2fr_1fr]">
+                            <div className="rounded-xl border bg-muted/20 p-3">
+                              <p className="text-xs text-muted-foreground">Produto associado</p>
+                              <p className="font-black">{linkedProduct.name}</p>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                Preço atual: {brl(productCurrentPrice(linkedProduct))}
+                              </p>
+                            </div>
+                            <div className="space-y-2">
+                              <label className="flex items-center justify-between rounded-xl border p-3 text-xs font-bold">
+                                Usar preço atual do produto
+                                <Switch
+                                  checked={option.use_linked_product_price === true}
+                                  onCheckedChange={(value) => updateOption(option, { use_linked_product_price: value })}
+                                />
+                              </label>
+                              {option.use_linked_product_price !== true && (
+                                <div>
+                                  <Label className="text-[11px]">Preço especial como adicional</Label>
+                                  <Input
+                                    className="mt-1"
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    value={option.price}
+                                    onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, price: e.target.value } : o))}
+                                    onBlur={() => updateOption(option, { price: options.find((o) => o.id === option.id)?.price })}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                            <div className="md:col-span-2">
+                              <Label className="text-[11px]">Descrição no cardápio</Label>
+                              <Input
+                                className="mt-1"
+                                value={option.description || ""}
+                                onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, description: e.target.value } : o))}
+                                onBlur={() => updateOption(option, { description: options.find((o) => o.id === option.id)?.description })}
+                                placeholder="Descrição curta (opcional)"
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_140px]">
+                            <Input value={option.name} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, name: e.target.value } : o))} onBlur={() => updateOption(option, { name: options.find((o) => o.id === option.id)?.name })} placeholder="Nome" />
+                            <Input value={option.description || ""} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, description: e.target.value } : o))} onBlur={() => updateOption(option, { description: options.find((o) => o.id === option.id)?.description })} placeholder="Descrição curta (opcional)" />
+                            <Input type="number" step="0.01" min="0" value={option.price} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, price: e.target.value } : o))} onBlur={() => updateOption(option, { price: options.find((o) => o.id === option.id)?.price })} />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <div className="rounded-2xl border bg-muted/10 p-3">
+                    <p className="text-xs font-black uppercase tracking-wide text-muted-foreground">Criar nova opção</p>
+
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={() => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, source: "manual", linked_product_id: "" } }))}
+                        className={`rounded-xl border p-3 text-left ${draft.source === "manual" ? "border-primary bg-primary/5 ring-1 ring-primary/30" : "bg-background"}`}
+                      >
+                        <p className="text-sm font-black">Adicional manual</p>
+                        <p className="mt-1 text-xs text-muted-foreground">Ex.: bacon extra, borda, molho.</p>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, source: "product", name: "", price: "", use_linked_product_price: true } }))}
+                        className={`rounded-xl border p-3 text-left ${draft.source === "product" ? "border-primary bg-primary/5 ring-1 ring-primary/30" : "bg-background"}`}
+                      >
+                        <p className="text-sm font-black">Produto existente</p>
+                        <p className="mt-1 text-xs text-muted-foreground">Ex.: refrigerante, sobremesa ou outro item já cadastrado.</p>
+                      </button>
                     </div>
-                  ))}
-                  <div className="grid gap-2 sm:grid-cols-[1fr_1fr_120px_auto]">
-                    <Input value={draft.name} onChange={(e) => setNewOptionByGroup((s) => ({ ...s, [group.id]: { ...draft, name: e.target.value } }))} placeholder="Ex.: Borda de requeijão" />
-                    <Input value={draft.description} onChange={(e) => setNewOptionByGroup((s) => ({ ...s, [group.id]: { ...draft, description: e.target.value } }))} placeholder="Descrição curta (opcional)" />
-                    <Input value={draft.price} onChange={(e) => setNewOptionByGroup((s) => ({ ...s, [group.id]: { ...draft, price: e.target.value } }))} placeholder="Preço" inputMode="decimal" />
-                    <Button onClick={() => addOption(group.id)}><Plus className="mr-1 size-4" /> Adicionar</Button>
+
+                    {draft.source === "product" ? (
+                      <div className="mt-3 grid gap-2">
+                        <div>
+                          <Label>Produto que será oferecido como adicional</Label>
+                          <Select
+                            value={draft.linked_product_id || undefined}
+                            onValueChange={(productId) => {
+                              const product = products.find((item) => String(item.id) === productId);
+                              setNewOptionByGroup((state) => ({
+                                ...state,
+                                [group.id]: {
+                                  ...draft,
+                                  linked_product_id: productId,
+                                  description: draft.description || String(product?.description || ""),
+                                  price: String(productCurrentPrice(product)),
+                                },
+                              }));
+                            }}
+                          >
+                            <SelectTrigger className="mt-1"><SelectValue placeholder="Escolha um produto do cardápio" /></SelectTrigger>
+                            <SelectContent>
+                              {products.map((product) => (
+                                <SelectItem key={product.id} value={String(product.id)}>
+                                  {product.name} — {brl(productCurrentPrice(product))}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        <label className="flex items-center justify-between rounded-xl border bg-background p-3 text-sm font-bold">
+                          Usar automaticamente o preço atual do produto
+                          <Switch
+                            checked={draft.use_linked_product_price}
+                            onCheckedChange={(value) => setNewOptionByGroup((state) => ({
+                              ...state,
+                              [group.id]: { ...draft, use_linked_product_price: value },
+                            }))}
+                          />
+                        </label>
+
+                        {!draft.use_linked_product_price && (
+                          <div>
+                            <Label>Preço especial quando vendido como adicional</Label>
+                            <Input
+                              className="mt-1"
+                              value={draft.price}
+                              onChange={(e) => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, price: e.target.value } }))}
+                              placeholder="0,00"
+                              inputMode="decimal"
+                            />
+                          </div>
+                        )}
+
+                        <Input
+                          value={draft.description}
+                          onChange={(e) => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, description: e.target.value } }))}
+                          placeholder="Descrição curta no cardápio (opcional)"
+                        />
+                      </div>
+                    ) : (
+                      <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_120px]">
+                        <Input value={draft.name} onChange={(e) => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, name: e.target.value } }))} placeholder="Ex.: Borda de requeijão" />
+                        <Input value={draft.description} onChange={(e) => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, description: e.target.value } }))} placeholder="Descrição curta (opcional)" />
+                        <Input value={draft.price} onChange={(e) => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, price: e.target.value } }))} placeholder="Preço" inputMode="decimal" />
+                      </div>
+                    )}
+
+                    <Button className="mt-3 w-full" onClick={() => addOption(group.id)}>
+                      <Plus className="mr-1 size-4" /> Adicionar opção
+                    </Button>
                   </div>
                 </div>
 
