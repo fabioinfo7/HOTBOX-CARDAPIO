@@ -6,6 +6,7 @@ export type SitePaymentKind = "infinitepay" | "mercadopago" | "delivery_card" | 
 
 type CheckoutAddonInput = {
   option_id: string;
+  qty?: number;
 };
 
 type CheckoutItemInput = {
@@ -306,7 +307,11 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
         }
         const group: any = groupById.get(String(option.group_id));
         if (!group || group.active !== true) return { error: `Um grupo de adicionais de ${p.name} está indisponível.` };
-        selectedCountByGroup.set(String(option.group_id), (selectedCountByGroup.get(String(option.group_id)) || 0) + 1);
+        const addonQty = Math.max(1, Math.min(20, Math.floor(Number(rawAddon.qty || 1))));
+        selectedCountByGroup.set(
+          String(option.group_id),
+          (selectedCountByGroup.get(String(option.group_id)) || 0) + addonQty,
+        );
 
         let addonPrice = Number(option.price || 0);
         let addonName = String(option.name);
@@ -333,6 +338,7 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
           linked_product_id: option.linked_product_id ? String(option.linked_product_id) : null,
           name: addonName,
           price: addonPrice,
+          qty: addonQty,
         });
       }
 
@@ -346,10 +352,15 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
         if (count > max) return { error: `Escolha no máximo ${max} opção(ões) em "${group.name}" para ${p.name}.` };
       }
 
-      const addonsTotal = Number(selectedAddons.reduce((sum, a) => sum + Number(a.price || 0), 0).toFixed(2));
+      const addonsTotal = Number(
+        selectedAddons.reduce(
+          (sum, a) => sum + Number(a.price || 0) * Math.max(1, Number(a.qty || 1)),
+          0,
+        ).toFixed(2),
+      );
       const userNotes = String(item.notes || "").trim();
       const addonNotes = selectedAddons.length
-        ? `Adicionais: ${selectedAddons.map((a) => `${a.name}${Number(a.price) > 0 ? ` (+R$ ${Number(a.price).toFixed(2).replace(".", ",")})` : ""}`).join(", ")}`
+        ? `Adicionais: ${selectedAddons.map((a) => `${Math.max(1, Number(a.qty || 1))}x ${a.name}${Number(a.price) > 0 ? ` (+R$ ${(Number(a.price) * Math.max(1, Number(a.qty || 1))).toFixed(2).replace(".", ",")})` : ""}`).join(", ")}`
         : "";
       const notes = [addonNotes, userNotes].filter(Boolean).join(" | ") || null;
 
