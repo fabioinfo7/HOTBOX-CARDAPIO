@@ -1,5 +1,26 @@
 import { createServerFn } from "@tanstack/react-start";
+import { getRequest } from "@tanstack/react-start/server";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+
+function cleanName(name: string | null | undefined) {
+  const value = String(name ?? "").trim();
+  return value || "cliente";
+}
+
+function publicOrigin() {
+  const request = getRequest();
+  if (!request) return "";
+
+  const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  const forwardedHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+  if (forwardedHost) return `${forwardedProto || "https"}://${forwardedHost}`;
+
+  try {
+    return new URL(request.url).origin;
+  } catch {
+    return "";
+  }
+}
 
 async function requireStoreAdmin(context: any) {
   const { data: role } = await context.supabase
@@ -97,6 +118,133 @@ async function feedbackStatusForLead(supabaseAdmin: any, lead: any) {
 }
 
 
+export async function sendSatisfactionForOrder(params: {
+  supabaseAdmin: any;
+  orderId: string;
+  origin: string;
+  createdBy?: string | null;
+}) {
+  const { supabaseAdmin, orderId, origin, createdBy = null } = params;
+  const { sendWhatsappText } = await import("@/lib/whatsapp-send.server");
+
+  const { data: order } = await supabaseAdmin
+    .from("orders")
+    .select("id,order_number,external_display_id,status,customer_phone,customer_name")
+    .eq("id", orderId)
+    .maybeSingle();
+  if (!order || order.status !== "delivered") return { ok: false, error: "Pedido não elegível para avaliação." } as const;
+
+  const phone = String(order.customer_phone ?? "").replace(/\D/g, "");
+  if (!phone) return { ok: false, error: "Pedido sem telefone do cliente." } as const;
+
+  let { data: lead } = await supabaseAdmin
+    .from("leads")
+    .select("id,name,phone")
+    .eq("phone", order.customer_phone)
+    .maybeSingle();
+
+  if (!lead) {
+    const fallbackName = cleanName(order.customer_name);
+    const { data: createdLead } = await supabaseAdmin
+      .from("leads")
+      .upsert({
+        phone: order.customer_phone,
+        name: fallbackName === "cliente" ? order.customer_phone : fallbackName,
+        order_count: 1,
+        last_order_at: new Date().toISOString(),
+      }, { onConflict: "phone" })
+      .select("id,name,phone")
+      .maybeSingle();
+    lead = createdLead;
+  }
+  if (!lead) return { ok: false, error: "Não foi possível localizar o Lead do cliente." } as const;
+
+  const { data: existing } = await supabaseAdmin
+    .from("customer_feedback")
+    .select("id,token,sent_at,opened_at,submitted_at")
+    .eq("order_id", order.id)
+    .maybeSingle();
+
+  if (existing?.submitted_at) return { ok: true, state: "submitted", alreadySent: true } as const;
+  if (existing?.sent_at) return { ok: true, state: existing.opened_at ? "opened" : "sent", alreadySent: true } as const;
+
+  let feedbackId = existing?.id as string | undefined;
+  let token = existing?.token as string | undefined;
+  if (!feedbackId || !token) {
+    const generatedToken = crypto.randomUUID();
+    const { data: created, error } = await supabaseAdmin
+      .from("customer_feedback")
+      .insert({
+        lead_id: lead.id,
+        order_id: order.id,
+        customer_name: cleanName(order.customer_name || lead.name),
+        phone: lead.phone,
+        token: generatedToken,
+        sent_at: null,
+        created_by: createdBy,
+      })
+      .select("id,token")
+      .single();
+
+    if (error || !created) {
+      // Pode ter ocorrido corrida entre envio manual e automático. Releia o registro.
+      const { data: raced } = await supabaseAdmin
+        .from("customer_feedback")
+        .select("id,token,sent_at,opened_at,submitted_at")
+        .eq("order_id", order.id)
+        .maybeSingle();
+      if (raced?.submitted_at || raced?.sent_at) return { ok: true, state: raced.submitted_at ? "submitted" : raced.opened_at ? "opened" : "sent", alreadySent: true } as const;
+      if (!raced?.id || !raced?.token) return { ok: false, error: "Não foi possível gerar o link de avaliação." } as const;
+      feedbackId = raced.id;
+      token = raced.token;
+    } else {
+      feedbackId = created.id;
+      token = created.token || generatedToken;
+    }
+  }
+
+  const base = String(origin || "").replace(/\/$/, "");
+  if (!base) return { ok: false, error: "URL pública do sistema não configurada." } as const;
+  const link = `${base}/avaliacao/${token}`;
+  const firstName = cleanName(order.customer_name || lead.name).split(/\s+/)[0];
+  const message =
+    `Olá, ${firstName}! 😊 Obrigado por escolher a HotBox Delivery.\n\n` +
+    `Você poderia separar só *20 segundos* para avaliar sua experiência com a nossa *batata recheada*? Sua avaliação nos ajuda a melhorar ainda mais nosso atendimento, entrega e produtos.\n\n` +
+    `⭐ Avalie aqui: ${link}\n\n` +
+    `É bem rapidinho. Muito obrigado pela confiança! ❤️`;
+
+  const sent = await sendWhatsappText(supabaseAdmin, lead.phone, message);
+  if (!sent.ok) return { ok: false, error: "Não foi possível enviar a mensagem pelo WhatsApp." } as const;
+
+  const sentAt = new Date().toISOString();
+  await supabaseAdmin
+    .from("customer_feedback")
+    .update({ sent_at: sentAt, whatsapp_message_id: sent.externalId ?? null })
+    .eq("id", feedbackId);
+
+  // Mantém a mensagem visível no histórico do Chat quando existir conversa do telefone.
+  const { data: conversation } = await supabaseAdmin
+    .from("whatsapp_conversations")
+    .select("id")
+    .eq("phone", lead.phone)
+    .maybeSingle();
+  if (conversation?.id) {
+    await supabaseAdmin.from("whatsapp_messages").insert({
+      conversation_id: conversation.id,
+      direction: "out",
+      sender_type: "bot",
+      body: message,
+      external_id: sent.externalId ?? null,
+    });
+    await supabaseAdmin.from("whatsapp_conversations").update({
+      last_message_at: sentAt,
+      last_message_preview: message.slice(0, 140),
+    }).eq("id", conversation.id);
+  }
+
+  return { ok: true, state: "sent", link, orderId: order.id } as const;
+}
+
 export const getSatisfactionStatusFn = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: { leadId?: string; phone?: string }) => data)
@@ -134,7 +282,6 @@ export const sendSatisfactionRequestFn = createServerFn({ method: "POST" })
       orderId = status.eligibleOrder.id;
     }
 
-    const { publicOrigin, sendSatisfactionForOrder } = await import("@/lib/satisfaction.server");
     const origin = publicOrigin();
     return sendSatisfactionForOrder({
       supabaseAdmin,
@@ -212,4 +359,71 @@ export const submitPublicFeedbackFn = createServerFn({ method: "POST" })
 
     if (error) return { ok: false, error: "Não foi possível salvar sua avaliação. Tente novamente." };
     return { ok: true };
+  });
+
+
+/**
+ * Avaliações públicas usadas como prova social no cardápio digital.
+ * PRIVACIDADE: o telefone bruto nunca sai do servidor. O final do número
+ * é ocultado antes de qualquer dado ser enviado ao navegador.
+ */
+export const getPublicTestimonialsFn = createServerFn({ method: "GET" })
+  .handler(async () => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data, error } = await supabaseAdmin
+      .from("customer_feedback")
+      .select("id,customer_name,phone,submitted_at,service_rating,delivery_rating,flavor_rating,appearance_rating,comment")
+      .not("submitted_at", "is", null)
+      .order("submitted_at", { ascending: false });
+
+    if (error) {
+      console.error("[public-testimonials] falha ao carregar avaliações", error);
+      return { ok: false as const, reviews: [], count: 0, average: 0 };
+    }
+
+    const maskPhoneForPublic = (value: unknown) => {
+      const digits = String(value ?? "").replace(/\D/g, "");
+      if (!digits) return "Telefone protegido";
+      const local = digits.startsWith("55") && digits.length > 11 ? digits.slice(2) : digits;
+      const ddd = local.length >= 2 ? local.slice(0, 2) : "**";
+      const prefix = local.length >= 5 ? local.slice(2, 5) : "***";
+      return `(${ddd}) ${prefix}**-****`;
+    };
+
+    const reviews = (data ?? []).map((row: any) => {
+      const ratings = [row.service_rating, row.delivery_rating, row.flavor_rating, row.appearance_rating]
+        .map(Number)
+        .filter((value) => Number.isFinite(value) && value >= 1 && value <= 5);
+      const average = ratings.length ? ratings.reduce((sum, value) => sum + value, 0) / ratings.length : 0;
+      return {
+        id: String(row.id),
+        customerName: String(row.customer_name || "Cliente Hotbox").trim(),
+        phoneMasked: maskPhoneForPublic(row.phone),
+        submittedAt: String(row.submitted_at),
+        rating: Number(average.toFixed(1)),
+        serviceRating: Number(row.service_rating || 0),
+        deliveryRating: Number(row.delivery_rating || 0),
+        flavorRating: Number(row.flavor_rating || 0),
+        appearanceRating: Number(row.appearance_rating || 0),
+        comment: String(row.comment || "").trim() || null,
+      };
+    });
+
+    reviews.sort((a, b) => {
+      const commentDiff = Number(Boolean(b.comment)) - Number(Boolean(a.comment));
+      if (commentDiff) return commentDiff;
+      return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
+    });
+
+    const rated = reviews.filter((review) => review.rating > 0);
+    const average = rated.length
+      ? rated.reduce((sum, review) => sum + review.rating, 0) / rated.length
+      : 0;
+
+    return {
+      ok: true as const,
+      reviews,
+      count: reviews.length,
+      average: Number(average.toFixed(1)),
+    };
   });
