@@ -339,6 +339,7 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
           name: addonName,
           price: addonPrice,
           qty: addonQty,
+          required: group.required === true,
         });
       }
 
@@ -352,31 +353,80 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
         if (count > max) return { error: `Escolha no máximo ${max} opção(ões) em "${group.name}" para ${p.name}.` };
       }
 
-      const addonsTotal = Number(
-        selectedAddons.reduce(
+      // Regra operacional do pedido:
+      // - adicional OPCIONAL e PAGO vira uma linha própria em order_items;
+      // - adicional OBRIGATÓRIO continua compondo o item principal e aparece em observação;
+      // - adicional opcional SEM CUSTO pode continuar como informação/observação.
+      const optionalPaidAddons = selectedAddons.filter(
+        (addon) => addon.required !== true && Number(addon.price || 0) > 0,
+      );
+      const composedAddons = selectedAddons.filter(
+        (addon) => addon.required === true || Number(addon.price || 0) <= 0,
+      );
+
+      const composedAddonsTotal = Number(
+        composedAddons.reduce(
           (sum, a) => sum + Number(a.price || 0) * Math.max(1, Number(a.qty || 1)),
           0,
         ).toFixed(2),
       );
+      const optionalPaidTotal = Number(
+        optionalPaidAddons.reduce(
+          (sum, a) => sum + Number(a.price || 0) * Math.max(1, Number(a.qty || 1)),
+          0,
+        ).toFixed(2),
+      );
+      const addonsTotal = Number((composedAddonsTotal + optionalPaidTotal).toFixed(2));
+
       const userNotes = String(item.notes || "").trim();
-      const addonNotes = selectedAddons.length
-        ? `Adicionais: ${selectedAddons.map((a) => `${Math.max(1, Number(a.qty || 1))}x ${a.name}${Number(a.price) > 0 ? ` (+R$ ${(Number(a.price) * Math.max(1, Number(a.qty || 1))).toFixed(2).replace(".", ",")})` : ""}`).join(", ")}`
+      const addonNotes = composedAddons.length
+        ? `Composição: ${composedAddons.map((a) => `${Math.max(1, Number(a.qty || 1))}x ${a.name}${Number(a.price) > 0 ? ` (+R$ ${(Number(a.price) * Math.max(1, Number(a.qty || 1))).toFixed(2).replace(".", ",")})` : ""}`).join(", ")}`
         : "";
       const notes = [addonNotes, userNotes].filter(Boolean).join(" | ") || null;
 
+      // Item principal: recebe somente os adicionais que fazem parte da composição.
       serverItems.push({
         product_id: p.id,
         product_name: p.name,
         qty,
         base_unit_price: basePrice,
-        addons_total: addonsTotal,
-        addons: selectedAddons,
+        addons_total: composedAddonsTotal,
+        addons: composedAddons,
         order_bump_id: bumpId || null,
-        unit_price: Number((basePrice + addonsTotal).toFixed(2)),
+        unit_price: Number((basePrice + composedAddonsTotal).toFixed(2)),
         list_price: Number(eff.listPrice),
         is_promotion_price: Boolean(eff.isPromotion || (bumpId && basePrice !== Number(eff.price))),
         notes,
       });
+
+      // Opcionais pagos aparecem no pedido como produtos/itens independentes.
+      // Se vierem de um produto já cadastrado (ex.: Sprite), preservamos o product_id real.
+      for (const addon of optionalPaidAddons) {
+        const addonQuantityPerMainItem = Math.max(1, Number(addon.qty || 1));
+        const totalAddonQuantity = addonQuantityPerMainItem * qty;
+        const linkedProduct = addon.linked_product_id
+          ? linkedAddonProductById.get(String(addon.linked_product_id))
+          : null;
+        const linkedEffective = linkedProduct ? getEffectivePrice(linkedProduct) : null;
+
+        serverItems.push({
+          product_id: addon.linked_product_id || null,
+          product_name: addon.name,
+          qty: totalAddonQuantity,
+          base_unit_price: Number(addon.price || 0),
+          addons_total: 0,
+          addons: [],
+          order_bump_id: null,
+          unit_price: Number(Number(addon.price || 0).toFixed(2)),
+          list_price: linkedEffective ? Number(linkedEffective.listPrice) : Number(addon.price || 0),
+          is_promotion_price: Boolean(
+            linkedEffective && Number(linkedEffective.price) !== Number(linkedEffective.listPrice),
+          ),
+          notes: `Adicional opcional de ${p.name}`,
+          addon_source_product_id: p.id,
+          addon_option_id: addon.option_id,
+        });
+      }
     }
 
     const subtotal = Number(serverItems.reduce((sum, i) => sum + i.unit_price * i.qty, 0).toFixed(2));
