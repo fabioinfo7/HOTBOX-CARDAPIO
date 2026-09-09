@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Plus, Trash2, Sparkles, ShoppingBasket, Save, ChevronDown } from "lucide-react";
+import { Plus, Trash2, Sparkles, ShoppingBasket, Save, ChevronDown, Upload, Image as ImageIcon, SlidersHorizontal, Layers3 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { brl } from "@/lib/formatters";
 import { Button } from "@/components/ui/button";
@@ -41,7 +41,9 @@ function emptyOptionDraft() {
   return {
     source: "manual" as const,
     name: "",
+    display_name: "",
     description: "",
+    image_url: "",
     price: "",
     linked_product_id: "",
     use_linked_product_price: true,
@@ -56,6 +58,7 @@ export function MenuSalesTools() {
   const [bumps, setBumps] = useState<any[]>([]);
   const [newGroup, setNewGroup] = useState({
     name: "",
+    display_title: "",
     description: "",
     required: false,
     min_select: 0,
@@ -66,16 +69,19 @@ export function MenuSalesTools() {
   const [newOptionByGroup, setNewOptionByGroup] = useState<Record<string, {
     source: "manual" | "product";
     name: string;
+    display_name: string;
     description: string;
+    image_url: string;
     price: string;
     linked_product_id: string;
     use_linked_product_price: boolean;
   }>>({});
   const [newBump, setNewBump] = useState({ product_id: "", title: "Que tal completar seu pedido?", subtitle: "", placement: "cart", price_override: "" });
+  const [uploadingImageFor, setUploadingImageFor] = useState<string | null>(null);
 
   async function load() {
     const [p, g, o, l, b] = await Promise.all([
-      supabase.from("products").select("id,name,description,sale_price,active,kind,is_combo,promotion_active,promotion_price,promotion_type,promotion_start_at,promotion_end_at,promotion_days_of_week,promotion_time_start,promotion_time_end").eq("active", true).order("name"),
+      supabase.from("products").select("id,name,description,image_url,sale_price,active,kind,is_combo,promotion_active,promotion_price,promotion_type,promotion_start_at,promotion_end_at,promotion_days_of_week,promotion_time_start,promotion_time_end").eq("active", true).order("name"),
       (supabase as any).from("menu_addon_groups").select("*").order("sort_order").order("name"),
       (supabase as any).from("menu_addon_options").select("*").order("sort_order").order("name"),
       (supabase as any).from("product_addon_groups").select("*").order("sort_order"),
@@ -141,6 +147,28 @@ export function MenuSalesTools() {
     await load();
   }
 
+  async function uploadAddonImage(file: File, targetKey: string, onUploaded: (url: string) => void) {
+    setUploadingImageFor(targetKey);
+    try {
+      if (!file.type.startsWith("image/")) return toast.error("Selecione um arquivo de imagem.");
+      if (file.size > 5 * 1024 * 1024) return toast.error("A imagem deve ter no máximo 5 MB.");
+      const ext = file.name.split(".").pop() || "jpg";
+      const path = `addons/${crypto.randomUUID()}.${ext}`;
+      const { error } = await supabase.storage.from("product-images").upload(path, file, {
+        upsert: false,
+        contentType: file.type || undefined,
+      });
+      if (error) throw error;
+      const { data } = supabase.storage.from("product-images").getPublicUrl(path);
+      onUploaded(data.publicUrl);
+      toast.success("Imagem do adicional enviada.");
+    } catch (error: any) {
+      toast.error(error?.message || "Não foi possível enviar a imagem.");
+    } finally {
+      setUploadingImageFor(null);
+    }
+  }
+
   async function createGroup() {
     const name = newGroup.name.trim();
     if (!name) return toast.error("Informe o nome do grupo de adicionais.");
@@ -157,6 +185,7 @@ export function MenuSalesTools() {
       .from("menu_addon_groups")
       .insert({
         name,
+        display_title: newGroup.display_title.trim() || null,
         description: newGroup.description.trim() || null,
         required: newGroup.required,
         min_select: newGroup.required ? Math.max(1, min) : min,
@@ -191,6 +220,7 @@ export function MenuSalesTools() {
 
     setNewGroup({
       name: "",
+      display_title: "",
       description: "",
       required: false,
       min_select: 0,
@@ -214,6 +244,7 @@ export function MenuSalesTools() {
     if (min > max) return toast.error("O mínimo não pode ser maior que o máximo.");
     const { error } = await (supabase as any).from("menu_addon_groups").update({
       name: String(next.name || "").trim(),
+      display_title: String(next.display_title || "").trim() || null,
       description: String(next.description || "").trim() || null,
       required: !!next.required,
       min_select: next.required ? Math.max(1, min) : min,
@@ -260,7 +291,9 @@ export function MenuSalesTools() {
     const { error } = await (supabase as any).from("menu_addon_options").insert({
       group_id: groupId,
       name,
+      display_name: String(draft.display_name || "").trim() || null,
       description,
+      image_url: String(draft.image_url || "").trim() || null,
       price,
       linked_product_id: draft.source === "product" ? linkedProduct.id : null,
       use_linked_product_price: draft.source === "product" ? draft.use_linked_product_price : false,
@@ -292,7 +325,9 @@ export function MenuSalesTools() {
 
     const { error } = await (supabase as any).from("menu_addon_options").update({
       name: String(next.name || linkedProduct?.name || "").trim(),
+      display_name: String(next.display_name || "").trim() || null,
       description: String(next.description || "").trim() || null,
+      image_url: String(next.image_url || "").trim() || null,
       price,
       linked_product_id: next.linked_product_id || null,
       use_linked_product_price: !!next.linked_product_id && next.use_linked_product_price === true,
@@ -357,19 +392,32 @@ export function MenuSalesTools() {
   return (
     <div className="space-y-6">
       <Card className="overflow-hidden rounded-3xl border-2 border-primary/20">
-        <div className="bg-gradient-to-r from-primary/10 to-amber-100/60 p-5">
-          <div className="flex items-start gap-3">
-            <div className="grid size-11 place-items-center rounded-2xl bg-primary text-primary-foreground"><Sparkles className="size-5" /></div>
-            <div>
-              <h2 className="text-lg font-black">Adicionais inteligentes</h2>
-              <p className="mt-1 max-w-2xl text-sm text-muted-foreground">Crie grupos como “Escolha a borda”, “Adicione mais recheio” ou “Molhos extras” e defina em quais produtos eles aparecem. O preço é validado novamente no servidor antes do pagamento.</p>
+        <div className="bg-gradient-to-r from-zinc-950 via-zinc-900 to-zinc-800 p-5 text-white">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="grid size-11 shrink-0 place-items-center rounded-2xl bg-white/10"><SlidersHorizontal className="size-5" /></div>
+              <div>
+                <h2 className="text-xl font-black">Central de adicionais</h2>
+                <p className="mt-1 max-w-2xl text-sm text-white/65">Organize a experiência do cliente em grupos claros, personalize títulos, imagens, preços, regras e escolha exatamente em quais produtos cada grupo aparece.</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="rounded-xl bg-white/10 px-3 py-2 text-center"><p className="text-lg font-black">{groups.length}</p><p className="text-[9px] uppercase tracking-wide text-white/60">Grupos</p></div>
+              <div className="rounded-xl bg-white/10 px-3 py-2 text-center"><p className="text-lg font-black">{options.length}</p><p className="text-[9px] uppercase tracking-wide text-white/60">Opções</p></div>
+              <div className="rounded-xl bg-white/10 px-3 py-2 text-center"><p className="text-lg font-black">{groups.filter((g) => g.active !== false).length}</p><p className="text-[9px] uppercase tracking-wide text-white/60">Ativos</p></div>
             </div>
           </div>
         </div>
         <div className="space-y-5 p-5">
-          <div className="grid gap-3 rounded-2xl border bg-muted/20 p-4 md:grid-cols-2">
-            <div><Label>Nome do grupo</Label><Input value={newGroup.name} onChange={(e) => setNewGroup({ ...newGroup, name: e.target.value })} placeholder="Ex.: Escolha sua borda" /></div>
-            <div><Label>Descrição</Label><Input value={newGroup.description} onChange={(e) => setNewGroup({ ...newGroup, description: e.target.value })} placeholder="Ex.: deixe ainda mais cremoso" /></div>
+          <div className="rounded-2xl border bg-muted/20 p-4">
+            <div className="mb-4 flex items-start gap-3">
+              <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><Plus className="size-4" /></div>
+              <div><p className="font-black">1. Criar um novo grupo</p><p className="text-xs text-muted-foreground">Primeiro defina como a seção será apresentada. Depois adicione as opções dentro dela.</p></div>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+            <div><Label>Nome interno do grupo</Label><Input value={newGroup.name} onChange={(e) => setNewGroup({ ...newGroup, name: e.target.value })} placeholder="Ex.: Borda" /><p className="mt-1 text-[10px] text-muted-foreground">Usado para você identificar no painel.</p></div>
+            <div><Label>Título exibido no cardápio</Label><Input value={newGroup.display_title} onChange={(e) => setNewGroup({ ...newGroup, display_title: e.target.value })} placeholder="Ex.: Escolha sua borda" /><p className="mt-1 text-[10px] text-muted-foreground">Se ficar vazio, será usado o nome interno.</p></div>
+            <div className="md:col-span-2"><Label>Texto de apoio / subtítulo</Label><Input value={newGroup.description} onChange={(e) => setNewGroup({ ...newGroup, description: e.target.value })} placeholder="Ex.: deixe sua batata ainda mais cremosa" /></div>
             <div className="grid grid-cols-2 gap-2"><div><Label>Mínimo</Label><Input type="number" min="0" value={newGroup.min_select} onChange={(e) => setNewGroup({ ...newGroup, min_select: num(e.target.value) })} /></div><div><Label>Máximo de unidades</Label><Input type="number" min="1" value={newGroup.max_select} onChange={(e) => setNewGroup({ ...newGroup, max_select: num(e.target.value, 1) })} /></div></div>
             <div className="rounded-xl border bg-background p-3">
               <div className="flex items-center justify-between gap-3">
@@ -444,6 +492,7 @@ export function MenuSalesTools() {
             </div>
 
             <Button onClick={createGroup} className="md:col-span-2"><Plus className="mr-2 size-4" /> Criar grupo de adicionais</Button>
+            </div>
           </div>
 
           {groups.map((group) => {
@@ -451,21 +500,27 @@ export function MenuSalesTools() {
             const linkedProducts = new Set(links.filter((l) => l.group_id === group.id).map((l) => String(l.product_id)));
             const draft = newOptionByGroup[group.id] || emptyOptionDraft();
             return (
-              <div key={group.id} className="rounded-2xl border bg-background p-4 shadow-sm">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Input className="min-w-[180px] flex-1 font-bold" value={group.name} onChange={(e) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, name: e.target.value } : g))} />
-                  <label className="flex items-center gap-2 text-xs font-bold"><Switch checked={group.active !== false} onCheckedChange={(v) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, active: v } : g))} /> Ativo</label>
+              <div key={group.id} className="overflow-hidden rounded-3xl border bg-background shadow-sm">
+                <div className="flex flex-wrap items-center gap-3 border-b bg-zinc-50/80 p-4">
+                  <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-zinc-900 text-white"><Layers3 className="size-4" /></div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-black">{group.display_title || group.name}</p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">{groupOptions.length} opção(ões) • {group.required ? "Obrigatório" : "Opcional"} • {groupAvailability(group.id) === "all" ? "Todos os produtos" : `${linkedProducts.size} produto(s)`}</p>
+                  </div>
+                  <label className="flex items-center gap-2 rounded-full border bg-white px-3 py-1.5 text-xs font-bold"><Switch checked={group.active !== false} onCheckedChange={(v) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, active: v } : g))} /> Ativo</label>
                   <Button size="icon" variant="ghost" className="text-destructive" onClick={() => deleteGroup(group.id)}><Trash2 className="size-4" /></Button>
                 </div>
-                <div className="mt-3">
-                  <Label className="text-[11px]">Descrição exibida no cardápio</Label>
-                  <Input
-                    className="mt-1"
-                    value={group.description || ""}
-                    onChange={(e) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, description: e.target.value } : g))}
-                    placeholder="Ex.: escolha sua borda preferida"
-                  />
-                </div>
+
+                <div className="p-4">
+                  <div className="rounded-2xl border bg-muted/15 p-4">
+                    <p className="mb-3 text-xs font-black uppercase tracking-wide text-muted-foreground">Aparência no cardápio</p>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div><Label className="text-[11px]">Nome interno</Label><Input className="mt-1" value={group.name} onChange={(e) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, name: e.target.value } : g))} /></div>
+                      <div><Label className="text-[11px]">Título exibido</Label><Input className="mt-1" value={group.display_title || ""} onChange={(e) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, display_title: e.target.value } : g))} placeholder="Vazio = usa o nome interno" /></div>
+                      <div className="md:col-span-2"><Label className="text-[11px]">Texto de apoio / subtítulo</Label><Input className="mt-1" value={group.description || ""} onChange={(e) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, description: e.target.value } : g))} placeholder="Ex.: escolha sua opção preferida" /></div>
+                    </div>
+                  </div>
+                  <p className="mb-2 mt-4 text-xs font-black uppercase tracking-wide text-muted-foreground">Regras de escolha</p>
                 <div className="mt-3 grid gap-2 sm:grid-cols-4">
                   <div><Label className="text-[11px]">Mínimo</Label><Input type="number" min="0" value={group.min_select} onChange={(e) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, min_select: num(e.target.value) } : g))} /></div>
                   <div><Label className="text-[11px]">Máximo de unidades</Label><Input type="number" min="1" value={group.max_select} onChange={(e) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, max_select: num(e.target.value, 1) } : g))} /></div>
@@ -503,7 +558,7 @@ export function MenuSalesTools() {
                 </div>
 
                 <div className="mt-4 space-y-2">
-                  <p className="text-xs font-black uppercase tracking-wide text-muted-foreground">Opções deste grupo</p>
+                  <div className="flex items-center justify-between gap-2"><div><p className="text-xs font-black uppercase tracking-wide text-muted-foreground">2. Opções deste grupo</p><p className="mt-0.5 text-[11px] text-muted-foreground">Cada opção pode ter nome próprio, descrição, preço e imagem.</p></div></div>
                   {groupOptions.map((option) => {
                     const linkedProduct = option.linked_product_id
                       ? products.find((product) => String(product.id) === String(option.linked_product_id))
@@ -551,21 +606,45 @@ export function MenuSalesTools() {
                                 </div>
                               )}
                             </div>
-                            <div className="md:col-span-2">
+                            <div>
+                              <Label className="text-[11px]">Título personalizado no cardápio</Label>
+                              <Input className="mt-1" value={option.display_name || ""} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, display_name: e.target.value } : o))} placeholder={`Vazio = ${linkedProduct.name}`} />
+                            </div>
+                            <div>
                               <Label className="text-[11px]">Descrição no cardápio</Label>
-                              <Input
-                                className="mt-1"
-                                value={option.description || ""}
-                                onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, description: e.target.value } : o))}
-                                placeholder="Descrição curta (opcional)"
-                              />
+                              <Input className="mt-1" value={option.description || ""} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, description: e.target.value } : o))} placeholder="Descrição curta (opcional)" />
+                            </div>
+                            <div className="md:col-span-2 rounded-xl border bg-muted/15 p-3">
+                              <Label className="text-[11px]">Imagem do adicional (opcional)</Label>
+                              <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                                <Input className="flex-1" value={option.image_url || ""} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, image_url: e.target.value } : o))} placeholder="Cole uma URL ou envie uma imagem" />
+                                <label className="inline-flex cursor-pointer items-center justify-center rounded-md border bg-background px-3 py-2 text-sm font-semibold">
+                                  <input type="file" accept="image/*" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) void uploadAddonImage(file, String(option.id), (url) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, image_url: url } : o))); e.currentTarget.value = ""; }} />
+                                  <Upload className="mr-2 size-4" /> {uploadingImageFor === String(option.id) ? "Enviando..." : "Upload"}
+                                </label>
+                              </div>
+                              {option.image_url && <div className="mt-2 flex items-center gap-3"><img src={option.image_url} alt="" className="size-16 rounded-xl border object-cover" /><Button type="button" size="sm" variant="ghost" onClick={() => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, image_url: "" } : o))}>Remover imagem</Button></div>}
                             </div>
                           </div>
                         ) : (
-                          <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_140px]">
-                            <Input value={option.name} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, name: e.target.value } : o))} placeholder="Nome" />
-                            <Input value={option.description || ""} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, description: e.target.value } : o))} placeholder="Descrição curta (opcional)" />
-                            <Input type="number" step="0.01" min="0" value={option.price} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, price: e.target.value } : o))} />
+                          <div className="mt-3 space-y-3">
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              <div><Label className="text-[11px]">Nome interno</Label><Input className="mt-1" value={option.name} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, name: e.target.value } : o))} placeholder="Nome" /></div>
+                              <div><Label className="text-[11px]">Título no cardápio</Label><Input className="mt-1" value={option.display_name || ""} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, display_name: e.target.value } : o))} placeholder="Vazio = usa o nome interno" /></div>
+                              <div><Label className="text-[11px]">Descrição</Label><Input className="mt-1" value={option.description || ""} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, description: e.target.value } : o))} placeholder="Descrição curta (opcional)" /></div>
+                              <div><Label className="text-[11px]">Preço</Label><Input className="mt-1" type="number" step="0.01" min="0" value={option.price} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, price: e.target.value } : o))} /></div>
+                            </div>
+                            <div className="rounded-xl border bg-muted/15 p-3">
+                              <Label className="text-[11px]">Imagem do adicional (opcional)</Label>
+                              <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                                <Input className="flex-1" value={option.image_url || ""} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, image_url: e.target.value } : o))} placeholder="Cole uma URL ou envie uma imagem" />
+                                <label className="inline-flex cursor-pointer items-center justify-center rounded-md border bg-background px-3 py-2 text-sm font-semibold">
+                                  <input type="file" accept="image/*" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) void uploadAddonImage(file, String(option.id), (url) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, image_url: url } : o))); e.currentTarget.value = ""; }} />
+                                  <Upload className="mr-2 size-4" /> {uploadingImageFor === String(option.id) ? "Enviando..." : "Upload"}
+                                </label>
+                              </div>
+                              {option.image_url && <div className="mt-2 flex items-center gap-3"><img src={option.image_url} alt="" className="size-16 rounded-xl border object-cover" /><Button type="button" size="sm" variant="ghost" onClick={() => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, image_url: "" } : o))}>Remover imagem</Button></div>}
+                            </div>
                           </div>
                         )}
 
@@ -621,7 +700,9 @@ export function MenuSalesTools() {
                                 [group.id]: {
                                   ...draft,
                                   linked_product_id: productId,
+                                  display_name: draft.display_name || "",
                                   description: draft.description || String(product?.description || ""),
+                                  image_url: draft.image_url || String(product?.image_url || ""),
                                   price: String(productCurrentPrice(product)),
                                 },
                               }));
@@ -662,17 +743,39 @@ export function MenuSalesTools() {
                           </div>
                         )}
 
-                        <Input
-                          value={draft.description}
-                          onChange={(e) => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, description: e.target.value } }))}
-                          placeholder="Descrição curta no cardápio (opcional)"
-                        />
+                        <Input value={draft.display_name} onChange={(e) => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, display_name: e.target.value } }))} placeholder="Título personalizado no cardápio (opcional)" />
+                        <Input value={draft.description} onChange={(e) => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, description: e.target.value } }))} placeholder="Descrição curta no cardápio (opcional)" />
+                        <div className="rounded-xl border bg-background p-3">
+                          <Label className="text-[11px]">Imagem do adicional (opcional)</Label>
+                          <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                            <Input className="flex-1" value={draft.image_url} onChange={(e) => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, image_url: e.target.value } }))} placeholder="Cole uma URL ou envie uma imagem" />
+                            <label className="inline-flex cursor-pointer items-center justify-center rounded-md border bg-background px-3 py-2 text-sm font-semibold">
+                              <input type="file" accept="image/*" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) void uploadAddonImage(file, `new-${group.id}`, (url) => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, image_url: url } }))); e.currentTarget.value = ""; }} />
+                              <Upload className="mr-2 size-4" /> {uploadingImageFor === `new-${group.id}` ? "Enviando..." : "Upload"}
+                            </label>
+                          </div>
+                          {draft.image_url && <img src={draft.image_url} alt="" className="mt-2 size-16 rounded-xl border object-cover" />}
+                        </div>
                       </div>
                     ) : (
-                      <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_120px]">
-                        <Input value={draft.name} onChange={(e) => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, name: e.target.value } }))} placeholder="Ex.: Borda de requeijão" />
-                        <Input value={draft.description} onChange={(e) => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, description: e.target.value } }))} placeholder="Descrição curta (opcional)" />
-                        <Input value={draft.price} onChange={(e) => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, price: e.target.value } }))} placeholder="Preço" inputMode="decimal" />
+                      <div className="mt-3 space-y-2">
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <Input value={draft.name} onChange={(e) => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, name: e.target.value } }))} placeholder="Nome interno. Ex.: Bacon extra" />
+                          <Input value={draft.display_name} onChange={(e) => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, display_name: e.target.value } }))} placeholder="Título no cardápio (opcional)" />
+                          <Input value={draft.description} onChange={(e) => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, description: e.target.value } }))} placeholder="Descrição curta (opcional)" />
+                          <Input value={draft.price} onChange={(e) => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, price: e.target.value } }))} placeholder="Preço" inputMode="decimal" />
+                        </div>
+                        <div className="rounded-xl border bg-background p-3">
+                          <Label className="text-[11px]">Imagem do adicional (opcional)</Label>
+                          <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                            <Input className="flex-1" value={draft.image_url} onChange={(e) => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, image_url: e.target.value } }))} placeholder="Cole uma URL ou envie uma imagem" />
+                            <label className="inline-flex cursor-pointer items-center justify-center rounded-md border bg-background px-3 py-2 text-sm font-semibold">
+                              <input type="file" accept="image/*" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) void uploadAddonImage(file, `new-${group.id}`, (url) => setNewOptionByGroup((state) => ({ ...state, [group.id]: { ...draft, image_url: url } }))); e.currentTarget.value = ""; }} />
+                              <Upload className="mr-2 size-4" /> {uploadingImageFor === `new-${group.id}` ? "Enviando..." : "Upload"}
+                            </label>
+                          </div>
+                          {draft.image_url && <img src={draft.image_url} alt="" className="mt-2 size-16 rounded-xl border object-cover" />}
+                        </div>
                       </div>
                     )}
 
@@ -727,6 +830,7 @@ export function MenuSalesTools() {
                       </div>
                     </details>
                   )}
+                </div>
                 </div>
               </div>
             );
