@@ -662,6 +662,19 @@ function CustomerHome() {
     [products],
   );
   const featured = useMemo(() => products.filter((p) => p.featured), [products]);
+
+  const reviewsWithComments = useMemo(
+    () => publicReviews.filter((review) => !!review.comment),
+    [publicReviews],
+  );
+  const reviewsWithoutComments = useMemo(
+    () => publicReviews.filter((review) => !review.comment),
+    [publicReviews],
+  );
+  const strategicReviews = useMemo(
+    () => (reviewsWithComments.length ? reviewsWithComments : publicReviews).slice(0, 4),
+    [reviewsWithComments, publicReviews],
+  );
   const filtered = useMemo(() => {
     return products.filter((p) => {
       const matchesCategory = activeCategory === "Tudo" || (p.category || "Outros") === activeCategory;
