@@ -220,7 +220,7 @@ export function MenuSalesTools() {
       max_select: max,
       active: next.active !== false,
     }).eq("id", group.id);
-    if (error) toast.error(error.message); else await load();
+    if (error) toast.error(error.message); else { toast.success("Alterações do grupo salvas."); await load(); }
   }
 
   async function deleteGroup(id: string) {
@@ -299,7 +299,7 @@ export function MenuSalesTools() {
       active: next.active !== false,
     }).eq("id", option.id);
 
-    if (error) toast.error(error.message); else await load();
+    if (error) toast.error(error.message); else { toast.success("Alterações do adicional salvas."); await load(); }
   }
 
   async function deleteOption(id: string) {
@@ -453,8 +453,8 @@ export function MenuSalesTools() {
             return (
               <div key={group.id} className="rounded-2xl border bg-background p-4 shadow-sm">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Input className="min-w-[180px] flex-1 font-bold" value={group.name} onChange={(e) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, name: e.target.value } : g))} onBlur={() => updateGroup(group, { name: groups.find((g) => g.id === group.id)?.name })} />
-                  <label className="flex items-center gap-2 text-xs font-bold"><Switch checked={group.active !== false} onCheckedChange={(v) => updateGroup(group, { active: v })} /> Ativo</label>
+                  <Input className="min-w-[180px] flex-1 font-bold" value={group.name} onChange={(e) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, name: e.target.value } : g))} />
+                  <label className="flex items-center gap-2 text-xs font-bold"><Switch checked={group.active !== false} onCheckedChange={(v) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, active: v } : g))} /> Ativo</label>
                   <Button size="icon" variant="ghost" className="text-destructive" onClick={() => deleteGroup(group.id)}><Trash2 className="size-4" /></Button>
                 </div>
                 <div className="mt-3">
@@ -463,13 +463,12 @@ export function MenuSalesTools() {
                     className="mt-1"
                     value={group.description || ""}
                     onChange={(e) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, description: e.target.value } : g))}
-                    onBlur={() => updateGroup(group, { description: groups.find((g) => g.id === group.id)?.description })}
                     placeholder="Ex.: escolha sua borda preferida"
                   />
                 </div>
                 <div className="mt-3 grid gap-2 sm:grid-cols-4">
-                  <div><Label className="text-[11px]">Mínimo</Label><Input type="number" min="0" value={group.min_select} onChange={(e) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, min_select: num(e.target.value) } : g))} onBlur={() => updateGroup(group, { min_select: groups.find((g) => g.id === group.id)?.min_select })} /></div>
-                  <div><Label className="text-[11px]">Máximo de unidades</Label><Input type="number" min="1" value={group.max_select} onChange={(e) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, max_select: num(e.target.value, 1) } : g))} onBlur={() => updateGroup(group, { max_select: groups.find((g) => g.id === group.id)?.max_select })} /></div>
+                  <div><Label className="text-[11px]">Mínimo</Label><Input type="number" min="0" value={group.min_select} onChange={(e) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, min_select: num(e.target.value) } : g))} /></div>
+                  <div><Label className="text-[11px]">Máximo de unidades</Label><Input type="number" min="1" value={group.max_select} onChange={(e) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, max_select: num(e.target.value, 1) } : g))} /></div>
                   <div className="rounded-xl border p-3 sm:col-span-2">
                     <div className="flex items-center justify-between gap-3">
                       <div>
@@ -480,7 +479,7 @@ export function MenuSalesTools() {
                       </div>
                       <Switch
                         checked={group.required === true}
-                        onCheckedChange={(v) => updateGroup(group, { required: v, min_select: v ? Math.max(1, num(group.min_select)) : 0 })}
+                        onCheckedChange={(v) => setGroups((gs) => gs.map((g) => g.id === group.id ? { ...g, required: v, min_select: v ? Math.max(1, num(g.min_select)) : 0 } : g))}
                       />
                     </div>
                     <div className="mt-2 flex gap-2">
@@ -488,6 +487,19 @@ export function MenuSalesTools() {
                       <span className={`rounded-full px-2 py-1 text-[10px] font-black ${!group.required ? "bg-emerald-100 text-emerald-700" : "bg-zinc-100 text-zinc-500"}`}>OPCIONAL</span>
                     </div>
                   </div>
+                </div>
+
+                <div className="mt-3 flex justify-end">
+                  <Button
+                    type="button"
+                    className="rounded-xl px-5 font-black"
+                    onClick={() => {
+                      const current = groups.find((g) => g.id === group.id) || group;
+                      void updateGroup(current, {});
+                    }}
+                  >
+                    Salvar alterações do grupo
+                  </Button>
                 </div>
 
                 <div className="mt-4 space-y-2">
@@ -503,7 +515,7 @@ export function MenuSalesTools() {
                             {linkedProduct ? "PRODUTO DO CARDÁPIO" : "ADICIONAL MANUAL"}
                           </span>
                           <span className="ml-auto flex items-center gap-2 text-xs font-bold">
-                            Ativo <Switch checked={option.active !== false} onCheckedChange={(v) => updateOption(option, { active: v })} />
+                            Ativo <Switch checked={option.active !== false} onCheckedChange={(v) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, active: v } : o))} />
                           </span>
                           <Button size="icon" variant="ghost" className="text-destructive" onClick={() => deleteOption(option.id)}><Trash2 className="size-4" /></Button>
                         </div>
@@ -522,7 +534,7 @@ export function MenuSalesTools() {
                                 Usar preço atual do produto
                                 <Switch
                                   checked={option.use_linked_product_price === true}
-                                  onCheckedChange={(value) => updateOption(option, { use_linked_product_price: value })}
+                                  onCheckedChange={(value) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, use_linked_product_price: value } : o))}
                                 />
                               </label>
                               {option.use_linked_product_price !== true && (
@@ -535,7 +547,6 @@ export function MenuSalesTools() {
                                     min="0"
                                     value={option.price}
                                     onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, price: e.target.value } : o))}
-                                    onBlur={() => updateOption(option, { price: options.find((o) => o.id === option.id)?.price })}
                                   />
                                 </div>
                               )}
@@ -546,18 +557,31 @@ export function MenuSalesTools() {
                                 className="mt-1"
                                 value={option.description || ""}
                                 onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, description: e.target.value } : o))}
-                                onBlur={() => updateOption(option, { description: options.find((o) => o.id === option.id)?.description })}
                                 placeholder="Descrição curta (opcional)"
                               />
                             </div>
                           </div>
                         ) : (
                           <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_140px]">
-                            <Input value={option.name} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, name: e.target.value } : o))} onBlur={() => updateOption(option, { name: options.find((o) => o.id === option.id)?.name })} placeholder="Nome" />
-                            <Input value={option.description || ""} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, description: e.target.value } : o))} onBlur={() => updateOption(option, { description: options.find((o) => o.id === option.id)?.description })} placeholder="Descrição curta (opcional)" />
-                            <Input type="number" step="0.01" min="0" value={option.price} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, price: e.target.value } : o))} onBlur={() => updateOption(option, { price: options.find((o) => o.id === option.id)?.price })} />
+                            <Input value={option.name} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, name: e.target.value } : o))} placeholder="Nome" />
+                            <Input value={option.description || ""} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, description: e.target.value } : o))} placeholder="Descrição curta (opcional)" />
+                            <Input type="number" step="0.01" min="0" value={option.price} onChange={(e) => setOptions((os) => os.map((o) => o.id === option.id ? { ...o, price: e.target.value } : o))} />
                           </div>
                         )}
+
+                        <div className="mt-3 flex justify-end border-t pt-3">
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="rounded-xl px-4 font-black"
+                            onClick={() => {
+                              const current = options.find((o) => o.id === option.id) || option;
+                              void updateOption(current, {});
+                            }}
+                          >
+                            Salvar alterações
+                          </Button>
+                        </div>
                       </div>
                     );
                   })}
