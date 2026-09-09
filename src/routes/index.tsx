@@ -448,7 +448,21 @@ function CustomerHome() {
       const data = storeResult?.data;
       if (data) {
         setStoreName(data.store_name ?? "HotBox Delivery");
-        setDeliveryFee(Number(data.default_delivery_fee ?? 0));
+
+        // Não sobrescreve a taxa que já foi calculada pelo CEP/bairro.
+        // O carregamento assíncrono da configuração da loja podia terminar DEPOIS
+        // da validação do endereço e trocar a taxa real pelo default (muitas vezes 0).
+        const savedArea = readAreaAccess();
+        setDeliveryFee((currentFee) => {
+          if (savedArea && Number.isFinite(Number(savedArea.deliveryFee))) {
+            return Number(savedArea.deliveryFee);
+          }
+          if (areaStatus === "supported" && Number.isFinite(Number(currentFee))) {
+            return Number(currentFee);
+          }
+          return Number(data.default_delivery_fee ?? 0);
+        });
+
         setDeliveryTime(data.estimated_delivery_time_minutes ?? null);
         setBannerUrl(data.banner_image_url ?? null);
         setInfinitepayEnabled((data as any).infinitepay_enabled === true);
@@ -503,6 +517,15 @@ function CustomerHome() {
   useEffect(() => {
     if (form.deliveryMode === "pickup" && paymentChoice !== "online") setPaymentChoice("online");
   }, [form.deliveryMode, paymentChoice]);
+
+  useEffect(() => {
+    if (areaStatus !== "supported") return;
+    const saved = readAreaAccess();
+    if (!saved) return;
+    const savedFee = Number(saved.deliveryFee);
+    if (!Number.isFinite(savedFee)) return;
+    if (Number(deliveryFee) !== savedFee) setDeliveryFee(savedFee);
+  }, [areaStatus, deliveryFee]);
 
   useEffect(() => {
     const n = String(customerSession?.user?.user_metadata?.full_name || customerSession?.user?.user_metadata?.name || "").trim();
@@ -668,7 +691,18 @@ function CustomerHome() {
       const quote = await checkDeliveryArea(form.neighborhood, form.street, number, form.city);
       if (quote?.supported && quote?.fee != null && !quote?.quoteUnavailable) {
         const fee = Number(quote.fee);
-        if (Number.isFinite(fee)) setDeliveryFee(fee);
+        if (Number.isFinite(fee)) {
+          setDeliveryFee(fee);
+          saveAreaAccess({
+            cep: form.cep || accessCep || "",
+            street: form.street || "",
+            number,
+            neighborhood: String(quote.neighborhood || form.neighborhood || validatedNeighborhood || ""),
+            city: form.city || "",
+            deliveryFee: fee,
+            savedAt: Date.now(),
+          });
+        }
         setDeliveryPricingMode(quote?.pricingMode === "distance" ? "distance" : "neighborhood");
         setDeliveryDistanceKm(quote?.distanceKm == null ? null : Number(quote.distanceKm));
       }
@@ -1538,7 +1572,7 @@ function CustomerHome() {
                 (detailOrderBumpId
                   ? Number(orderBumps.find((b) => b.id === detailOrderBumpId)?.price_override ?? getEffectivePrice(p).price)
                   : getEffectivePrice(p).price) +
-                selectedDetailAddons(p.id).reduce((sum, a) => sum + Number(a.price || 0), 0)
+                selectedDetailAddons(p.id).reduce((sum, a) => sum + Number(a.price || 0) * Math.max(1, Number(a.qty || 1)), 0)
               ) * detailQty)}</span>
             </Button>
           </div>
