@@ -11,6 +11,19 @@ const WHATSAPP_URL = "https://wa.me/5521984296288?text=" + encodeURIComponent("O
 const INSTAGRAM_URL = "https://www.instagram.com/hotboxbatata/";
 const CART_STORAGE_KEY = "hb_digital_cart_v1";
 const CHECKOUT_DRAFT_SESSION_KEY = "hb_digital_checkout_draft_v1";
+const MY_ORDERS_KEY = "hb_my_orders";
+
+function rememberOrder(id: string | null | undefined) {
+  if (!id) return;
+  try {
+    const raw = localStorage.getItem(MY_ORDERS_KEY);
+    const ids: string[] = raw ? JSON.parse(raw) : [];
+    localStorage.setItem(
+      MY_ORDERS_KEY,
+      JSON.stringify([String(id), ...ids.filter((item) => String(item) !== String(id))].slice(0, 30)),
+    );
+  } catch {}
+}
 
 type State = "checking" | "paid" | "pending" | "delivery";
 
@@ -77,6 +90,10 @@ function ObrigadoPage() {
   useEffect(() => {
     if (state === "paid" || state === "delivery") clearCompletedCheckoutPersistence();
   }, [state]);
+
+  useEffect(() => {
+    if (orderId) rememberOrder(orderId);
+  }, [orderId]);
 
   useEffect(() => {
     QRCode.toDataURL(INSTAGRAM_URL, { width: 260, margin: 1, errorCorrectionLevel: "M" })
