@@ -73,6 +73,8 @@ type AddonOption = {
   name: string;
   description?: string | null;
   price: number;
+  linked_product_id?: string | null;
+  use_linked_product_price?: boolean | null;
   active: boolean;
   sort_order?: number | null;
 };
@@ -438,7 +440,7 @@ function CustomerHome() {
         .maybeSingle(),
       (supabase as any).rpc("get_public_payment_config"),
       (supabase as any).from("menu_addon_groups").select("id,name,description,required,min_select,max_select,active,sort_order").eq("active", true).order("sort_order"),
-      (supabase as any).from("menu_addon_options").select("id,group_id,name,description,price,active,sort_order").eq("active", true).order("sort_order"),
+      (supabase as any).from("menu_addon_options").select("id,group_id,name,description,price,linked_product_id,use_linked_product_price,active,sort_order").eq("active", true).order("sort_order"),
       (supabase as any).from("product_addon_groups").select("product_id,group_id,sort_order").order("sort_order"),
       (supabase as any).from("menu_order_bumps").select("id,product_id,title,subtitle,placement,price_override,active,sort_order").eq("active", true).order("sort_order"),
     ]).then(([storeResult, paymentResult, groupResult, optionResult, linkResult, bumpResult]: any[]) => {
@@ -882,13 +884,21 @@ function CustomerHome() {
     });
   }
 
+  function effectiveAddonOptionPrice(option: AddonOption) {
+    if (option.linked_product_id && option.use_linked_product_price === true) {
+      const linked = products.find((product) => String(product.id) === String(option.linked_product_id));
+      if (linked) return Number(getEffectivePrice(linked).price || 0);
+    }
+    return Number(option.price || 0);
+  }
+
   function selectedDetailAddons(productId: string): CartAddon[] {
     const groups = addonGroupsByProduct[productId] || [];
     const options = groups.flatMap((g) => g.options);
     return detailAddonIds
       .map((id) => options.find((o) => String(o.id) === id))
       .filter(Boolean)
-      .map((o: any) => ({ option_id: String(o.id), group_id: String(o.group_id), name: String(o.name), price: Number(o.price || 0) }));
+      .map((o: AddonOption) => ({ option_id: String(o.id), group_id: String(o.group_id), name: String(o.name), price: effectiveAddonOptionPrice(o) }));
   }
 
   function validateDetailAddons(productId: string) {
@@ -1297,10 +1307,17 @@ function CustomerHome() {
                               {selected && <CheckCircle2 className="size-3.5" />}
                             </span>
                             <div className="min-w-0 flex-1">
-                              <p className="text-sm font-bold">{option.name}</p>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <p className="text-sm font-bold">{option.name}</p>
+                                {option.linked_product_id && (
+                                  <span className="rounded-full bg-sky-50 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-sky-700">
+                                    Produto do cardápio
+                                  </span>
+                                )}
+                              </div>
                               {option.description && <p className="text-[11px] text-muted-foreground">{option.description}</p>}
                             </div>
-                            <span className="shrink-0 text-sm font-black text-primary">{Number(option.price || 0) > 0 ? `+ ${brl(Number(option.price))}` : "Grátis"}</span>
+                            <span className="shrink-0 text-sm font-black text-primary">{effectiveAddonOptionPrice(option) > 0 ? `+ ${brl(effectiveAddonOptionPrice(option))}` : "Grátis"}</span>
                           </button>
                         );
                       })}
