@@ -36,6 +36,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { CustomerLoyaltyClub } from "@/components/customer-loyalty-club";
 import { MercadoPagoPayment } from "@/components/mercadopago-payment";
+import { AppmaxPayment } from "@/components/appmax-payment";
 import { quoteLoyaltyReward } from "@/lib/loyalty.functions";
 import { quoteSiteDelivery } from "@/lib/site-checkout.functions";
 import { getPublicTestimonialsFn } from "@/lib/satisfaction.functions";
@@ -113,7 +114,7 @@ type CartItem = {
 };
 type View = "list" | "detail" | "cart" | "checkout";
 type ActiveFilter = "ativos" | "inativos" | "todos";
-type CheckoutPayment = "infinitepay" | "mercadopago";
+type CheckoutPayment = "infinitepay" | "mercadopago" | "appmax";
 type PaymentChoice = "online" | "delivery_card" | "delivery_pix";
 type AreaStatus = "idle" | "checking" | "needs_number" | "supported" | "unsupported" | "error";
 
@@ -327,6 +328,9 @@ function CustomerHome() {
   const [mercadoPagoPublicKey, setMercadoPagoPublicKey] = useState("");
   const [mercadoPagoMaxInstallments, setMercadoPagoMaxInstallments] = useState(1);
   const [mpCheckout, setMpCheckout] = useState<{ id: string; total: number } | null>(null);
+  const [appmaxCheckout, setAppmaxCheckout] = useState<{ id: string; total: number } | null>(null);
+  const [appmaxExternalId, setAppmaxExternalId] = useState("");
+  const [appmaxMaxInstallments, setAppmaxMaxInstallments] = useState(1);
   const [ifoodStoreLink, setIfoodStoreLink] = useState("");
   const [pixEnabled, setPixEnabled] = useState(true);
   const [cardEnabled, setCardEnabled] = useState(true);
@@ -473,11 +477,13 @@ function CustomerHome() {
         if (data.banner_tagline) setBannerTagline(data.banner_tagline);
       }
       const pay = paymentResult?.data || {};
-      const provider: CheckoutPayment = pay.provider === "mercadopago" ? "mercadopago" : "infinitepay";
+      const provider: CheckoutPayment = pay.provider === "mercadopago" ? "mercadopago" : pay.provider === "appmax" ? "appmax" : "infinitepay";
       setPaymentProvider(provider);
       setPaymentAvailable(pay.payment_available === true);
       setMercadoPagoPublicKey(String(pay.mercadopago_public_key || ""));
       setMercadoPagoMaxInstallments(Math.min(12, Math.max(1, Number(pay.mercadopago_max_installments || 1))));
+      setAppmaxExternalId(String(pay.appmax_external_id || ""));
+      setAppmaxMaxInstallments(Math.min(12, Math.max(1, Number(pay.appmax_max_installments || 1))));
       setPayOnDeliveryEnabled(pay.pay_on_delivery_enabled === true);
       setPayOnDeliveryCardEnabled(pay.pay_on_delivery_card_enabled !== false);
       setPayOnDeliveryPixEnabled(pay.pay_on_delivery_pix_enabled !== false);
@@ -1151,13 +1157,22 @@ function CustomerHome() {
         return;
       }
 
-      const provider: CheckoutPayment = created.checkout.payment_provider === "mercadopago" ? "mercadopago" : "infinitepay";
+      const provider: CheckoutPayment = created.checkout.payment_provider === "mercadopago" ? "mercadopago" : created.checkout.payment_provider === "appmax" ? "appmax" : "infinitepay";
       if (provider === "mercadopago") {
         setPaymentProvider("mercadopago");
         setForm((current) => ({ ...current, payment: "mercadopago" }));
         trackAnalytics("payment_started", { event_category: "payment", checkout_id: String(created.checkout.id), payment_method: "mercadopago", value: Number(created.checkout.total || total) });
         setMpCheckout({ id: String(created.checkout.id), total: Number(created.checkout.total || total) });
-        window.scrollTo({ top: 0, behavior: "smooth" });
+        scrollToCheckoutSection("payment-section");
+        return;
+      }
+
+      if (provider === "appmax") {
+        setPaymentProvider("appmax");
+        setForm((current) => ({ ...current, payment: "appmax" }));
+        trackAnalytics("payment_started", { event_category: "payment", checkout_id: String(created.checkout.id), payment_method: "appmax", value: Number(created.checkout.total || total) });
+        setAppmaxCheckout({ id: String(created.checkout.id), total: Number(created.checkout.total || total) });
+        scrollToCheckoutSection("payment-section");
         return;
       }
 
@@ -1202,6 +1217,24 @@ function CustomerHome() {
     removeCoupon();
     setMpCheckout(null);
     window.location.href = `/obrigado?provider=mercadopago&checkout_id=${encodeURIComponent(checkoutId)}`;
+  }
+
+  async function cancelAppmaxCheckout() {
+    if (!appmaxCheckout) return;
+    try {
+      const { cancelSiteCheckout } = await import("@/lib/site-checkout.functions");
+      await cancelSiteCheckout({ data: { checkoutId: appmaxCheckout.id, access_token: customerSession?.access_token || null } });
+    } catch {}
+    setAppmaxCheckout(null);
+  }
+
+  function finishAppmax(orderId?: string | null) {
+    if (orderId) pushMyOrder(orderId);
+    const checkoutId = appmaxCheckout?.id || "";
+    setCart([]);
+    removeCoupon();
+    setAppmaxCheckout(null);
+    window.location.href = `/obrigado?provider=appmax&checkout_id=${encodeURIComponent(checkoutId)}`;
   }
 
   if (!configLoaded) {
@@ -1976,6 +2009,18 @@ function CustomerHome() {
                 onPaid={finishMercadoPago}
                 onCancel={cancelMercadoPagoCheckout}
               />
+            ) : appmaxCheckout ? (
+              <AppmaxPayment
+                checkoutId={appmaxCheckout.id}
+                amount={appmaxCheckout.total}
+                externalId={appmaxExternalId}
+                maxInstallments={appmaxMaxInstallments}
+                customerName={form.name}
+                customerEmail={customerSession?.user?.email || null}
+                supportWhatsappUrl={paymentSupportWhatsappUrl}
+                onPaid={finishAppmax}
+                onCancel={cancelAppmaxCheckout}
+              />
             ) : (
               <div className="space-y-3">
                 {(pixEnabled || cardEnabled) && (
@@ -1994,7 +2039,7 @@ function CustomerHome() {
                           <p className="text-sm font-black">Pagar agora</p>
                           {paymentChoice === "online" && <span className="rounded-full bg-primary px-2 py-1 text-[10px] font-black text-primary-foreground">SELECIONADO</span>}
                         </div>
-                        <p className="text-[11px] text-muted-foreground">{paymentProvider === "mercadopago" ? "Pagamento rápido e seguro dentro da HotBox" : "Pagamento seguro pela InfinitePay"}</p>
+                        <p className="text-[11px] text-muted-foreground">{paymentProvider === "mercadopago" ? "Pagamento rápido e seguro dentro da HotBox" : paymentProvider === "appmax" ? "Checkout transparente Appmax dentro da HotBox" : "Pagamento seguro pela InfinitePay"}</p>
                       </div>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold">
@@ -2053,7 +2098,7 @@ function CustomerHome() {
           </div>
         </div>
 
-        {!mpCheckout && (
+        {!mpCheckout && !appmaxCheckout && (
           <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 px-4 py-3 backdrop-blur">
             <div className="mx-auto max-w-2xl">
               <Button
@@ -2073,7 +2118,7 @@ function CustomerHome() {
                       ? "Confirmar • pagar no cartão na entrega"
                       : paymentChoice === "delivery_pix"
                         ? "Confirmar • pagar Pix na entrega"
-                        : paymentProvider === "mercadopago"
+                        : paymentProvider === "mercadopago" || paymentProvider === "appmax"
                           ? "Pagar com Pix ou cartão"
                           : "Continuar para pagamento"}
                 </span>
