@@ -102,7 +102,7 @@ type OrderBump = {
   sort_order?: number | null;
 };
 
-type CartAddon = { option_id: string; group_id: string; name: string; price: number };
+type CartAddon = { option_id: string; group_id: string; name: string; price: number; qty: number };
 type CartItem = {
   product: Product;
   qty: number;
@@ -361,6 +361,7 @@ function CustomerHome() {
   const [detailQty, setDetailQty] = useState(1);
   const [detailNotes, setDetailNotes] = useState("");
   const [detailAddonIds, setDetailAddonIds] = useState<string[]>([]);
+  const [detailAddonQty, setDetailAddonQty] = useState<Record<string, number>>({});
   const [detailOrderBumpId, setDetailOrderBumpId] = useState<string | null>(null);
   const [detailReturnView, setDetailReturnView] = useState<"list" | "cart" | "checkout">("list");
   const [ingredientNames, setIngredientNames] = useState<string[]>([]);
@@ -721,13 +722,72 @@ function CustomerHome() {
   }
 
   function cartUnitPrice(item: CartItem) {
-    return Number((basePriceForCartItem(item) + item.addons.reduce((sum, a) => sum + Number(a.price || 0), 0)).toFixed(2));
+    return Number((basePriceForCartItem(item) + item.addons.reduce((sum, a) => sum + Number(a.price || 0) * Math.max(1, Number(a.qty || 1)), 0)).toFixed(2));
   }
 
   const subtotal = cart.reduce((s, i) => s + cartUnitPrice(i) * i.qty, 0);
   const isDelivery = form.deliveryMode === "delivery";
   const couponDiscount = appliedCoupon?.discount ?? 0;
   const total = Math.max(0, subtotal - couponDiscount) + (cart.length && isDelivery ? deliveryFee : 0);
+
+  function deliveryFeeLabel() {
+    if (!isDelivery) return "Retirada";
+    if (areaStatus !== "supported") return "A calcular";
+    return brl(Number(deliveryFee || 0));
+  }
+
+  function scrollToCheckoutSection(id: string) {
+    window.setTimeout(() => {
+      document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
+  }
+
+  useEffect(() => {
+    if (!mpCheckout) return;
+    scrollToCheckoutSection("payment-section");
+  }, [mpCheckout?.id]);
+
+  const paymentSupportWhatsappUrl = useMemo(() => {
+    const itemLines = cart.map((item) => {
+      const addons = item.addons.length
+        ? ` | Adicionais: ${item.addons.map((a) => `${Math.max(1, Number(a.qty || 1))}x ${a.name}`).join(", ")}`
+        : "";
+      const notes = item.notes?.trim() ? ` | Obs.: ${item.notes.trim()}` : "";
+      return `• ${item.qty}x ${item.product.name} — ${brl(cartUnitPrice(item) * item.qty)}${addons}${notes}`;
+    });
+
+    const address = isDelivery
+      ? [
+          `${form.street || "—"}, ${form.number || "—"}`,
+          form.complement?.trim() ? `Complemento: ${form.complement.trim()}` : null,
+          form.neighborhood || null,
+          form.city || null,
+          form.cep ? `CEP: ${form.cep}` : null,
+        ].filter(Boolean).join(" | ")
+      : "Retirada no local";
+
+    const lines = [
+      "Olá, vim pelo cardápio digital da Hotbox e preciso de ajuda para concluir o pagamento.",
+      "",
+      "*DADOS DO PEDIDO*",
+      `Nome: ${form.name || "—"}`,
+      `Telefone: ${formatPhone(form.phone) || form.phone || "—"}`,
+      `Endereço: ${address}`,
+      "",
+      "*ITENS*",
+      ...(itemLines.length ? itemLines : ["• Pedido sem itens carregados"]),
+      "",
+      `Subtotal: ${brl(subtotal)}`,
+      ...(appliedCoupon?.code ? [`Cupom: ${appliedCoupon.code} (-${brl(couponDiscount)})`] : []),
+      `Taxa de entrega: ${isDelivery ? brl(deliveryFee) : "R$ 0,00"}`,
+      `*Total: ${brl(mpCheckout?.total ?? total)}*`,
+      ...(mpCheckout?.id ? [`Referência do checkout: ${mpCheckout.id}`] : []),
+      "",
+      "Meu pagamento não foi autorizado. Preciso receber um link de pagamento.",
+    ];
+
+    return `https://wa.me/5521984296288?text=${encodeURIComponent(lines.join("\\n"))}`;
+  }, [cart, form, isDelivery, subtotal, couponDiscount, appliedCoupon?.code, deliveryFee, total, mpCheckout?.total, mpCheckout?.id]);
 
   const couponCartPayload = () =>
     cart.map((i) => {
@@ -856,6 +916,7 @@ function CustomerHome() {
     setDetailQty(1);
     setDetailNotes("");
     setDetailAddonIds([]);
+    setDetailAddonQty({});
     setDetailOrderBumpId(orderBumpId || null);
     setDetailReturnView(returnView);
     setIngredientNames([]);
@@ -867,21 +928,54 @@ function CustomerHome() {
       .then(({ data }) => setIngredientNames((data ?? []).map((r: any) => r.ingredients?.name).filter(Boolean)));
   }
 
-  function toggleDetailAddon(group: AddonGroup, option: AddonOption) {
+  function addonQty(optionId: string) {
+    return Math.max(0, Number(detailAddonQty[optionId] || (detailAddonIds.includes(optionId) ? 1 : 0)));
+  }
+
+  function groupSelectedUnits(group: AddonGroup) {
+    return group.options.reduce((sum, option) => sum + addonQty(String(option.id)), 0);
+  }
+
+  function setDetailAddonQuantity(group: AddonGroup, option: AddonOption, nextQty: number) {
+    const optionId = String(option.id);
+    const currentQty = addonQty(optionId);
+    const currentGroupTotal = groupSelectedUnits(group);
+    const max = Math.max(1, Number(group.max_select || 1));
+    const clamped = Math.max(0, Math.floor(nextQty));
+
+    if (clamped > currentQty && currentGroupTotal + (clamped - currentQty) > max) {
+      toast.error(`Você pode adicionar no máximo ${max} unidade(s) em ${group.name}.`);
+      return;
+    }
+
+    setDetailAddonQty((current) => ({ ...current, [optionId]: clamped }));
     setDetailAddonIds((current) => {
-      const groupOptionIds = new Set(group.options.map((o) => String(o.id)));
-      const selectedInGroup = current.filter((id) => groupOptionIds.has(id));
-      const optionId = String(option.id);
-      if (group.max_select === 1) {
-        return [...current.filter((id) => !groupOptionIds.has(id)), optionId];
-      }
-      if (current.includes(optionId)) return current.filter((id) => id !== optionId);
-      if (selectedInGroup.length >= Math.max(1, Number(group.max_select || 1))) {
-        toast.error(`Você pode escolher no máximo ${group.max_select} opção(ões) em ${group.name}.`);
-        return current;
-      }
+      if (clamped <= 0) return current.filter((id) => id !== optionId);
+      if (current.includes(optionId)) return current;
       return [...current, optionId];
     });
+  }
+
+  function toggleDetailAddon(group: AddonGroup, option: AddonOption) {
+    const optionId = String(option.id);
+    const currentQty = addonQty(optionId);
+
+    if (group.max_select === 1) {
+      const groupOptionIds = new Set(group.options.map((o) => String(o.id)));
+      setDetailAddonIds((current) => [
+        ...current.filter((id) => !groupOptionIds.has(id)),
+        ...(currentQty > 0 ? [] : [optionId]),
+      ]);
+      setDetailAddonQty((current) => {
+        const next = { ...current };
+        for (const id of groupOptionIds) delete next[id];
+        if (currentQty <= 0) next[optionId] = 1;
+        return next;
+      });
+      return;
+    }
+
+    setDetailAddonQuantity(group, option, currentQty > 0 ? 0 : 1);
   }
 
   function effectiveAddonOptionPrice(option: AddonOption) {
@@ -898,15 +992,26 @@ function CustomerHome() {
     return detailAddonIds
       .map((id) => options.find((o) => String(o.id) === id))
       .filter(Boolean)
-      .map((o: AddonOption) => ({ option_id: String(o.id), group_id: String(o.group_id), name: String(o.name), price: effectiveAddonOptionPrice(o) }));
+      .map((o: AddonOption) => ({
+        option_id: String(o.id),
+        group_id: String(o.group_id),
+        name: String(o.name),
+        price: effectiveAddonOptionPrice(o),
+        qty: Math.max(1, addonQty(String(o.id))),
+      }));
   }
 
   function validateDetailAddons(productId: string) {
     for (const group of addonGroupsByProduct[productId] || []) {
-      const selected = group.options.filter((o) => detailAddonIds.includes(String(o.id))).length;
+      const selected = groupSelectedUnits(group);
       const min = Math.max(0, Number(group.min_select || 0), group.required ? 1 : 0);
+      const max = Math.max(1, Number(group.max_select || 1));
       if (selected < min) {
-        toast.error(`Escolha pelo menos ${min} opção(ões) em ${group.name}.`);
+        toast.error(`Escolha pelo menos ${min} unidade(s) em ${group.name}.`);
+        return false;
+      }
+      if (selected > max) {
+        toast.error(`Escolha no máximo ${max} unidade(s) em ${group.name}.`);
         return false;
       }
     }
@@ -919,18 +1024,18 @@ function CustomerHome() {
     const addons = selectedDetailAddons(selectedProduct.id);
     const bump = detailOrderBumpId ? orderBumps.find((b) => String(b.id) === detailOrderBumpId) : null;
     const bumpPrice = bump?.price_override == null ? null : Number(bump.price_override);
-    const signature = addons.map((a) => a.option_id).sort().join(",");
+    const signature = addons.map((a) => `${a.option_id}:${Math.max(1, Number(a.qty || 1))}`).sort().join(",");
     setCart((c) => {
       const ex = c.find((i) =>
         i.product.id === selectedProduct.id &&
         i.notes === detailNotes &&
         (i.orderBumpId || "") === (detailOrderBumpId || "") &&
-        i.addons.map((a) => a.option_id).sort().join(",") === signature
+        i.addons.map((a) => `${a.option_id}:${Math.max(1, Number(a.qty || 1))}`).sort().join(",") === signature
       );
       if (ex) return c.map((i) => (i === ex ? { ...i, qty: i.qty + detailQty } : i));
       return [...c, { product: selectedProduct, qty: detailQty, notes: detailNotes, addons, orderBumpId: detailOrderBumpId, bumpPrice }];
     });
-    trackAnalytics("add_to_cart", { event_category: "commerce", product_id: selectedProduct.id, product_name: selectedProduct.name, quantity: detailQty, value: Number(getEffectivePrice(selectedProduct).price || 0), properties: { addons: addons.map(a => a.name), addon_total: addons.reduce((sum,a)=>sum+Number(a.price||0),0), order_bump_id: detailOrderBumpId || null } });
+    trackAnalytics("add_to_cart", { event_category: "commerce", product_id: selectedProduct.id, product_name: selectedProduct.name, quantity: detailQty, value: Number(getEffectivePrice(selectedProduct).price || 0), properties: { addons: addons.map(a => a.name), addon_total: addons.reduce((sum,a)=>sum+Number(a.price||0)*Math.max(1,Number(a.qty||1)),0), order_bump_id: detailOrderBumpId || null } });
     toast.success(`${selectedProduct.name} adicionado`);
     setDetailOrderBumpId(null);
     setView(detailReturnView);
@@ -994,7 +1099,7 @@ function CustomerHome() {
             product_id: i.product.id,
             qty: i.qty,
             notes: i.notes || null,
-            addons: i.addons.map((a) => ({ option_id: a.option_id })),
+            addons: i.addons.map((a) => ({ option_id: a.option_id, qty: Math.max(1, Number(a.qty || 1)) })),
             order_bump_id: i.orderBumpId || null,
           })),
         },
@@ -1279,50 +1384,119 @@ function CustomerHome() {
 
           {(addonGroupsByProduct[p.id] || []).length > 0 && (
             <div className="mt-5 space-y-4">
+              <div className="rounded-2xl bg-zinc-950 px-4 py-3 text-white shadow-sm">
+                <p className="text-sm font-black">Personalize seu pedido</p>
+                <p className="mt-0.5 text-[11px] text-white/70">Escolha adicionais e quantidades do seu jeito.</p>
+              </div>
+
               {(addonGroupsByProduct[p.id] || []).map((group) => {
-                const selectedCount = group.options.filter((o) => detailAddonIds.includes(String(o.id))).length;
+                const selectedCount = groupSelectedUnits(group);
                 const min = Math.max(0, Number(group.min_select || 0), group.required ? 1 : 0);
+                const max = Math.max(1, Number(group.max_select || 1));
                 return (
-                  <div key={group.id} className="overflow-hidden rounded-2xl border bg-white shadow-sm">
-                    <div className="flex items-start justify-between gap-3 border-b bg-muted/30 px-4 py-3">
-                      <div>
-                        <p className="font-black">{group.name}</p>
-                        {group.description && <p className="mt-0.5 text-xs text-muted-foreground">{group.description}</p>}
+                  <div key={group.id} className="overflow-hidden rounded-[22px] border border-black/5 bg-white shadow-sm">
+                    <div className="flex items-start justify-between gap-3 border-b bg-zinc-50/80 px-4 py-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-black text-zinc-950">{group.name}</p>
+                          <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${
+                            group.required
+                              ? "bg-red-100 text-red-700"
+                              : "bg-emerald-100 text-emerald-700"
+                          }`}>
+                            {group.required ? "Obrigatório" : "Opcional"}
+                          </span>
+                        </div>
+                        {group.description && <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{group.description}</p>}
+                        <p className="mt-1 text-[10px] font-semibold text-zinc-400">
+                          {group.required
+                            ? `Escolha de ${min} até ${max} unidade(s)`
+                            : `Você pode adicionar até ${max} unidade(s)`}
+                        </p>
                       </div>
-                      <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-black ${min > 0 ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
-                        {min > 0 ? `ESCOLHA ${min}${group.max_select > min ? `–${group.max_select}` : ""}` : `ATÉ ${group.max_select}`}
+                      <span className="shrink-0 rounded-full bg-zinc-900 px-2.5 py-1 text-[10px] font-black text-white">
+                        {selectedCount}/{max}
                       </span>
                     </div>
+
                     <div className="divide-y">
                       {group.options.map((option) => {
-                        const selected = detailAddonIds.includes(String(option.id));
+                        const optionId = String(option.id);
+                        const quantity = addonQty(optionId);
+                        const selected = quantity > 0;
+                        const unitPrice = effectiveAddonOptionPrice(option);
                         return (
-                          <button
-                            type="button"
+                          <div
                             key={option.id}
-                            onClick={() => toggleDetailAddon(group, option)}
-                            className={`flex w-full items-center gap-3 px-4 py-3 text-left transition ${selected ? "bg-primary/5" : "hover:bg-muted/30"}`}
+                            className={`flex items-center gap-3 px-4 py-3 transition ${selected ? "bg-amber-50/60" : "bg-white"}`}
                           >
-                            <span className={`grid size-5 shrink-0 place-items-center border-2 ${group.max_select === 1 ? "rounded-full" : "rounded-md"} ${selected ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40"}`}>
-                              {selected && <CheckCircle2 className="size-3.5" />}
-                            </span>
-                            <div className="min-w-0 flex-1">
+                            <button
+                              type="button"
+                              onClick={() => toggleDetailAddon(group, option)}
+                              className={`grid size-6 shrink-0 place-items-center border-2 ${
+                                group.max_select === 1 ? "rounded-full" : "rounded-lg"
+                              } ${
+                                selected
+                                  ? "border-primary bg-primary text-primary-foreground"
+                                  : "border-zinc-300 bg-white"
+                              }`}
+                              aria-label={selected ? `Remover ${option.name}` : `Adicionar ${option.name}`}
+                            >
+                              {selected && <CheckCircle2 className="size-4" />}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => toggleDetailAddon(group, option)}
+                              className="min-w-0 flex-1 text-left"
+                            >
                               <div className="flex flex-wrap items-center gap-1.5">
-                                <p className="text-sm font-bold">{option.name}</p>
+                                <p className="text-sm font-bold text-zinc-900">{option.name}</p>
                                 {option.linked_product_id && (
                                   <span className="rounded-full bg-sky-50 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-sky-700">
                                     Produto do cardápio
                                   </span>
                                 )}
                               </div>
-                              {option.description && <p className="text-[11px] text-muted-foreground">{option.description}</p>}
-                            </div>
-                            <span className="shrink-0 text-sm font-black text-primary">{effectiveAddonOptionPrice(option) > 0 ? `+ ${brl(effectiveAddonOptionPrice(option))}` : "Grátis"}</span>
-                          </button>
+                              {option.description && <p className="mt-0.5 text-[11px] text-muted-foreground">{option.description}</p>}
+                              <p className="mt-0.5 text-xs font-black text-primary">
+                                {unitPrice > 0 ? `+ ${brl(unitPrice)} cada` : "Sem acréscimo"}
+                              </p>
+                            </button>
+
+                            {max > 1 && (
+                              <div className="flex shrink-0 items-center gap-1 rounded-full border bg-white p-1 shadow-sm">
+                                <button
+                                  type="button"
+                                  onClick={() => setDetailAddonQuantity(group, option, quantity - 1)}
+                                  disabled={quantity <= 0}
+                                  className="grid size-7 place-items-center rounded-full text-zinc-700 disabled:opacity-30"
+                                  aria-label={`Diminuir ${option.name}`}
+                                >
+                                  <Minus className="size-3.5" />
+                                </button>
+                                <span className="w-5 text-center text-xs font-black">{quantity}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setDetailAddonQuantity(group, option, quantity + 1)}
+                                  disabled={selectedCount >= max}
+                                  className="grid size-7 place-items-center rounded-full bg-zinc-900 text-white disabled:opacity-30"
+                                  aria-label={`Aumentar ${option.name}`}
+                                >
+                                  <Plus className="size-3.5" />
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         );
                       })}
                     </div>
-                    {selectedCount < min && <p className="px-4 py-2 text-[11px] font-bold text-amber-700">Falta escolher {min - selectedCount} opção(ões).</p>}
+
+                    {selectedCount < min && (
+                      <p className="border-t bg-red-50 px-4 py-2 text-[11px] font-bold text-red-700">
+                        Obrigatório: falta escolher {min - selectedCount} unidade(s).
+                      </p>
+                    )}
                   </div>
                 );
               })}
@@ -1418,7 +1592,7 @@ function CustomerHome() {
                       <div className="mt-2 space-y-1">
                         {i.addons.map((addon) => (
                           <p key={addon.option_id} className="text-xs text-muted-foreground">
-                            + {addon.name}{Number(addon.price || 0) > 0 ? ` • ${brl(addon.price)}` : ""}
+                            + {Math.max(1, Number(addon.qty || 1)) > 1 ? `${Math.max(1, Number(addon.qty || 1))}x ` : ""}{addon.name}{Number(addon.price || 0) > 0 ? ` • ${brl(Number(addon.price) * Math.max(1, Number(addon.qty || 1)))}` : ""}
                           </p>
                         ))}
                       </div>
@@ -1550,7 +1724,7 @@ function CustomerHome() {
                   <span className="block text-xs font-black uppercase tracking-wide text-amber-900">Taxa de entrega</span>
                   <span className="text-[11px] text-amber-800/80">Já incluída no total abaixo</span>
                 </div>
-                <span className="text-xl font-black text-amber-950">{isDelivery ? brl(deliveryFee) : "Retirada"}</span>
+                <span className="text-xl font-black text-amber-950">{deliveryFeeLabel()}</span>
               </div>
               <div className="mt-2 flex justify-between border-t pt-2 text-lg font-extrabold">
                 <span>Total</span>
@@ -1561,7 +1735,7 @@ function CustomerHome() {
         </div>
 
         {cart.length > 0 && (
-          <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 px-4 py-3 backdrop-blur">
+          <div id="checkout-action" className="fixed inset-x-0 bottom-0 z-40 scroll-mt-24 border-t bg-background/95 px-4 py-3 backdrop-blur">
             <div className="mx-auto max-w-2xl">
               <Button
                 onClick={() => { trackAnalytics("begin_checkout", { event_category: "commerce", value: total, properties: { items_count: totalQty } }); setView("checkout"); }}
@@ -1748,7 +1922,7 @@ function CustomerHome() {
             </div>
           )}
 
-          <div>
+          <div id="payment-section" className="scroll-mt-24">
             <div className="mb-3">
               <h3 className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Como você prefere pagar?</h3>
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
@@ -1764,6 +1938,7 @@ function CustomerHome() {
                 maxInstallments={mercadoPagoMaxInstallments}
                 customerEmail={customerSession?.user?.email || null}
                 origin={typeof window !== "undefined" ? window.location.origin : ""}
+                supportWhatsappUrl={paymentSupportWhatsappUrl}
                 onPaid={finishMercadoPago}
                 onCancel={cancelMercadoPagoCheckout}
               />
@@ -1772,7 +1947,7 @@ function CustomerHome() {
                 {(pixEnabled || cardEnabled) && (
                   <button
                     type="button"
-                    onClick={() => { setPaymentChoice("online"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: paymentProvider }); }}
+                    onClick={() => { setPaymentChoice("online"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: paymentProvider }); scrollToCheckoutSection("checkout-action"); }}
                     disabled={!paymentAvailable}
                     className={`w-full rounded-2xl border-2 p-4 text-left transition ${
                       paymentChoice === "online" ? "border-primary bg-primary/5 shadow-sm" : "border-border bg-white"
@@ -1799,7 +1974,7 @@ function CustomerHome() {
                 {isDelivery && payOnDeliveryEnabled && payOnDeliveryCardEnabled && (
                   <button
                     type="button"
-                    onClick={() => { setPaymentChoice("delivery_card"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "delivery_card" }); }}
+                    onClick={() => { setPaymentChoice("delivery_card"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "delivery_card" }); scrollToCheckoutSection("checkout-action"); }}
                     className={`w-full rounded-2xl border-2 p-4 text-left transition ${paymentChoice === "delivery_card" ? "border-amber-500 bg-amber-50 shadow-sm" : "border-border bg-white hover:border-amber-300"}`}
                   >
                     <div className="flex items-center gap-3">
@@ -1818,7 +1993,7 @@ function CustomerHome() {
                 {isDelivery && payOnDeliveryEnabled && payOnDeliveryPixEnabled && (
                   <button
                     type="button"
-                    onClick={() => { setPaymentChoice("delivery_pix"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "delivery_pix" }); }}
+                    onClick={() => { setPaymentChoice("delivery_pix"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "delivery_pix" }); scrollToCheckoutSection("checkout-action"); }}
                     className={`w-full rounded-2xl border-2 p-4 text-left transition ${paymentChoice === "delivery_pix" ? "border-amber-500 bg-amber-50 shadow-sm" : "border-border bg-white hover:border-amber-300"}`}
                   >
                     <div className="flex items-center gap-3">
@@ -1932,7 +2107,7 @@ function CustomerHome() {
               <MapPin className="size-4" /> {validatedNeighborhood || "Entrega"}
             </span>
             <span className="flex items-center gap-1.5 rounded-full bg-[#ffd400] px-3 py-1.5 font-black text-black shadow-sm">
-              <Bike className="size-4" /> Taxa de entrega: {deliveryFee > 0 ? brl(deliveryFee) : "grátis"}
+              <Bike className="size-4" /> Taxa de entrega: {deliveryFeeLabel()}
             </span>
           </div>
         </div>
