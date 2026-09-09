@@ -22,7 +22,15 @@ export function MenuSalesTools() {
   const [options, setOptions] = useState<any[]>([]);
   const [links, setLinks] = useState<any[]>([]);
   const [bumps, setBumps] = useState<any[]>([]);
-  const [newGroup, setNewGroup] = useState({ name: "", description: "", required: false, min_select: 0, max_select: 1 });
+  const [newGroup, setNewGroup] = useState({
+    name: "",
+    description: "",
+    required: false,
+    min_select: 0,
+    max_select: 1,
+    availability: "all" as "all" | "specific",
+    product_ids: [] as string[],
+  });
   const [newOptionByGroup, setNewOptionByGroup] = useState<Record<string, { name: string; description: string; price: string }>>({});
   const [newBump, setNewBump] = useState({ product_id: "", title: "Que tal completar seu pedido?", subtitle: "", placement: "cart", price_override: "" });
 
@@ -45,24 +53,118 @@ export function MenuSalesTools() {
 
   const productsById = useMemo(() => new Map(products.map((p) => [String(p.id), p])), [products]);
 
+  const allProductIds = useMemo(() => products.map((p) => String(p.id)), [products]);
+
+  function groupLinkedProductIds(groupId: string) {
+    return new Set(
+      links
+        .filter((link) => String(link.group_id) === String(groupId))
+        .map((link) => String(link.product_id)),
+    );
+  }
+
+  function groupAvailability(groupId: string): "all" | "specific" {
+    if (!allProductIds.length) return "specific";
+    const linked = groupLinkedProductIds(groupId);
+    return allProductIds.every((id) => linked.has(id)) ? "all" : "specific";
+  }
+
+  async function applyGroupToAllProducts(groupId: string) {
+    if (!allProductIds.length) return toast.error("Cadastre ao menos um produto antes de aplicar o adicional a todos.");
+
+    const rows = allProductIds.map((productId, index) => ({
+      product_id: productId,
+      group_id: groupId,
+      sort_order: index,
+    }));
+
+    const { error } = await (supabase as any)
+      .from("product_addon_groups")
+      .upsert(rows, { onConflict: "product_id,group_id" });
+
+    if (error) return toast.error(error.message);
+
+    toast.success("Adicional disponível em todos os produtos.");
+    await load();
+  }
+
+  async function changeGroupAvailability(groupId: string, mode: "all" | "specific") {
+    if (mode === "all") return applyGroupToAllProducts(groupId);
+
+    const { error } = await (supabase as any)
+      .from("product_addon_groups")
+      .delete()
+      .eq("group_id", groupId);
+
+    if (error) return toast.error(error.message);
+
+    toast.info("Produtos específicos ativado. Marque abaixo onde este adicional deve aparecer.");
+    await load();
+  }
+
   async function createGroup() {
     const name = newGroup.name.trim();
     if (!name) return toast.error("Informe o nome do grupo de adicionais.");
+
     const min = Math.max(0, num(newGroup.min_select));
     const max = Math.max(1, num(newGroup.max_select, 1));
+
     if (min > max) return toast.error("O mínimo não pode ser maior que o máximo.");
-    const { error } = await (supabase as any).from("menu_addon_groups").insert({
-      name,
-      description: newGroup.description.trim() || null,
-      required: newGroup.required,
-      min_select: newGroup.required ? Math.max(1, min) : min,
-      max_select: max,
-      active: true,
-      sort_order: groups.length,
+    if (newGroup.availability === "specific" && !newGroup.product_ids.length) {
+      return toast.error("Escolha pelo menos um produto ou selecione “Todos os produtos”.");
+    }
+
+    const { data: created, error } = await (supabase as any)
+      .from("menu_addon_groups")
+      .insert({
+        name,
+        description: newGroup.description.trim() || null,
+        required: newGroup.required,
+        min_select: newGroup.required ? Math.max(1, min) : min,
+        max_select: max,
+        active: true,
+        sort_order: groups.length,
+      })
+      .select("id")
+      .single();
+
+    if (error || !created?.id) return toast.error(error?.message || "Não foi possível criar o grupo.");
+
+    const targetIds =
+      newGroup.availability === "all" ? allProductIds : newGroup.product_ids;
+
+    if (targetIds.length) {
+      const rows = targetIds.map((productId, index) => ({
+        product_id: productId,
+        group_id: created.id,
+        sort_order: index,
+      }));
+
+      const { error: linkError } = await (supabase as any)
+        .from("product_addon_groups")
+        .upsert(rows, { onConflict: "product_id,group_id" });
+
+      if (linkError) {
+        await (supabase as any).from("menu_addon_groups").delete().eq("id", created.id);
+        return toast.error(`O grupo não foi salvo porque o vínculo com os produtos falhou: ${linkError.message}`);
+      }
+    }
+
+    setNewGroup({
+      name: "",
+      description: "",
+      required: false,
+      min_select: 0,
+      max_select: 1,
+      availability: "all",
+      product_ids: [],
     });
-    if (error) return toast.error(error.message);
-    setNewGroup({ name: "", description: "", required: false, min_select: 0, max_select: 1 });
-    toast.success("Grupo de adicionais criado.");
+
+    toast.success(
+      newGroup.availability === "all"
+        ? "Grupo criado para todos os produtos."
+        : "Grupo criado para os produtos selecionados.",
+    );
     await load();
   }
 
@@ -187,6 +289,60 @@ export function MenuSalesTools() {
             <div><Label>Descrição</Label><Input value={newGroup.description} onChange={(e) => setNewGroup({ ...newGroup, description: e.target.value })} placeholder="Ex.: deixe ainda mais cremoso" /></div>
             <div className="grid grid-cols-2 gap-2"><div><Label>Mínimo</Label><Input type="number" min="0" value={newGroup.min_select} onChange={(e) => setNewGroup({ ...newGroup, min_select: num(e.target.value) })} /></div><div><Label>Máximo</Label><Input type="number" min="1" value={newGroup.max_select} onChange={(e) => setNewGroup({ ...newGroup, max_select: num(e.target.value, 1) })} /></div></div>
             <label className="flex items-center justify-between rounded-xl border bg-background p-3 text-sm font-bold">Obrigatório <Switch checked={newGroup.required} onCheckedChange={(v) => setNewGroup({ ...newGroup, required: v, min_select: v ? Math.max(1, newGroup.min_select) : newGroup.min_select })} /></label>
+
+            <div className="md:col-span-2 rounded-2xl border bg-background p-4">
+              <Label>Em quais produtos este adicional deve aparecer?</Label>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Escolha se este grupo vale para todos os produtos ou somente para produtos específicos.
+              </p>
+
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => setNewGroup({ ...newGroup, availability: "all", product_ids: [] })}
+                  className={`rounded-xl border p-3 text-left transition ${newGroup.availability === "all" ? "border-primary bg-primary/5 ring-1 ring-primary/30" : "bg-muted/20 hover:bg-muted/40"}`}
+                >
+                  <p className="text-sm font-black">Todos os produtos</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Disponível em todo o cardápio ativo.</p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setNewGroup({ ...newGroup, availability: "specific" })}
+                  className={`rounded-xl border p-3 text-left transition ${newGroup.availability === "specific" ? "border-primary bg-primary/5 ring-1 ring-primary/30" : "bg-muted/20 hover:bg-muted/40"}`}
+                >
+                  <p className="text-sm font-black">Produtos específicos</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Escolha exatamente onde o grupo deve aparecer.</p>
+                </button>
+              </div>
+
+              {newGroup.availability === "specific" && (
+                <div className="mt-3 grid max-h-64 gap-2 overflow-y-auto rounded-xl border bg-muted/10 p-2 sm:grid-cols-2">
+                  {products.map((product) => {
+                    const id = String(product.id);
+                    const checked = newGroup.product_ids.includes(id);
+
+                    return (
+                      <label key={id} className="flex items-center justify-between gap-2 rounded-xl border bg-background p-2.5 text-sm">
+                        <span className="min-w-0 truncate font-semibold">{product.name}</span>
+                        <Switch
+                          checked={checked}
+                          onCheckedChange={(value) =>
+                            setNewGroup((current) => ({
+                              ...current,
+                              product_ids: value
+                                ? Array.from(new Set([...current.product_ids, id]))
+                                : current.product_ids.filter((productId) => productId !== id),
+                            }))
+                          }
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
             <Button onClick={createGroup} className="md:col-span-2"><Plus className="mr-2 size-4" /> Criar grupo de adicionais</Button>
           </div>
 
@@ -236,17 +392,52 @@ export function MenuSalesTools() {
                   </div>
                 </div>
 
-                <details className="mt-4 rounded-xl border bg-muted/20 p-3">
-                  <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-black"><span>Produtos que usam este grupo ({linkedProducts.size})</span><ChevronDown className="size-4" /></summary>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                    {products.filter((p) => p.kind !== "beverage").map((product) => (
-                      <label key={product.id} className="flex items-center justify-between gap-2 rounded-xl border bg-background p-2.5 text-sm">
-                        <span className="min-w-0 truncate font-semibold">{product.name}</span>
-                        <Switch checked={linkedProducts.has(String(product.id))} onCheckedChange={(v) => toggleProductGroup(product.id, group.id, v)} />
-                      </label>
-                    ))}
+                <div className="mt-4 rounded-2xl border bg-muted/20 p-3">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-sm font-black">Disponibilidade no cardápio</p>
+                      <p className="text-xs text-muted-foreground">Todos os produtos ou somente os que você escolher.</p>
+                    </div>
+
+                    <Select
+                      value={groupAvailability(group.id)}
+                      onValueChange={(value) =>
+                        changeGroupAvailability(group.id, value as "all" | "specific")
+                      }
+                    >
+                      <SelectTrigger className="w-full sm:w-[220px]"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Todos os produtos</SelectItem>
+                        <SelectItem value="specific">Produtos específicos</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
-                </details>
+
+                  {groupAvailability(group.id) === "all" ? (
+                    <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-900">
+                      Este grupo está disponível em todos os {allProductIds.length} produtos ativos.
+                    </div>
+                  ) : (
+                    <details className="mt-3 rounded-xl border bg-background p-3" open={linkedProducts.size === 0}>
+                      <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-black">
+                        <span>Escolher produtos ({linkedProducts.size} selecionados)</span>
+                        <ChevronDown className="size-4" />
+                      </summary>
+
+                      <div className="mt-3 grid max-h-72 gap-2 overflow-y-auto sm:grid-cols-2">
+                        {products.map((product) => (
+                          <label key={product.id} className="flex items-center justify-between gap-2 rounded-xl border bg-background p-2.5 text-sm">
+                            <span className="min-w-0 truncate font-semibold">{product.name}</span>
+                            <Switch
+                              checked={linkedProducts.has(String(product.id))}
+                              onCheckedChange={(v) => toggleProductGroup(product.id, group.id, v)}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </div>
               </div>
             );
           })}
