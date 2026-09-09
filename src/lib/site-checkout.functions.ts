@@ -231,7 +231,7 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
 
     const [{ data: addonOptions }, { data: addonLinks }, { data: addonGroups }, { data: orderBumps }] = await Promise.all([
       requestedAddonIds.length
-        ? (supabaseAdmin as any).from("menu_addon_options").select("id,group_id,name,price,active").in("id", requestedAddonIds)
+        ? (supabaseAdmin as any).from("menu_addon_options").select("id,group_id,name,price,linked_product_id,use_linked_product_price,active").in("id", requestedAddonIds)
         : Promise.resolve({ data: [] }),
       requestedIds.length
         ? (supabaseAdmin as any).from("product_addon_groups").select("product_id,group_id").in("product_id", requestedIds)
@@ -241,6 +241,29 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
         ? (supabaseAdmin as any).from("menu_order_bumps").select("id,product_id,price_override,active").in("id", requestedBumpIds)
         : Promise.resolve({ data: [] }),
     ]);
+
+    const linkedAddonProductIds = Array.from(new Set(
+      (addonOptions ?? [])
+        .filter((option: any) => option?.linked_product_id)
+        .map((option: any) => String(option.linked_product_id)),
+    ));
+
+    const { data: linkedAddonProducts, error: linkedAddonProductError } =
+      linkedAddonProductIds.length
+        ? await supabaseAdmin
+            .from("products")
+            .select("id,name,sale_price,active,promotion_active,promotion_price,promotion_type,promotion_start_at,promotion_end_at,promotion_days_of_week,promotion_time_start,promotion_time_end")
+            .in("id", linkedAddonProductIds)
+            .eq("active", true)
+        : { data: [], error: null };
+
+    if (linkedAddonProductError) {
+      return { error: "Não foi possível validar um produto oferecido como adicional." };
+    }
+
+    const linkedAddonProductById = new Map(
+      (linkedAddonProducts ?? []).map((product: any) => [String(product.id), product]),
+    );
 
     const addonById = new Map((addonOptions ?? []).map((a: any) => [String(a.id), a]));
     const groupById = new Map((addonGroups ?? []).map((g: any) => [String(g.id), g]));
@@ -284,11 +307,32 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
         const group: any = groupById.get(String(option.group_id));
         if (!group || group.active !== true) return { error: `Um grupo de adicionais de ${p.name} está indisponível.` };
         selectedCountByGroup.set(String(option.group_id), (selectedCountByGroup.get(String(option.group_id)) || 0) + 1);
+
+        let addonPrice = Number(option.price || 0);
+        let addonName = String(option.name);
+
+        if (option.linked_product_id) {
+          const linkedProduct: any = linkedAddonProductById.get(String(option.linked_product_id));
+          if (!linkedProduct || linkedProduct.active === false) {
+            return { error: `O produto adicional "${option.name}" não está mais disponível.` };
+          }
+
+          // O nome sempre acompanha o produto real. O preço pode acompanhar o
+          // preço atual/promoção do produto ou usar um preço especial de adicional.
+          addonName = String(linkedProduct.name || option.name);
+
+          if (option.use_linked_product_price === true) {
+            const linkedEffective = getEffectivePrice(linkedProduct);
+            addonPrice = Number(linkedEffective.price || 0);
+          }
+        }
+
         selectedAddons.push({
           option_id: String(option.id),
           group_id: String(option.group_id),
-          name: String(option.name),
-          price: Number(option.price || 0),
+          linked_product_id: option.linked_product_id ? String(option.linked_product_id) : null,
+          name: addonName,
+          price: addonPrice,
         });
       }
 
