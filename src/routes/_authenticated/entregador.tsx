@@ -4,7 +4,6 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { getAlarmAudio, setAlarmSrc, playAlarm, pauseAlarm, playAlarmBeep, stopAlarmBeep, primeBeepUnlock } from "@/lib/alarm-audio";
 import { brl, formatDateTime, formatPhone, ORDER_STATUS_LABEL } from "@/lib/formatters";
-import { brasiliaDateISO, brasiliaLocalToUtcISO, brasiliaPeriodStartISO } from "@/lib/brasilia-date";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -88,7 +87,10 @@ function itemsSummary(items: Item[]) {
 }
 
 function periodStartISO(days: number) {
-  return brasiliaPeriodStartISO(days);
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - Math.max(0, days - 1));
+  return d.toISOString();
 }
 
 const DISMISSED_KEY = "hb_dismissed_orders";
@@ -116,14 +118,15 @@ function DelivererApp() {
   const [todayEarnings, setTodayEarnings] = useState({ total: 0, count: 0 });
 
   async function loadTodayEarnings() {
-    const startISO = brasiliaLocalToUtcISO(brasiliaDateISO(), 0, 0, 0, 0);
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
     const { data } = await supabase
       .from("orders")
       .select("delivery_fee,deliverer_paid_at")
       .eq("deliverer_id", userId)
       .eq("status", "delivered")
       .is("deliverer_paid_at", null)
-      .gte("delivered_at", startISO);
+      .gte("delivered_at", start.toISOString());
     const list = data ?? [];
     setTodayEarnings({ total: list.reduce((s, o: any) => s + Number(o.delivery_fee || 0), 0), count: list.length });
   }
@@ -381,15 +384,27 @@ function DelivererApp() {
   }
 
   async function markDelivered(o: Order) {
+    if (!window.confirm(`Confirmar que o pedido #${o.order_number} foi entregue ao cliente?`)) return;
+
+    const deliveredAt = new Date().toISOString();
     const { error } = await supabase
       .from("orders")
-      .update({ status: "delivered", delivered_at: new Date().toISOString() })
+      .update({ status: "delivered", delivered_at: deliveredAt })
       .eq("id", o.id)
-      .eq("deliverer_id", userId);
+      .eq("deliverer_id", userId)
+      .eq("status", "out_for_delivery");
     if (error) return toast.error("Erro ao concluir entrega");
-    toast.success("Entrega concluída!");
-    setDetailOrder(null);
-    load();
+
+    // Mantém a tela do pedido aberta após a confirmação. Assim o entregador
+    // continua vendo cliente, endereço, itens e resumo financeiro, agora com
+    // o status ENTREGUE, em vez de ser jogado de volta para a lista.
+    setDetailOrder((current) =>
+      current?.id === o.id
+        ? { ...current, status: "delivered", delivered_at: deliveredAt }
+        : current,
+    );
+    toast.success("Pedido marcado como entregue!");
+    await Promise.all([load(), loadTodayEarnings()]);
   }
 
   async function markFailed(o: Order) {
@@ -877,6 +892,21 @@ function DeliveryDetailSheet({
             </div>
           </Card>
 
+          {order.status === "delivered" && (
+            <Card className="rounded-2xl border-emerald-200 bg-emerald-50 p-4 text-center shadow-sm">
+              <CheckCheck className="mx-auto mb-2 size-7 text-emerald-600" />
+              <p className="font-semibold text-emerald-800">Entrega informada com sucesso</p>
+              <p className="mt-1 text-xs text-emerald-700">
+                O pedido foi atualizado para entregue. Você pode conferir o resumo acima antes de voltar.
+              </p>
+              {order.delivered_at && (
+                <p className="mt-2 text-[11px] font-medium text-emerald-700">
+                  Entregue em {formatDateTime(order.delivered_at)}
+                </p>
+              )}
+            </Card>
+          )}
+
           {/* entregador atual, se houver — só faz sentido fora do modo histórico */}
           {!readOnlyBadge && order.deliverer_name && (
             <Card className="flex items-center gap-2 rounded-2xl border-neutral-200/70 p-4 text-sm shadow-sm">
@@ -902,7 +932,7 @@ function DeliveryDetailSheet({
                 className="flex-1 rounded-full bg-emerald-600 text-white hover:bg-emerald-700"
                 onClick={onDelivered}
               >
-                <CheckCheck className="size-4" /> Marcar como entregue
+                <CheckCheck className="size-4" /> Informar entrega realizada
               </Button>
             )}
             {onRevoke && (
