@@ -121,13 +121,17 @@ export function HumanHandoffAlert() {
 
   if (!item) return null;
 
+  const isPaymentLinkRequest =
+    String(item.reason || "").trim().toUpperCase() === "CLIENTE SOLICITANDO LINK DE PAGAMENTO";
 
   return (
     <div className="fixed inset-0 z-[100] grid place-items-center bg-foreground/60 p-4 backdrop-blur-sm">
       <div className="w-full max-w-md overflow-hidden rounded-2xl bg-background shadow-2xl">
         <div className="flex items-center gap-2 bg-destructive px-5 py-3 text-destructive-foreground">
           <AlertTriangle className="size-5" />
-          <p className="font-display text-base font-black uppercase tracking-wide">Atendimento humano necessário</p>
+          <p className={`font-display font-black uppercase tracking-wide ${isPaymentLinkRequest ? "text-xl sm:text-2xl" : "text-base"}`}>
+            {isPaymentLinkRequest ? "CLIENTE SOLICITANDO LINK DE PAGAMENTO" : "Atendimento humano necessário"}
+          </p>
           <span className="ml-auto rounded-full bg-destructive-foreground/15 px-2 py-0.5 text-xs font-bold">
             Ação necessária
           </span>
@@ -135,8 +139,9 @@ export function HumanHandoffAlert() {
 
         <div className="space-y-4 p-5">
           <p className="text-sm text-muted-foreground">
-            Esta conversa precisa de intervenção manual. O cliente não recebeu nenhuma mensagem técnica sobre isso.
-            Abra a conversa e continue normalmente a partir do ponto em que ela parou.
+            {isPaymentLinkRequest
+              ? "O cliente veio do cardápio digital e precisa que a loja gere um link de pagamento. A IA já foi pausada para esta conversa."
+              : "Esta conversa precisa de intervenção manual. O cliente não recebeu nenhuma mensagem técnica sobre isso. Abra a conversa e continue normalmente a partir do ponto em que ela parou."}
           </p>
 
           <div className="rounded-xl bg-muted/50 p-4">
@@ -180,4 +185,3 @@ export function HumanHandoffAlert() {
     </div>
   );
 }
-//
