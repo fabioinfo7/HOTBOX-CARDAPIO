@@ -121,8 +121,11 @@ export function HumanHandoffAlert() {
 
   if (!item) return null;
 
+  const reasonText = String(item.reason || "").trim();
   const isPaymentLinkRequest =
-    String(item.reason || "").trim().toUpperCase() === "CLIENTE SOLICITANDO LINK DE PAGAMENTO";
+    reasonText.toUpperCase().startsWith("CLIENTE SOLICITANDO LINK DE PAGAMENTO");
+  const paymentLinkTotal =
+    reasonText.match(/TOTAL DO LINK:\s*(R\$\s*[0-9.]+,[0-9]{2})/i)?.[1] ?? null;
 
   return (
     <div className="fixed inset-0 z-[100] grid place-items-center bg-foreground/60 p-4 backdrop-blur-sm">
@@ -138,6 +141,19 @@ export function HumanHandoffAlert() {
         </div>
 
         <div className="space-y-4 p-5">
+          {isPaymentLinkRequest && (
+            <div className="rounded-2xl border-2 border-destructive bg-destructive/10 px-5 py-4 text-center shadow-sm">
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-destructive">
+                Valor total do link
+              </p>
+              <p className="mt-1 text-4xl font-black tabular-nums text-foreground">
+                {paymentLinkTotal || "Valor não identificado"}
+              </p>
+              <p className="mt-1 text-xs font-semibold text-muted-foreground">
+                Total final do pedido, incluindo itens e taxa de entrega
+              </p>
+            </div>
+          )}
           <p className="text-sm text-muted-foreground">
             {isPaymentLinkRequest
               ? "O cliente veio do cardápio digital e precisa que a loja gere um link de pagamento. A IA já foi pausada para esta conversa."
@@ -150,7 +166,7 @@ export function HumanHandoffAlert() {
               {item.customer_name ? `${item.customer_name} — ` : ""}
               {item.phone}
             </p>
-            {item.reason && (
+            {item.reason && !isPaymentLinkRequest && (
               <p className="mt-2 border-t pt-2 text-sm">
                 <span className="font-semibold text-muted-foreground">Motivo: </span>
                 {item.reason}
@@ -185,4 +201,3 @@ export function HumanHandoffAlert() {
     </div>
   );
 }
-//
