@@ -6,37 +6,105 @@ const LAST_KEY = "hb_analytics_last";
 const SESSION_TIMEOUT = 30 * 60 * 1000;
 
 function uid(prefix: string) {
-  try { return `${prefix}_${crypto.randomUUID()}`; } catch { return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2)}`; }
+  try {
+    return `${prefix}_${crypto.randomUUID()}`;
+  } catch {
+    return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  }
 }
-function storageGet(storage: Storage, key: string) { try { return storage.getItem(key); } catch { return null; } }
-function storageSet(storage: Storage, key: string, value: string) { try { storage.setItem(key, value); } catch { /* ignore */ } }
+
+function storageGet(storage: Storage, key: string) {
+  try {
+    return storage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function storageSet(storage: Storage, key: string, value: string) {
+  try {
+    storage.setItem(key, value);
+  } catch {
+    /* analytics nunca pode quebrar a experiência */
+  }
+}
+
+function readCookie(name: string) {
+  if (typeof document === "undefined") return null;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${escaped}=([^;]*)`));
+  return match?.[1] ? decodeURIComponent(match[1]) : null;
+}
+
+function metaBrowserSignals() {
+  if (typeof window === "undefined") return {};
+
+  const query = new URLSearchParams(window.location.search);
+  const fbclid = query.get("fbclid");
+  const fbp = readCookie("_fbp");
+
+  // Se a Meta ainda não criou _fbc, podemos formar o valor a partir do fbclid
+  // da URL de entrada. Isso preserva atribuição sem inventar identificadores.
+  const existingFbc = readCookie("_fbc");
+  const fbc =
+    existingFbc ||
+    (fbclid ? `fb.1.${Math.floor(Date.now())}.${fbclid}` : null);
+
+  return {
+    _fbp: fbp,
+    _fbc: fbc,
+    event_source_url: window.location.href,
+  };
+}
 
 export function analyticsIdentity() {
-  if (typeof window === "undefined") return { visitor_id: "server", session_id: "server" };
+  if (typeof window === "undefined") {
+    return { visitor_id: "server", session_id: "server" };
+  }
+
   let visitor = storageGet(localStorage, VISITOR_KEY);
-  if (!visitor) { visitor = uid("v"); storageSet(localStorage, VISITOR_KEY, visitor); }
+  if (!visitor) {
+    visitor = uid("v");
+    storageSet(localStorage, VISITOR_KEY, visitor);
+  }
+
   const now = Date.now();
   const last = Number(storageGet(sessionStorage, LAST_KEY) || 0);
   let session = storageGet(sessionStorage, SESSION_KEY);
+
   if (!session || !last || now - last > SESSION_TIMEOUT) {
     session = uid("s");
     storageSet(sessionStorage, SESSION_KEY, session);
   }
+
   storageSet(sessionStorage, LAST_KEY, String(now));
   return { visitor_id: visitor, session_id: session };
 }
 
 function attribution() {
   if (typeof window === "undefined") return {};
+
   const q = new URLSearchParams(window.location.search);
   const ref = document.referrer || "";
   const explicitSource = q.get("utm_source") || q.get("source");
+
   let source = explicitSource || "direct";
   let medium = q.get("utm_medium") || (ref ? "referral" : "none");
-  if (!explicitSource && /instagram\.com|l\.instagram\.com/i.test(ref)) { source = "instagram"; medium = "social"; }
-  else if (!explicitSource && /facebook\.com|fb\.com/i.test(ref)) { source = "facebook"; medium = "social"; }
-  else if (!explicitSource && /google\./i.test(ref)) { source = "google"; medium = "organic"; }
-  else if (!explicitSource && /wa\.me|whatsapp/i.test(ref)) { source = "whatsapp"; medium = "social"; }
+
+  if (!explicitSource && /instagram\.com|l\.instagram\.com/i.test(ref)) {
+    source = "instagram";
+    medium = "social";
+  } else if (!explicitSource && /facebook\.com|fb\.com/i.test(ref)) {
+    source = "facebook";
+    medium = "social";
+  } else if (!explicitSource && /google\./i.test(ref)) {
+    source = "google";
+    medium = "organic";
+  } else if (!explicitSource && /wa\.me|whatsapp/i.test(ref)) {
+    source = "whatsapp";
+    medium = "social";
+  }
+
   return {
     referrer: ref || null,
     source,
@@ -44,18 +112,50 @@ function attribution() {
     campaign: q.get("utm_campaign"),
     term: q.get("utm_term"),
     content: q.get("utm_content"),
-    click_id: q.get("fbclid") || q.get("gclid") || q.get("ttclid") || q.get("msclkid"),
+    click_id:
+      q.get("fbclid") ||
+      q.get("gclid") ||
+      q.get("ttclid") ||
+      q.get("msclkid"),
   };
 }
 
 function deviceInfo() {
   if (typeof window === "undefined") return {};
+
   const ua = navigator.userAgent || "";
-  const device_type = /Mobi|Android|iPhone|iPad/i.test(ua) ? (/iPad|Tablet/i.test(ua) ? "tablet" : "mobile") : "desktop";
-  const browser = /Edg\//i.test(ua) ? "Edge" : /Chrome\//i.test(ua) ? "Chrome" : /Firefox\//i.test(ua) ? "Firefox" : /Safari\//i.test(ua) ? "Safari" : "Other";
-  const os = /Android/i.test(ua) ? "Android" : /iPhone|iPad|iPod/i.test(ua) ? "iOS" : /Windows/i.test(ua) ? "Windows" : /Mac OS/i.test(ua) ? "macOS" : /Linux/i.test(ua) ? "Linux" : "Other";
+  const device_type = /Mobi|Android|iPhone|iPad/i.test(ua)
+    ? /iPad|Tablet/i.test(ua)
+      ? "tablet"
+      : "mobile"
+    : "desktop";
+
+  const browser = /Edg\//i.test(ua)
+    ? "Edge"
+    : /Chrome\//i.test(ua)
+      ? "Chrome"
+      : /Firefox\//i.test(ua)
+        ? "Firefox"
+        : /Safari\//i.test(ua)
+          ? "Safari"
+          : "Other";
+
+  const os = /Android/i.test(ua)
+    ? "Android"
+    : /iPhone|iPad|iPod/i.test(ua)
+      ? "iOS"
+      : /Windows/i.test(ua)
+        ? "Windows"
+        : /Mac OS/i.test(ua)
+          ? "macOS"
+          : /Linux/i.test(ua)
+            ? "Linux"
+            : "Other";
+
   return {
-    device_type, browser, os,
+    device_type,
+    browser,
+    os,
     language: navigator.language || null,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || null,
     screen_width: screen.width,
@@ -64,7 +164,6 @@ function deviceInfo() {
     viewport_height: window.innerHeight,
   };
 }
-
 
 type MetaContent = {
   id: string;
@@ -82,25 +181,41 @@ function cleanMetaContents(input: unknown): MetaContent[] {
 
   return input
     .map((raw: any) => {
-      const id = String(raw?.id ?? raw?.product_id ?? raw?.option_id ?? "").trim();
-      const quantity = Math.max(1, Math.round(Number(raw?.quantity ?? raw?.qty ?? 1) || 1));
-      const price = finiteNumber(raw?.item_price ?? raw?.unit_price ?? raw?.price);
+      const id = String(
+        raw?.id ?? raw?.product_id ?? raw?.option_id ?? "",
+      ).trim();
+      const quantity = Math.max(
+        1,
+        Math.round(Number(raw?.quantity ?? raw?.qty ?? 1) || 1),
+      );
+      const price = finiteNumber(
+        raw?.item_price ?? raw?.unit_price ?? raw?.price,
+      );
 
       if (!id) return null;
 
       return {
         id,
         quantity,
-        ...(price != null ? { item_price: Number(price.toFixed(2)) } : {}),
+        ...(price != null
+          ? { item_price: Number(price.toFixed(2)) }
+          : {}),
       } as MetaContent;
     })
     .filter(Boolean) as MetaContent[];
 }
 
-function metaEventId(eventName: string, extra: Partial<AnalyticsEventInput>) {
-  const explicit = String((extra.properties as any)?.event_id || "").trim();
+function metaEventId(
+  eventName: string,
+  extra: Partial<AnalyticsEventInput>,
+) {
+  const explicit = String(
+    (extra.properties as any)?.event_id || "",
+  ).trim();
+
   if (explicit) return explicit;
 
+  // Purchase deve ser determinístico para permitir deduplicação Browser + CAPI.
   if (eventName === "purchase" && extra.order_id) {
     return `purchase_${String(extra.order_id)}`;
   }
@@ -112,11 +227,16 @@ function metaEventId(eventName: string, extra: Partial<AnalyticsEventInput>) {
   try {
     return `hb_${eventName}_${crypto.randomUUID()}`;
   } catch {
-    return `hb_${eventName}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    return `hb_${eventName}_${Date.now()}_${Math.random()
+      .toString(36)
+      .slice(2)}`;
   }
 }
 
-function trackMetaPixel(event_name: string, extra: Partial<AnalyticsEventInput>) {
+function trackMetaPixel(
+  event_name: string,
+  extra: Partial<AnalyticsEventInput>,
+) {
   if (typeof window === "undefined") return;
 
   const fbq = (window as any).fbq;
@@ -128,19 +248,27 @@ function trackMetaPixel(event_name: string, extra: Partial<AnalyticsEventInput>)
     order_bump_added: "AddToCart",
     checkout_started: "InitiateCheckout",
     payment_selected: "AddPaymentInfo",
+    payment_started: "AddPaymentInfo",
     purchase: "Purchase",
     lead: "Lead",
     contact: "Contact",
   };
 
+  const properties: any =
+    extra.properties && typeof extra.properties === "object"
+      ? extra.properties
+      : {};
+
+  const eventID = String(properties.event_id || "").trim() || undefined;
+
   if (event_name === "page_view") {
-    const key = `${window.location.pathname}${window.location.search}`;
+    const pageKey = `${window.location.pathname}${window.location.search}`;
     (window as any).__hotboxMetaPageViews ??= new Set<string>();
     const pageViews: Set<string> = (window as any).__hotboxMetaPageViews;
-    const genericKey = `analytics:${key}`;
+    const genericKey = `analytics:${pageKey}`;
 
     if (!pageViews.has(genericKey)) {
-      fbq("track", "PageView");
+      fbq("track", "PageView", {}, eventID ? { eventID } : undefined);
       pageViews.add(genericKey);
     }
     return;
@@ -149,21 +277,19 @@ function trackMetaPixel(event_name: string, extra: Partial<AnalyticsEventInput>)
   const metaEvent = map[event_name];
   if (!metaEvent) return;
 
-  const properties: any =
-    extra.properties && typeof extra.properties === "object"
-      ? extra.properties
-      : {};
-
   const params: Record<string, any> = {};
+
   const rawContents =
     properties.contents ||
     properties.items ||
     (extra.product_id
-      ? [{
-          id: String(extra.product_id),
-          quantity: Number(extra.quantity || 1),
-          item_price: Number(extra.value || 0),
-        }]
+      ? [
+          {
+            id: String(extra.product_id),
+            quantity: Number(extra.quantity || 1),
+            item_price: Number(extra.value || 0),
+          },
+        ]
       : []);
 
   const contents = cleanMetaContents(rawContents);
@@ -178,14 +304,19 @@ function trackMetaPixel(event_name: string, extra: Partial<AnalyticsEventInput>)
   }
 
   if (extra.product_name) params.content_name = extra.product_name;
+  if (properties.category) params.content_category = String(properties.category);
 
-  const value = finiteNumber(extra.value ?? properties.total ?? properties.subtotal);
+  const value = finiteNumber(
+    extra.value ?? properties.total ?? properties.subtotal,
+  );
   if (value != null) {
     params.value = Number(value.toFixed(2));
     params.currency = "BRL";
   }
 
-  const explicitQty = finiteNumber(extra.quantity ?? properties.num_items ?? properties.items_count);
+  const explicitQty = finiteNumber(
+    extra.quantity ?? properties.num_items ?? properties.items_count,
+  );
   const quantity =
     explicitQty != null
       ? Math.max(1, Math.round(explicitQty))
@@ -193,48 +324,93 @@ function trackMetaPixel(event_name: string, extra: Partial<AnalyticsEventInput>)
 
   if (quantity > 0) params.num_items = quantity;
 
-  // Parâmetros úteis para análise e criação de públicos.
   if (extra.order_id) params.order_id = String(extra.order_id);
   if (extra.checkout_id) params.checkout_id = String(extra.checkout_id);
-  if (extra.payment_method) params.payment_method = String(extra.payment_method);
+  if (extra.payment_method) {
+    params.payment_method = String(extra.payment_method);
+  }
 
   if (finiteNumber(properties.subtotal) != null) {
     params.subtotal = Number(Number(properties.subtotal).toFixed(2));
   }
   if (finiteNumber(properties.delivery_fee) != null) {
-    params.delivery_fee = Number(Number(properties.delivery_fee).toFixed(2));
+    params.delivery_fee = Number(
+      Number(properties.delivery_fee).toFixed(2),
+    );
   }
   if (finiteNumber(properties.discount) != null) {
     params.discount = Number(Number(properties.discount).toFixed(2));
   }
-  if (properties.coupon) params.coupon = String(properties.coupon);
-  if (properties.delivery_mode) params.delivery_mode = String(properties.delivery_mode);
-
-  if (Array.isArray(properties.addons) && properties.addons.length) {
-    params.addons = properties.addons.map((x: any) => String(x)).join(", ");
+  if (finiteNumber(properties.addon_total) != null) {
+    params.addon_total = Number(Number(properties.addon_total).toFixed(2));
   }
 
-  const eventID = metaEventId(event_name, extra);
+  if (properties.coupon) params.coupon = String(properties.coupon);
+  if (properties.delivery_mode) {
+    params.delivery_mode = String(properties.delivery_mode);
+  }
+  if (properties.neighborhood) {
+    params.neighborhood = String(properties.neighborhood);
+  }
+  if (properties.reservation != null) {
+    params.reservation = Boolean(properties.reservation);
+  }
 
-  fbq("track", metaEvent, params, { eventID });
+  if (Array.isArray(properties.addons) && properties.addons.length) {
+    params.addons = properties.addons
+      .map((x: any) => String(x))
+      .join(", ");
+  }
+
+  fbq(
+    "track",
+    metaEvent,
+    params,
+    eventID ? { eventID } : undefined,
+  );
 }
 
-export function trackAnalytics(event_name: string, extra: Partial<AnalyticsEventInput> = {}) {
+export function trackAnalytics(
+  event_name: string,
+  extra: Partial<AnalyticsEventInput> = {},
+) {
   if (typeof window === "undefined") return;
-  if (/^\/(loja|admin|entregador)(\/|$)/.test(window.location.pathname)) return;
+  if (/^\/(loja|admin|entregador)(\/|$)/.test(window.location.pathname)) {
+    return;
+  }
+
   const ids = analyticsIdentity();
+  const eventId = metaEventId(event_name, extra);
+  const browserSignals = metaBrowserSignals();
+
+  const richProperties = {
+    ...((extra.properties && typeof extra.properties === "object"
+      ? extra.properties
+      : {}) as Record<string, unknown>),
+    ...browserSignals,
+    event_id: eventId,
+  };
+
+  const enrichedExtra: Partial<AnalyticsEventInput> = {
+    ...extra,
+    properties: richProperties,
+  };
+
   const payload: AnalyticsEventInput = {
     ...ids,
     ...attribution(),
     ...deviceInfo(),
     event_name,
     event_category: extra.event_category || "engagement",
-    page_path: extra.page_path || `${window.location.pathname}${window.location.search}`,
+    page_path:
+      extra.page_path ||
+      `${window.location.pathname}${window.location.search}`,
     page_title: extra.page_title || document.title,
-    ...extra,
-  };
+    ...enrichedExtra,
+  } as AnalyticsEventInput;
 
-  trackMetaPixel(event_name, extra);
+  // Mesmo event_id segue para Browser Pixel e CAPI; a Meta pode deduplicar.
+  trackMetaPixel(event_name, enrichedExtra);
 
   void trackAnalyticsEvent({ data: payload })
     .then((result: any) => {
