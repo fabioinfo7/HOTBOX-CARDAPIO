@@ -543,7 +543,7 @@ function CustomerHome() {
   const [checkingActiveOrders, setCheckingActiveOrders] = useState(false);
   const [bannerUrl, setBannerUrl] = useState<string | null>(null);
   const [bannerTagline, setBannerTagline] = useState(
-    "Batatas recheadas, hambúrgueres artesanais e porções irresistíveis. Direto do forno pra sua casa.",
+    "As batatas recheadas mais bem recheadas de Duque de Caxias. Muito recheio, muito sabor e aquele capricho que dá vontade de pedir de novo. Escolha a sua e peça agora!",
   );
   const [deliveryTime, setDeliveryTime] = useState<number | null>(null);
   const [infinitepayEnabled, setInfinitepayEnabled] = useState(false);
@@ -3027,9 +3027,9 @@ function CustomerHome() {
             <Flame className="size-3.5" /> Aberto agora
           </span>
           <h1 className="mt-3 font-display text-3xl font-black uppercase leading-[1.05] tracking-tight sm:text-4xl">
-            Sua fome pediu.
+            As mais bem recheadas
             <br />
-            A Hotbox caprichou.
+            de Duque de Caxias.
           </h1>
           <p className="mt-3 max-w-md text-sm text-white/85">{bannerTagline}</p>
           <div className="mt-4 flex flex-wrap items-center gap-4 text-sm font-semibold">
