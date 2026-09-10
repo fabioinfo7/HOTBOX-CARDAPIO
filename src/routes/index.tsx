@@ -567,6 +567,8 @@ function CustomerHome() {
   const [closedStoreReservationMode, setClosedStoreReservationMode] = useState(false);
   const [reservationDate, setReservationDate] = useState("");
   const [reservationAccepted, setReservationAccepted] = useState(false);
+  const [showReservationEntryModal, setShowReservationEntryModal] = useState(false);
+  const [showReservationPaymentConfirm, setShowReservationPaymentConfirm] = useState(false);
   const [configLoaded, setConfigLoaded] = useState(false);
   const [customerSession, setCustomerSession] = useState<Session | null>(null);
   const [areaStatus, setAreaStatus] = useState<AreaStatus>("idle");
@@ -1460,6 +1462,25 @@ function CustomerHome() {
     return true;
   }
 
+  function goToCheckoutFromCart() {
+    trackAnalytics("begin_checkout", {
+      event_category: "commerce",
+      value: total,
+      properties: { items_count: totalQty },
+    });
+
+    const storeOpenNow = isStoreOpenByBusinessHours(publicStoreStatus);
+    if (!storeOpenNow && publicStoreStatus?.closed_reservations_enabled === true) {
+      setClosedStoreReservationMode(true);
+      setReservationDate((current) => current || nextReservationDate(publicStoreStatus));
+      setReservationAccepted(false);
+      setShowReservationEntryModal(true);
+      return;
+    }
+
+    setView("checkout");
+  }
+
   function canStartPurchaseNow() {
     if (isStoreOpenByBusinessHours(publicStoreStatus)) return true;
 
@@ -1539,7 +1560,30 @@ function CustomerHome() {
     setCart((c) => c.map((i, ix) => (ix === idx ? { ...i, notes } : i)));
   const removeItem = (idx: number) => setCart((c) => c.filter((_, ix) => ix !== idx));
 
-  async function placeOrder() {
+  function requestPlaceOrder() {
+    const storeOpenNow = isStoreOpenByBusinessHours(publicStoreStatus);
+    const isReservation =
+      !storeOpenNow &&
+      publicStoreStatus?.closed_reservations_enabled === true &&
+      closedStoreReservationMode;
+
+    if (isReservation) {
+      if (!reservationDate) {
+        toast.error("Escolha a data da sua reserva antes de continuar.");
+        return;
+      }
+      if (!reservationDayAllowed(publicStoreStatus, reservationDate)) {
+        toast.error("Escolha um dia em que a HotBox esteja em funcionamento.");
+        return;
+      }
+      setShowReservationPaymentConfirm(true);
+      return;
+    }
+
+    void placeOrder();
+  }
+
+  async function placeOrder(reservationConfirmedNow = false) {
     if (!cart.length) return toast.error("Seu carrinho está vazio");
     if (!form.name || !form.phone) return toast.error("Preencha nome e telefone");
     if (isDelivery && (!form.street || !form.number || !form.neighborhood)) return toast.error("Preencha rua, número e bairro");
@@ -1554,8 +1598,9 @@ function CustomerHome() {
       if (!reservationDayAllowed(publicStoreStatus, reservationDate)) {
         return toast.error("Escolha um dia em que a HotBox esteja em funcionamento.");
       }
-      if (!reservationAccepted) {
-        return toast.error("Confirme que você está ciente de que este pedido é uma reserva para entrega posterior.");
+      if (!reservationAccepted && !reservationConfirmedNow) {
+        setShowReservationPaymentConfirm(true);
+        return;
       }
     }
     if (isDelivery && areaStatus !== "supported") return toast.error("Valide sua área de entrega antes de finalizar");
@@ -2366,7 +2411,7 @@ function CustomerHome() {
           <div id="checkout-action" className="fixed inset-x-0 bottom-0 z-40 scroll-mt-24 border-t bg-background/95 px-4 py-3 backdrop-blur">
             <div className="mx-auto max-w-2xl">
               <Button
-                onClick={() => { trackAnalytics("begin_checkout", { event_category: "commerce", value: total, properties: { items_count: totalQty } }); setView("checkout"); }}
+                onClick={goToCheckoutFromCart}
                 className="w-full justify-between rounded-full bg-[#ffd400] py-6 text-base font-black text-black shadow-md hover:bg-[#f4ca00]"
               >
                 <span>Finalizar pedido</span>
@@ -2378,6 +2423,54 @@ function CustomerHome() {
       </div>
     );
   }
+
+  {showReservationEntryModal && (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4">
+      <div className="w-full max-w-md rounded-[28px] border border-amber-300 bg-white p-6 shadow-2xl">
+        <div className="mx-auto grid size-14 place-items-center rounded-full bg-amber-100 text-3xl">🗓️</div>
+        <p className="mt-4 text-center text-xs font-black uppercase tracking-[0.16em] text-amber-700">
+          Loja fechada no momento
+        </p>
+        <h2 className="mt-1 text-center text-2xl font-black text-zinc-950">
+          Seu pedido pode ficar reservado
+        </h2>
+        <p className="mt-3 text-center text-sm leading-relaxed text-zinc-700">
+          A HotBox está fora do horário de funcionamento agora, mas você pode continuar normalmente.
+          Seu pagamento será realizado agora e o pedido ficará como <strong>AGENDADO / RESERVADO</strong> para entrega posterior.
+        </p>
+        <div className="mt-4 rounded-2xl border border-amber-300 bg-amber-50 p-4">
+          <p className="text-sm font-black text-amber-950">Antes da entrega</p>
+          <p className="mt-1 text-sm leading-relaxed text-amber-900">
+            A <strong>HotBox irá fazer contato com você antes da entrega para confirmar a entrega e o horário</strong>.
+          </p>
+        </div>
+        <p className="mt-4 text-xs leading-relaxed text-zinc-500">
+          Ao continuar, você confirma que entendeu que este pedido não será preparado nem entregue agora.
+        </p>
+        <div className="mt-5 grid gap-2">
+          <Button
+            type="button"
+            onClick={() => {
+              setReservationAccepted(true);
+              setShowReservationEntryModal(false);
+              setView("checkout");
+            }}
+            className="w-full rounded-full bg-[#ffd400] py-6 font-black text-black hover:bg-[#f4ca00]"
+          >
+            Estou ciente • continuar
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => setShowReservationEntryModal(false)}
+            className="w-full rounded-full"
+          >
+            Voltar ao carrinho
+          </Button>
+        </div>
+      </div>
+    </div>
+  )}
 
   if (view === "checkout") {
     return (
@@ -2790,7 +2883,7 @@ function CustomerHome() {
           <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 px-4 py-3 backdrop-blur">
             <div className="mx-auto max-w-2xl">
               <Button
-                onClick={placeOrder}
+                onClick={requestPlaceOrder}
                 disabled={
                   placing ||
                   (paymentChoice === "online" && (!(pixEnabled || cardEnabled) || !paymentAvailable)) ||
@@ -2818,6 +2911,57 @@ function CustomerHome() {
       </div>
     );
   }
+
+  {showReservationPaymentConfirm && (
+    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/65 px-4">
+      <div className="w-full max-w-md rounded-[28px] border-2 border-amber-400 bg-white p-6 shadow-2xl">
+        <div className="mx-auto grid size-14 place-items-center rounded-full bg-amber-100 text-3xl">⚠️</div>
+        <p className="mt-4 text-center text-xs font-black uppercase tracking-[0.16em] text-amber-700">
+          Confirmação de agendamento
+        </p>
+        <h2 className="mt-1 text-center text-2xl font-black text-zinc-950">
+          Confirme antes de pagar
+        </h2>
+        <p className="mt-3 text-center text-sm leading-relaxed text-zinc-700">
+          Você está finalizando um <strong>PEDIDO AGENDADO / RESERVADO</strong>.
+          O pagamento será feito agora, mas a entrega acontecerá posteriormente, dentro do horário de funcionamento.
+        </p>
+        {reservationDate && (
+          <div className="mt-4 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 text-center">
+            <p className="text-xs font-bold uppercase tracking-wide text-zinc-500">Data escolhida</p>
+            <p className="mt-1 text-base font-black text-zinc-950">{formatReservationDate(reservationDate)}</p>
+          </div>
+        )}
+        <div className="mt-4 rounded-2xl border border-amber-300 bg-amber-50 p-4">
+          <p className="text-sm font-black text-amber-950">Importante</p>
+          <p className="mt-1 text-sm leading-relaxed text-amber-900">
+            A <strong>HotBox irá fazer contato antes da entrega para confirmar a entrega e o horário com você</strong>.
+          </p>
+        </div>
+        <div className="mt-5 grid gap-2">
+          <Button
+            type="button"
+            onClick={() => {
+              setReservationAccepted(true);
+              setShowReservationPaymentConfirm(false);
+              void placeOrder(true);
+            }}
+            className="w-full rounded-full bg-[#ffd400] py-6 font-black text-black hover:bg-[#f4ca00]"
+          >
+            Confirmo que estou ciente • pagar agora
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => setShowReservationPaymentConfirm(false)}
+            className="w-full rounded-full"
+          >
+            Revisar pedido
+          </Button>
+        </div>
+      </div>
+    </div>
+  )}
 
   return (
     <div className="min-h-screen bg-[#f7f7f7] pb-28">
