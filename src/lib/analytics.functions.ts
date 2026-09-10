@@ -39,6 +39,222 @@ function trim(v: unknown, max = 500) {
   return String(v ?? "").trim().slice(0, max) || null;
 }
 
+
+function finiteNumber(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function cleanContents(input: unknown) {
+  if (!Array.isArray(input)) return [];
+
+  return input
+    .map((raw: any) => {
+      const id = String(
+        raw?.id ?? raw?.product_id ?? raw?.option_id ?? "",
+      ).trim();
+      if (!id) return null;
+
+      const quantity = Math.max(
+        1,
+        Math.round(Number(raw?.quantity ?? raw?.qty ?? 1) || 1),
+      );
+      const price = finiteNumber(
+        raw?.item_price ?? raw?.unit_price ?? raw?.price,
+      );
+
+      return {
+        id,
+        quantity,
+        ...(price != null
+          ? { item_price: Number(price.toFixed(2)) }
+          : {}),
+      };
+    })
+    .filter(Boolean);
+}
+
+async function sendMetaWebsiteEventSafely(args: {
+  supabaseAdmin: any;
+  data: AnalyticsEventInput;
+  eventName: string;
+  visitorId: string;
+  ip: string | null;
+  userAgent: string | null;
+}) {
+  const map: Record<string, string> = {
+    page_view: "PageView",
+    product_view: "ViewContent",
+    add_to_cart: "AddToCart",
+    order_bump_added: "AddToCart",
+    checkout_started: "InitiateCheckout",
+    payment_selected: "AddPaymentInfo",
+    payment_started: "AddPaymentInfo",
+    purchase: "Purchase",
+    lead: "Lead",
+    contact: "Contact",
+  };
+
+  const metaName = map[args.eventName];
+  if (!metaName) return;
+
+  try {
+    const {
+      loadCapiConfig,
+      sendCapiEvent,
+    } = await import("@/lib/meta-capi.server");
+
+    const cfg = await loadCapiConfig(args.supabaseAdmin);
+    if (!cfg) return;
+
+    const properties: any =
+      args.data.properties &&
+      typeof args.data.properties === "object"
+        ? args.data.properties
+        : {};
+
+    const eventId = trim(properties.event_id, 180);
+    if (!eventId) return;
+
+    const contents = cleanContents(
+      properties.contents ||
+        properties.items ||
+        (args.data.product_id
+          ? [
+              {
+                id: args.data.product_id,
+                quantity: args.data.quantity || 1,
+                item_price: args.data.value || 0,
+              },
+            ]
+          : []),
+    );
+
+    const contentIds = contents.map((item: any) => item.id);
+    const value = finiteNumber(
+      args.data.value ?? properties.total ?? properties.subtotal,
+    );
+
+    const numItemsRaw = finiteNumber(
+      args.data.quantity ??
+        properties.num_items ??
+        properties.items_count,
+    );
+    const numItems =
+      numItemsRaw != null
+        ? Math.max(1, Math.round(numItemsRaw))
+        : contents.reduce(
+            (sum: number, item: any) =>
+              sum + Number(item.quantity || 0),
+            0,
+          );
+
+    const customData: Record<string, unknown> = {
+      ...(contents.length ? { contents } : {}),
+      ...(contentIds.length ? { content_ids: contentIds } : {}),
+      ...(contents.length || args.data.product_id
+        ? { content_type: "product" }
+        : {}),
+      ...(args.data.product_name
+        ? { content_name: args.data.product_name }
+        : {}),
+      ...(properties.category
+        ? { content_category: String(properties.category) }
+        : {}),
+      ...(numItems > 0 ? { num_items: numItems } : {}),
+      ...(args.data.checkout_id
+        ? { checkout_id: args.data.checkout_id }
+        : {}),
+      ...(args.data.payment_method
+        ? { payment_method: args.data.payment_method }
+        : {}),
+      ...(finiteNumber(properties.subtotal) != null
+        ? { subtotal: Number(properties.subtotal) }
+        : {}),
+      ...(finiteNumber(properties.delivery_fee) != null
+        ? { delivery_fee: Number(properties.delivery_fee) }
+        : {}),
+      ...(finiteNumber(properties.discount) != null
+        ? { discount: Number(properties.discount) }
+        : {}),
+      ...(finiteNumber(properties.addon_total) != null
+        ? { addon_total: Number(properties.addon_total) }
+        : {}),
+      ...(properties.coupon
+        ? { coupon: String(properties.coupon) }
+        : {}),
+      ...(properties.delivery_mode
+        ? { delivery_mode: String(properties.delivery_mode) }
+        : {}),
+      ...(properties.neighborhood
+        ? { neighborhood: String(properties.neighborhood) }
+        : {}),
+      ...(properties.reservation != null
+        ? { reservation: Boolean(properties.reservation) }
+        : {}),
+    };
+
+    const result = await sendCapiEvent(cfg, {
+      eventName: metaName as any,
+      eventId,
+      actionSource: "website",
+      eventSourceUrl:
+        trim(properties.event_source_url, 1500) ||
+        trim(args.data.page_path, 500) ||
+        undefined,
+      userData: {
+        phone: args.data.customer_phone || undefined,
+        name: args.data.customer_name || undefined,
+        externalId: args.visitorId,
+        fbpCookie: trim(properties._fbp, 500) || undefined,
+        fbcCookie: trim(properties._fbc, 500) || undefined,
+        clientIpAddress: args.ip,
+        clientUserAgent: args.userAgent,
+      },
+      ...(value != null ? { value } : {}),
+      currency: "BRL",
+      orderId: args.data.order_id || undefined,
+      customData,
+    });
+
+    // Auditoria. Nunca devolve token do CAPI ao navegador.
+    try {
+      await args.supabaseAdmin.from("meta_capi_events").insert({
+        event_name: metaName,
+        event_id: eventId,
+        order_id: args.data.order_id || null,
+        checkout_id: args.data.checkout_id || null,
+        phone: args.data.customer_phone || null,
+        source: "website",
+        payload: {
+          event_name: metaName,
+          event_id: eventId,
+          value,
+          order_id: args.data.order_id || null,
+          checkout_id: args.data.checkout_id || null,
+          content_ids: contentIds,
+        },
+        response: result.response ?? null,
+        success: result.success,
+      });
+    } catch (logError) {
+      console.error("[CAPI] Falha ao registrar auditoria:", logError);
+    }
+
+    if (!result.success) {
+      console.error(
+        "[CAPI] Evento website recusado:",
+        metaName,
+        result.error,
+        result.response,
+      );
+    }
+  } catch (error) {
+    // Meta nunca pode impedir Analytics nem checkout.
+    console.error("[CAPI] Falha não bloqueante no evento website:", error);
+  }
+}
+
 export const trackAnalyticsEvent = createServerFn({ method: "POST" })
   .inputValidator((data: AnalyticsEventInput) => data)
   .handler(async ({ data }) => {
@@ -170,6 +386,15 @@ export const trackAnalyticsEvent = createServerFn({ method: "POST" })
         });
         return { ok: false, stage: "event_insert", error: eventInsertError.message } as const;
       }
+
+      await sendMetaWebsiteEventSafely({
+        supabaseAdmin,
+        data,
+        eventName,
+        visitorId,
+        ip,
+        userAgent,
+      });
 
       return { ok: true } as const;
     } catch (error: any) {
