@@ -593,7 +593,7 @@ function CustomerHome() {
 
   const [view, setView] = useState<View>("list");
   const [query, setQuery] = useState("");
-  const [activeCategory, setActiveCategory] = useState("Tudo");
+  const [activeCategory, setActiveCategory] = useState("Batata");
   const [activeFilter, setActiveFilter] = useState<ActiveFilter>("todos");
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [detailQty, setDetailQty] = useState(1);
@@ -1118,10 +1118,20 @@ function CustomerHome() {
     setForm((current) => ({ ...current, street: "", number: "", complement: "", neighborhood: "", city: "", cep: "" }));
   }
 
-  const categories = useMemo(
-    () => ["Tudo", ...Array.from(new Set(products.map((p) => p.category || "Outros")))],
-    [products],
-  );
+  const categories = useMemo(() => {
+    const normalize = (value: unknown) =>
+      String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+    const remaining = Array.from(
+      new Set(
+        products
+          .map((p) => p.category || "Outros")
+          .filter((category) => !normalize(category).includes("batata")),
+      ),
+    );
+
+    return ["Batata", "Tudo", ...remaining];
+  }, [products]);
   const featured = useMemo(
     () =>
       products
@@ -1147,7 +1157,15 @@ function CustomerHome() {
   const filtered = useMemo(() => {
     return products
       .filter((p) => {
-        const matchesCategory = activeCategory === "Tudo" || (p.category || "Outros") === activeCategory;
+        const normalizedCategory = String(p.category || "Outros")
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toLowerCase();
+        const matchesCategory =
+          activeCategory === "Tudo" ||
+          (activeCategory === "Batata"
+            ? normalizedCategory.includes("batata")
+            : (p.category || "Outros") === activeCategory);
         const matchesQuery = !query.trim() || p.name.toLowerCase().includes(query.toLowerCase());
         const matchesStatus =
           activeFilter === "todos" || (activeFilter === "ativos" && p.active) || (activeFilter === "inativos" && !p.active);
@@ -3049,6 +3067,7 @@ function CustomerHome() {
                 onClick={() => setActiveCategory(cat)}
                 className={`flex shrink-0 items-center gap-1.5 rounded-full px-4 py-2 text-sm font-bold transition ${activeCategory === cat ? "bg-gradient-to-r from-primary to-accent text-primary-foreground shadow-md" : "border bg-card text-foreground/70"}`}
               >
+                {cat === "Batata" && <Flame className="size-3.5" />}
                 {cat === "Tudo" && <Flame className="size-3.5" />} {cat}
               </button>
             ))}
