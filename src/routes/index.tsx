@@ -1395,6 +1395,9 @@ function CustomerHome() {
     setDetailOrderBumpId(orderBumpId || null);
     setDetailReturnView(returnView);
     setView("detail");
+    window.setTimeout(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    }, 0);
   }
 
   function addonQty(optionId: string) {
@@ -2006,6 +2009,18 @@ function CustomerHome() {
             );
           })()}
 
+          {deliveryTime && (
+            <div className="mt-3 flex items-center gap-3 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sky-950">
+              <span className="grid size-9 shrink-0 place-items-center rounded-full bg-sky-100">
+                <Clock className="size-4" />
+              </span>
+              <div>
+                <p className="text-xs font-black uppercase tracking-wide">Previsão de entrega</p>
+                <p className="text-sm font-bold">{deliveryTime}-{deliveryTime + 15} minutos</p>
+              </div>
+            </div>
+          )}
+
           {publicReviews.length > 0 && (
             <button
               type="button"
@@ -2604,6 +2619,25 @@ function CustomerHome() {
                 <Store className="size-4" /> Retirada
               </button>
             </div>
+
+            {!isDelivery && (
+              <div className="mt-3 rounded-2xl border-2 border-amber-300 bg-amber-50 p-4">
+                <div className="flex items-start gap-3">
+                  <span className="grid size-10 shrink-0 place-items-center rounded-full bg-amber-400 text-amber-950">
+                    <MapPin className="size-5" />
+                  </span>
+                  <div>
+                    <p className="text-sm font-black text-amber-950">Endereço para retirada</p>
+                    <p className="mt-1 text-sm leading-relaxed text-zinc-800">
+                      Rua Carlos Chagas, LT 40, QD 65 — Jardim Gramacho, Duque de Caxias.
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-amber-900">
+                      Referência: em frente ao número 492.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {isDelivery && (
@@ -2674,6 +2708,46 @@ function CustomerHome() {
                     <div className="flex items-center gap-2 text-sm font-black text-emerald-900">
                       <CheckCircle2 className="size-5" /> Entregamos no seu endereço
                     </div>
+
+                    {deliveryCutoffTime && (
+                      <div className="mt-1.5">
+                        <p className={`text-xs font-bold ${
+                          outsideDeliveryHours ? "text-red-700" : "text-emerald-800"
+                        }`}>
+                          {outsideDeliveryHours
+                            ? `Entrega encerrada às ${deliveryCutoffTime} para ${validatedNeighborhood || form.neighborhood}`
+                            : `Entrega disponível até ${deliveryCutoffTime}`}
+                        </p>
+
+                        {outsideDeliveryHours && (
+                          <p className="mt-1 text-[11px] leading-relaxed text-zinc-600">
+                            {schedulingEnabled
+                              ? "Você pode agendar o pedido para o próximo horário disponível."
+                              : "No momento não é possível finalizar um pedido para este bairro."}
+                          </p>
+                        )}
+
+                        {outsideDeliveryHours && schedulingEnabled && (
+                          <label className={`mt-2 flex cursor-pointer items-start gap-2 rounded-xl border p-2.5 ${
+                            scheduleAccepted ? "border-violet-400 bg-white" : "border-violet-200 bg-white/80"
+                          }`}>
+                            <input
+                              type="checkbox"
+                              checked={scheduleAccepted}
+                              onChange={(e) => setScheduleAccepted(e.target.checked)}
+                              className="mt-0.5 size-4 accent-violet-600"
+                            />
+                            <span>
+                              <span className="block text-xs font-black text-violet-950">Agendar meu pedido</span>
+                              <span className="mt-0.5 block text-[10px] leading-relaxed text-violet-800">
+                                A HotBox entrará em contato para informar a entrega no próximo horário disponível.
+                              </span>
+                            </span>
+                          </label>
+                        )}
+                      </div>
+                    )}
+
                     <div className="mt-2 flex items-end justify-between gap-3">
                       <div>
                         <span className="text-xs font-bold uppercase tracking-wide text-emerald-800">Taxa de entrega</span>
@@ -2696,49 +2770,6 @@ function CustomerHome() {
           </div>
         )}
 
-        {deliveryCutoffTime && (
-                    <div className={`mt-3 rounded-2xl border-2 p-4 ${
-                      outsideDeliveryHours
-                        ? schedulingEnabled
-                          ? "border-violet-300 bg-violet-50"
-                          : "border-red-300 bg-red-50"
-                        : "border-sky-200 bg-sky-50"
-                    }`}>
-                      <p className={`text-sm font-black ${
-                        outsideDeliveryHours
-                          ? schedulingEnabled ? "text-violet-900" : "text-red-900"
-                          : "text-sky-900"
-                      }`}>
-                        {outsideDeliveryHours
-                          ? `Entrega encerrada às ${deliveryCutoffTime} para ${validatedNeighborhood || form.neighborhood}`
-                          : `Entrega disponível até ${deliveryCutoffTime}`}
-                      </p>
-                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                        {deliveryWindowMessage()}
-                      </p>
-
-                      {outsideDeliveryHours && schedulingEnabled && (
-                        <label className={`mt-3 flex cursor-pointer items-start gap-3 rounded-xl border p-3 ${
-                          scheduleAccepted ? "border-violet-400 bg-white" : "border-violet-200 bg-white/70"
-                        }`}>
-                          <input
-                            type="checkbox"
-                            checked={scheduleAccepted}
-                            onChange={(e) => setScheduleAccepted(e.target.checked)}
-                            className="mt-0.5 size-5 accent-violet-600"
-                          />
-                          <span>
-                            <span className="block text-sm font-black text-violet-950">
-                              Agendar meu pedido
-                            </span>
-                            <span className="mt-0.5 block text-[11px] leading-relaxed text-violet-800">
-                              Estou ciente de que este é um AGENDAMENTO. A HotBox entrará em contato para informar a entrega no próximo horário disponível.
-                            </span>
-                          </span>
-                        </label>
-                      )}
-                    </div>
-                  )}
                 </div>
               </div>
             </div>
@@ -2942,11 +2973,6 @@ function CustomerHome() {
           </h1>
           <p className="mt-3 max-w-md text-sm text-white/85">{bannerTagline}</p>
           <div className="mt-4 flex flex-wrap items-center gap-4 text-sm font-semibold">
-            {deliveryTime && (
-              <span className="flex items-center gap-1.5">
-                <Clock className="size-4" /> {deliveryTime}-{deliveryTime + 15} min
-              </span>
-            )}
             <span className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 backdrop-blur">
               <MapPin className="size-4" /> {validatedNeighborhood || "Entrega"}
             </span>
@@ -3182,6 +3208,7 @@ function CustomerHome() {
       <footer className="mt-10 border-t bg-muted/40 py-6 text-center text-xs text-muted-foreground">
         <MapPin className="mx-auto mb-1 size-4" />
         {storeName} • Todos os direitos reservados
+        <div className="mt-1 font-semibold">CNPJ 67.798.065/0001-03</div>
         <div className="mt-1">
           <Link to="/politica-de-privacidade" className="underline hover:text-foreground">
             Política de Privacidade
