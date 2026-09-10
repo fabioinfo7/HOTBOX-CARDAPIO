@@ -1,24 +1,14 @@
 /**
- * meta-capi.server.ts
- * -------------------
- * Integração com a Meta Conversions API (CAPI) — server-side.
+ * HotBox Delivery — Meta Conversions API
  *
- * Eventos suportados:
- *   - Lead         → quando um lead de campanha WhatsApp inicia conversa
- *   - Purchase     → quando um pedido é confirmado (order criada)
- *   - InitiateCheckout → quando o robô detecta intenção de compra
- *
- * Dados enviados são hasheados com SHA-256 antes de ir pra Meta,
- * conforme exigido pela Conversions API.
- *
- * Docs: https://developers.facebook.com/docs/marketing-api/conversions-api
+ * Suporta eventos do site/cardápio e do WhatsApp.
+ * Dados pessoais usados para correspondência são normalizados e hasheados
+ * com SHA-256 antes do envio, conforme o padrão da Meta.
  */
 
 import { createHash } from "node:crypto";
 
 const GRAPH_VERSION = "v22.0";
-
-// ── Tipos ────────────────────────────────────────────────────────────────────
 
 export type CapiConfig = {
   pixelId: string;
@@ -27,24 +17,38 @@ export type CapiConfig = {
 };
 
 export type CapiUserData = {
-  phone?: string;          // será hasheado com SHA-256
-  name?: string;           // primeiro nome, será hasheado
-  ctwaClid?: string;       // Click-to-WhatsApp Click ID — NÃO hashear
-  fbpCookie?: string;      // _fbp cookie (se disponível)
-  fbcCookie?: string;      // _fbc cookie (se disponível)
+  phone?: string;
+  name?: string;
+  externalId?: string;
+  ctwaClid?: string;
+  fbpCookie?: string;
+  fbcCookie?: string;
+  clientIpAddress?: string | null;
+  clientUserAgent?: string | null;
 };
+
+export type CapiEventName =
+  | "PageView"
+  | "ViewContent"
+  | "AddToCart"
+  | "InitiateCheckout"
+  | "AddPaymentInfo"
+  | "Purchase"
+  | "Lead"
+  | "Contact"
+  | "CompleteRegistration";
 
 export type CapiEventOptions = {
-  eventName: "Lead" | "Purchase" | "InitiateCheckout" | "Contact" | "CompleteRegistration";
+  eventName: CapiEventName;
   userData: CapiUserData;
-  value?: number;           // valor em BRL (para Purchase)
-  currency?: string;        // padrão "BRL"
-  orderId?: string;         // ID do pedido (para Purchase)
-  eventSourceUrl?: string;  // URL de origem (use a URL do seu domínio/whatsapp)
+  value?: number;
+  currency?: string;
+  orderId?: string;
+  eventId?: string;
+  eventSourceUrl?: string;
+  actionSource?: "website" | "business_messaging";
   customData?: Record<string, unknown>;
 };
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function sha256(value: string): string {
   return createHash("sha256")
@@ -52,52 +56,57 @@ function sha256(value: string): string {
     .digest("hex");
 }
 
-/** Normaliza telefone: remove tudo que não for dígito, garante DDI 55 */
 function normalizePhone(phone: string): string {
   const digits = phone.replace(/\D/g, "");
-  // já tem DDI BR
+  if (!digits) return "";
   if (digits.startsWith("55") && digits.length >= 12) return digits;
-  // sem DDI
   return "55" + digits;
 }
 
-/** Monta o campo user_data com os campos hasheados e os identificadores de clique */
-function buildUserData(ud: CapiUserData) {
+function buildUserData(
+  ud: CapiUserData,
+  actionSource: "website" | "business_messaging",
+) {
   const userData: Record<string, string> = {};
 
   if (ud.phone) {
     const normalized = normalizePhone(ud.phone);
-    userData.ph = sha256(normalized);
+    if (normalized) userData.ph = sha256(normalized);
   }
 
   if (ud.name) {
-    const firstName = ud.name.trim().split(" ")[0];
+    const firstName = ud.name.trim().split(/\s+/)[0];
     if (firstName) userData.fn = sha256(firstName);
   }
 
-  // ctwa_clid: NÃO hashear — é um identificador de clique da Meta
-  // Docs: https://developers.facebook.com/docs/marketing-api/conversions-api/parameters/customer-information-parameters
-  if (ud.ctwaClid) {
-    userData.ctwa_clid = ud.ctwaClid;
+  if (ud.externalId) {
+    userData.external_id = sha256(String(ud.externalId));
   }
 
+  // Identificadores próprios da Meta NÃO devem ser hasheados.
+  if (ud.ctwaClid) userData.ctwa_clid = ud.ctwaClid;
   if (ud.fbpCookie) userData.fbp = ud.fbpCookie;
   if (ud.fbcCookie) userData.fbc = ud.fbcCookie;
 
-  // Indica que o evento veio de fora do browser
-  userData.client_ip_address = "0.0.0.0"; // não temos IP real em mensagens WhatsApp
-  userData.client_user_agent = "WhatsApp/Bot";
+  if (ud.clientIpAddress) {
+    userData.client_ip_address = ud.clientIpAddress;
+  } else if (actionSource === "business_messaging") {
+    // Compatibilidade com o fluxo antigo de WhatsApp.
+    userData.client_ip_address = "0.0.0.0";
+  }
+
+  if (ud.clientUserAgent) {
+    userData.client_user_agent = ud.clientUserAgent;
+  } else if (actionSource === "business_messaging") {
+    userData.client_user_agent = "WhatsApp/Bot";
+  }
 
   return userData;
 }
 
-// ── Função principal ─────────────────────────────────────────────────────────
-
-/**
- * Carrega configuração do Pixel/CAPI a partir da store_config.
- * Retorna null se não configurado.
- */
-export async function loadCapiConfig(supabaseAdmin: any): Promise<CapiConfig | null> {
+export async function loadCapiConfig(
+  supabaseAdmin: any,
+): Promise<CapiConfig | null> {
   const { data } = await supabaseAdmin
     .from("store_config")
     .select("meta_pixel_id, meta_capi_access_token, meta_test_event_code")
@@ -106,50 +115,59 @@ export async function loadCapiConfig(supabaseAdmin: any): Promise<CapiConfig | n
   if (!data?.meta_pixel_id || !data?.meta_capi_access_token) return null;
 
   return {
-    pixelId: data.meta_pixel_id,
-    accessToken: data.meta_capi_access_token,
+    pixelId: String(data.meta_pixel_id),
+    accessToken: String(data.meta_capi_access_token),
     testEventCode: data.meta_test_event_code ?? null,
   };
 }
 
-/**
- * Envia um evento para a Meta Conversions API.
- * Não lança exceção — erros são logados e retornados no resultado.
- */
 export async function sendCapiEvent(
   cfg: CapiConfig,
   options: CapiEventOptions,
 ): Promise<{ success: boolean; response?: unknown; error?: string }> {
   const eventTime = Math.floor(Date.now() / 1000);
+  const actionSource = options.actionSource ?? "business_messaging";
 
   const event: Record<string, unknown> = {
     event_name: options.eventName,
     event_time: eventTime,
-    action_source: "business_messaging", // correto para mensagens WhatsApp
-    event_source_url: options.eventSourceUrl ?? `https://wa.me/`,
-    user_data: buildUserData(options.userData),
+    action_source: actionSource,
+    user_data: buildUserData(options.userData, actionSource),
   };
 
-  if (options.value !== undefined || options.orderId) {
-    const customData: Record<string, unknown> = {
-      currency: options.currency ?? "BRL",
-      ...(options.value !== undefined ? { value: options.value } : {}),
-      ...(options.orderId ? { order_id: options.orderId } : {}),
-      ...options.customData,
-    };
+  if (options.eventId) {
+    event.event_id = options.eventId;
+  }
+
+  if (options.eventSourceUrl) {
+    event.event_source_url = options.eventSourceUrl;
+  } else if (actionSource === "business_messaging") {
+    event.event_source_url = "https://wa.me/";
+  }
+
+  const customData: Record<string, unknown> = {
+    ...(options.currency ? { currency: options.currency } : {}),
+    ...(options.value !== undefined
+      ? { value: Number(options.value) }
+      : {}),
+    ...(options.orderId ? { order_id: options.orderId } : {}),
+    ...(options.customData || {}),
+  };
+
+  if (Object.keys(customData).length) {
     event.custom_data = customData;
   }
 
-  const body: Record<string, unknown> = {
-    data: [event],
-  };
+  const body: Record<string, unknown> = { data: [event] };
 
   if (cfg.testEventCode) {
     body.test_event_code = cfg.testEventCode;
   }
 
   try {
-    const url = `https://graph.facebook.com/${GRAPH_VERSION}/${cfg.pixelId}/events?access_token=${cfg.accessToken}`;
+    const url =
+      `https://graph.facebook.com/${GRAPH_VERSION}/${cfg.pixelId}/events` +
+      `?access_token=${encodeURIComponent(cfg.accessToken)}`;
 
     const res = await fetch(url, {
       method: "POST",
@@ -157,7 +175,14 @@ export async function sendCapiEvent(
       body: JSON.stringify(body),
     });
 
-    const responseJson = await res.json().catch(async () => ({ raw: await res.text() }));
+    const raw = await res.text();
+    let responseJson: unknown = null;
+
+    try {
+      responseJson = raw ? JSON.parse(raw) : null;
+    } catch {
+      responseJson = { raw };
+    }
 
     if (!res.ok) {
       return {
@@ -169,16 +194,14 @@ export async function sendCapiEvent(
 
     return { success: true, response: responseJson };
   } catch (err: any) {
-    return { success: false, error: String(err?.message ?? err) };
+    return {
+      success: false,
+      error: String(err?.message ?? err),
+    };
   }
 }
 
-// ── Wrappers de alto nível ────────────────────────────────────────────────────
-
-/**
- * Dispara evento "Lead" quando um novo lead de campanha WhatsApp inicia conversa.
- * Deve ser chamado ao detectar ctwa_clid no referral do webhook da Meta.
- */
+// Fluxo legado/WhatsApp preservado.
 export async function fireLeadEvent(
   supabaseAdmin: any,
   opts: {
@@ -189,10 +212,16 @@ export async function fireLeadEvent(
   },
 ): Promise<void> {
   const cfg = await loadCapiConfig(supabaseAdmin);
-  if (!cfg) return; // CAPI não configurado — ignora silenciosamente
+  if (!cfg) return;
+
+  const eventId = opts.conversationId
+    ? `lead_${opts.conversationId}`
+    : undefined;
 
   const result = await sendCapiEvent(cfg, {
     eventName: "Lead",
+    eventId,
+    actionSource: "business_messaging",
     userData: {
       phone: opts.phone,
       name: opts.name,
@@ -200,21 +229,23 @@ export async function fireLeadEvent(
     },
   });
 
-  // Salva no log. O builder do Supabase é awaitable, mas não expõe .catch()
-  // em todos os runtimes; por isso usamos try/catch explícito.
   try {
     await supabaseAdmin.from("meta_capi_events").insert({
       event_name: "Lead",
+      event_id: eventId ?? null,
       phone: opts.phone,
-      payload: { phone: opts.phone, ctwa_clid: opts.ctwaClid },
+      source: "whatsapp",
+      payload: {
+        phone: opts.phone,
+        ctwa_clid: opts.ctwaClid,
+      },
       response: result.response ?? null,
       success: result.success,
     });
   } catch (err) {
-    console.error("[CAPI] Falha ao registrar evento Lead no banco:", err);
+    console.error("[CAPI] Falha ao registrar evento Lead:", err);
   }
 
-  // Marca na conversa que o evento Lead foi enviado
   if (opts.conversationId && result.success) {
     try {
       await supabaseAdmin
@@ -227,14 +258,14 @@ export async function fireLeadEvent(
   }
 
   if (!result.success) {
-    console.error("[CAPI] Falha ao enviar evento Lead:", result.error, result.response);
+    console.error(
+      "[CAPI] Falha ao enviar Lead:",
+      result.error,
+      result.response,
+    );
   }
 }
 
-/**
- * Dispara evento "Purchase" quando um pedido é confirmado.
- * Deve ser chamado logo após a criação do pedido no banco.
- */
 export async function firePurchaseEvent(
   supabaseAdmin: any,
   opts: {
@@ -249,8 +280,12 @@ export async function firePurchaseEvent(
   const cfg = await loadCapiConfig(supabaseAdmin);
   if (!cfg) return;
 
+  const eventId = `purchase_${opts.orderId}`;
+
   const result = await sendCapiEvent(cfg, {
     eventName: "Purchase",
+    eventId,
+    actionSource: "business_messaging",
     userData: {
       phone: opts.phone,
       name: opts.name,
@@ -264,13 +299,20 @@ export async function firePurchaseEvent(
   try {
     await supabaseAdmin.from("meta_capi_events").insert({
       event_name: "Purchase",
+      event_id: eventId,
+      order_id: opts.orderId,
       phone: opts.phone,
-      payload: { phone: opts.phone, order_id: opts.orderId, value: opts.value },
+      source: "whatsapp",
+      payload: {
+        phone: opts.phone,
+        order_id: opts.orderId,
+        value: opts.value,
+      },
       response: result.response ?? null,
       success: result.success,
     });
   } catch (err) {
-    console.error("[CAPI] Falha ao registrar evento Purchase no banco:", err);
+    console.error("[CAPI] Falha ao registrar Purchase:", err);
   }
 
   if (opts.conversationId && result.success) {
@@ -285,6 +327,10 @@ export async function firePurchaseEvent(
   }
 
   if (!result.success) {
-    console.error("[CAPI] Falha ao enviar evento Purchase:", result.error, result.response);
+    console.error(
+      "[CAPI] Falha ao enviar Purchase:",
+      result.error,
+      result.response,
+    );
   }
 }
