@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { toast } from "sonner";
 import {
+  //
   ShoppingCart,
   Minus,
   Plus,
