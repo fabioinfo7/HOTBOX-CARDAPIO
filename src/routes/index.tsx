@@ -543,7 +543,7 @@ function CustomerHome() {
   const [checkingActiveOrders, setCheckingActiveOrders] = useState(false);
   const [bannerUrl, setBannerUrl] = useState<string | null>(null);
   const [bannerTagline, setBannerTagline] = useState(
-    "As batatas recheadas mais bem recheadas de Duque de Caxias. Muito recheio, muito sabor e aquele capricho que dá vontade de pedir de novo. Escolha a sua e peça agora!",
+    "Somos uma batataria apaixonada por capricho: batatas recheadas de verdade, com muito recheio e muito sabor. Peça agora e descubra por que a HotBox quer ser lembrada entre as mais bem recheadas de Duque de Caxias.",
   );
   const [deliveryTime, setDeliveryTime] = useState<number | null>(null);
   const [infinitepayEnabled, setInfinitepayEnabled] = useState(false);
@@ -2238,9 +2238,109 @@ function CustomerHome() {
     );
   }
 
+  const reservationEntryModal = (showReservationEntryModal && (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4">
+      <div className="w-full max-w-md rounded-[28px] border border-amber-300 bg-white p-6 shadow-2xl">
+        <div className="mx-auto grid size-14 place-items-center rounded-full bg-amber-100 text-3xl">🗓️</div>
+        <p className="mt-4 text-center text-xs font-black uppercase tracking-[0.16em] text-amber-700">
+          Loja fechada no momento
+        </p>
+        <h2 className="mt-1 text-center text-2xl font-black text-zinc-950">
+          Seu pedido pode ficar reservado
+        </h2>
+        <p className="mt-3 text-center text-sm leading-relaxed text-zinc-700">
+          A HotBox está fora do horário de funcionamento agora, mas você pode continuar normalmente.
+          Seu pagamento será realizado agora e o pedido ficará como <strong>AGENDADO / RESERVADO</strong> para entrega posterior.
+        </p>
+        <div className="mt-4 rounded-2xl border border-amber-300 bg-amber-50 p-4">
+          <p className="text-sm font-black text-amber-950">Antes da entrega</p>
+          <p className="mt-1 text-sm leading-relaxed text-amber-900">
+            A <strong>HotBox irá fazer contato com você antes da entrega para confirmar a entrega e o horário</strong>.
+          </p>
+        </div>
+        <p className="mt-4 text-xs leading-relaxed text-zinc-500">
+          Ao continuar, você confirma que entendeu que este pedido não será preparado nem entregue agora.
+        </p>
+        <div className="mt-5 grid gap-2">
+          <Button
+            type="button"
+            onClick={() => {
+              setReservationAccepted(true);
+              setShowReservationEntryModal(false);
+              setView("checkout");
+            }}
+            className="w-full rounded-full bg-[#ffd400] py-6 font-black text-black hover:bg-[#f4ca00]"
+          >
+            Estou ciente • continuar
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => setShowReservationEntryModal(false)}
+            className="w-full rounded-full"
+          >
+            Voltar ao carrinho
+          </Button>
+        </div>
+      </div>
+    </div>
+  ));
+
+  const reservationPaymentConfirmModal = (showReservationPaymentConfirm && (
+    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/65 px-4">
+      <div className="w-full max-w-md rounded-[28px] border-2 border-amber-400 bg-white p-6 shadow-2xl">
+        <div className="mx-auto grid size-14 place-items-center rounded-full bg-amber-100 text-3xl">⚠️</div>
+        <p className="mt-4 text-center text-xs font-black uppercase tracking-[0.16em] text-amber-700">
+          Confirmação de agendamento
+        </p>
+        <h2 className="mt-1 text-center text-2xl font-black text-zinc-950">
+          Confirme antes de pagar
+        </h2>
+        <p className="mt-3 text-center text-sm leading-relaxed text-zinc-700">
+          Você está finalizando um <strong>PEDIDO AGENDADO / RESERVADO</strong>.
+          O pagamento será feito agora, mas a entrega acontecerá posteriormente, dentro do horário de funcionamento.
+        </p>
+        {reservationDate && (
+          <div className="mt-4 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 text-center">
+            <p className="text-xs font-bold uppercase tracking-wide text-zinc-500">Data escolhida</p>
+            <p className="mt-1 text-base font-black text-zinc-950">{formatReservationDate(reservationDate)}</p>
+          </div>
+        )}
+        <div className="mt-4 rounded-2xl border border-amber-300 bg-amber-50 p-4">
+          <p className="text-sm font-black text-amber-950">Importante</p>
+          <p className="mt-1 text-sm leading-relaxed text-amber-900">
+            A <strong>HotBox irá fazer contato antes da entrega para confirmar a entrega e o horário com você</strong>.
+          </p>
+        </div>
+        <div className="mt-5 grid gap-2">
+          <Button
+            type="button"
+            onClick={() => {
+              setReservationAccepted(true);
+              setShowReservationPaymentConfirm(false);
+              void placeOrder(true);
+            }}
+            className="w-full rounded-full bg-[#ffd400] py-6 font-black text-black hover:bg-[#f4ca00]"
+          >
+            Confirmo que estou ciente • pagar agora
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => setShowReservationPaymentConfirm(false)}
+            className="w-full rounded-full"
+          >
+            Revisar pedido
+          </Button>
+        </div>
+      </div>
+    </div>
+  ));
+
   if (view === "cart") {
     return (
       <div className="min-h-screen bg-background pb-28">
+        {reservationEntryModal}
         <header className="sticky top-0 z-30 flex items-center gap-3 border-b bg-background/95 px-4 py-4 backdrop-blur">
           <button onClick={() => setView("list")}>
             <ArrowLeft className="size-5" />
@@ -2442,57 +2542,11 @@ function CustomerHome() {
     );
   }
 
-  {showReservationEntryModal && (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4">
-      <div className="w-full max-w-md rounded-[28px] border border-amber-300 bg-white p-6 shadow-2xl">
-        <div className="mx-auto grid size-14 place-items-center rounded-full bg-amber-100 text-3xl">🗓️</div>
-        <p className="mt-4 text-center text-xs font-black uppercase tracking-[0.16em] text-amber-700">
-          Loja fechada no momento
-        </p>
-        <h2 className="mt-1 text-center text-2xl font-black text-zinc-950">
-          Seu pedido pode ficar reservado
-        </h2>
-        <p className="mt-3 text-center text-sm leading-relaxed text-zinc-700">
-          A HotBox está fora do horário de funcionamento agora, mas você pode continuar normalmente.
-          Seu pagamento será realizado agora e o pedido ficará como <strong>AGENDADO / RESERVADO</strong> para entrega posterior.
-        </p>
-        <div className="mt-4 rounded-2xl border border-amber-300 bg-amber-50 p-4">
-          <p className="text-sm font-black text-amber-950">Antes da entrega</p>
-          <p className="mt-1 text-sm leading-relaxed text-amber-900">
-            A <strong>HotBox irá fazer contato com você antes da entrega para confirmar a entrega e o horário</strong>.
-          </p>
-        </div>
-        <p className="mt-4 text-xs leading-relaxed text-zinc-500">
-          Ao continuar, você confirma que entendeu que este pedido não será preparado nem entregue agora.
-        </p>
-        <div className="mt-5 grid gap-2">
-          <Button
-            type="button"
-            onClick={() => {
-              setReservationAccepted(true);
-              setShowReservationEntryModal(false);
-              setView("checkout");
-            }}
-            className="w-full rounded-full bg-[#ffd400] py-6 font-black text-black hover:bg-[#f4ca00]"
-          >
-            Estou ciente • continuar
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => setShowReservationEntryModal(false)}
-            className="w-full rounded-full"
-          >
-            Voltar ao carrinho
-          </Button>
-        </div>
-      </div>
-    </div>
-  )}
 
   if (view === "checkout") {
     return (
       <div className="min-h-screen bg-background pb-32">
+        {reservationPaymentConfirmModal}
         <header className="sticky top-0 z-30 flex items-center gap-3 border-b bg-background/95 px-4 py-4 backdrop-blur">
           <button onClick={() => setView("cart")}>
             <ArrowLeft className="size-5" />
@@ -2930,56 +2984,6 @@ function CustomerHome() {
     );
   }
 
-  {showReservationPaymentConfirm && (
-    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/65 px-4">
-      <div className="w-full max-w-md rounded-[28px] border-2 border-amber-400 bg-white p-6 shadow-2xl">
-        <div className="mx-auto grid size-14 place-items-center rounded-full bg-amber-100 text-3xl">⚠️</div>
-        <p className="mt-4 text-center text-xs font-black uppercase tracking-[0.16em] text-amber-700">
-          Confirmação de agendamento
-        </p>
-        <h2 className="mt-1 text-center text-2xl font-black text-zinc-950">
-          Confirme antes de pagar
-        </h2>
-        <p className="mt-3 text-center text-sm leading-relaxed text-zinc-700">
-          Você está finalizando um <strong>PEDIDO AGENDADO / RESERVADO</strong>.
-          O pagamento será feito agora, mas a entrega acontecerá posteriormente, dentro do horário de funcionamento.
-        </p>
-        {reservationDate && (
-          <div className="mt-4 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 text-center">
-            <p className="text-xs font-bold uppercase tracking-wide text-zinc-500">Data escolhida</p>
-            <p className="mt-1 text-base font-black text-zinc-950">{formatReservationDate(reservationDate)}</p>
-          </div>
-        )}
-        <div className="mt-4 rounded-2xl border border-amber-300 bg-amber-50 p-4">
-          <p className="text-sm font-black text-amber-950">Importante</p>
-          <p className="mt-1 text-sm leading-relaxed text-amber-900">
-            A <strong>HotBox irá fazer contato antes da entrega para confirmar a entrega e o horário com você</strong>.
-          </p>
-        </div>
-        <div className="mt-5 grid gap-2">
-          <Button
-            type="button"
-            onClick={() => {
-              setReservationAccepted(true);
-              setShowReservationPaymentConfirm(false);
-              void placeOrder(true);
-            }}
-            className="w-full rounded-full bg-[#ffd400] py-6 font-black text-black hover:bg-[#f4ca00]"
-          >
-            Confirmo que estou ciente • pagar agora
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => setShowReservationPaymentConfirm(false)}
-            className="w-full rounded-full"
-          >
-            Revisar pedido
-          </Button>
-        </div>
-      </div>
-    </div>
-  )}
 
   return (
     <div className="min-h-screen bg-[#f7f7f7] pb-28">
@@ -3027,9 +3031,9 @@ function CustomerHome() {
             <Flame className="size-3.5" /> Aberto agora
           </span>
           <h1 className="mt-3 font-display text-3xl font-black uppercase leading-[1.05] tracking-tight sm:text-4xl">
-            As mais bem recheadas
+            Sua fome pediu.
             <br />
-            de Duque de Caxias.
+            A Hotbox caprichou.
           </h1>
           <p className="mt-3 max-w-md text-sm text-white/85">{bannerTagline}</p>
           <div className="mt-4 flex flex-wrap items-center gap-4 text-sm font-semibold">
