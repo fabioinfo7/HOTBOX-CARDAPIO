@@ -777,14 +777,16 @@ function CustomerHome() {
   }, []);
 
   useEffect(() => {
-    supabase
-      .from("products")
-      .select(
-        "id,name,description,category,sale_price,image_url,kind,featured,active,promotion_active,promotion_price,promotion_type,promotion_start_at,promotion_end_at,promotion_days_of_week,promotion_time_start,promotion_time_end,promotion_label,is_combo,sort_order",
-      )
-      .order("sort_order", { ascending: true, nullsFirst: false })
-      .order("name")
-      .then(({ data }) => setProducts((data as Product[]) ?? []));
+    (supabase as any)
+      .rpc("get_public_menu_products")
+      .then(({ data, error }: any) => {
+        if (error) {
+          console.error("[menu-products] Falha ao carregar produtos públicos:", error);
+          setProducts([]);
+          return;
+        }
+        setProducts((data as Product[]) ?? []);
+      });
     Promise.all([
       supabase
         .from("store_config_public")
