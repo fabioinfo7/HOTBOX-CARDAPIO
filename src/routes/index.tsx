@@ -26,7 +26,8 @@ import {
   AlertTriangle,
   Loader2,
   MessageCircle,
-} from "lucide-react";
+
+  Instagram,} from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { brl, formatPhone, onlyDigits } from "@/lib/formatters";
 import { getEffectivePrice } from "@/lib/promotions";
@@ -543,7 +544,7 @@ function CustomerHome() {
   const [checkingActiveOrders, setCheckingActiveOrders] = useState(false);
   const [bannerUrl, setBannerUrl] = useState<string | null>(null);
   const [bannerTagline, setBannerTagline] = useState(
-    "Somos uma batataria apaixonada por capricho: batatas recheadas de verdade, com muito recheio e muito sabor. Peça agora e descubra por que a HotBox quer ser lembrada entre as mais bem recheadas de Duque de Caxias.",
+    "Somos uma batataria apaixonada por capricho: batatas recheadas de verdade, com muito recheio e muito sabor. Peça agora e descubra o mix de sabores que espera por você.",
   );
   const [deliveryTime, setDeliveryTime] = useState<number | null>(null);
   const [infinitepayEnabled, setInfinitepayEnabled] = useState(false);
@@ -2972,12 +2973,14 @@ function CustomerHome() {
             A Hotbox caprichou.
           </h1>
           <p className="mt-3 max-w-md text-sm text-white/85">{bannerTagline}</p>
-          <div className="mt-4 flex flex-wrap items-center gap-4 text-sm font-semibold">
-            <span className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 backdrop-blur">
-              <MapPin className="size-4" /> {validatedNeighborhood || "Entrega"}
+          <div className="mt-4 grid grid-cols-2 gap-2 text-[11px] font-semibold sm:flex sm:flex-wrap sm:items-center sm:gap-4 sm:text-sm">
+            <span className="flex min-w-0 items-center justify-center gap-1 rounded-full bg-white/15 px-2 py-1.5 backdrop-blur sm:justify-start sm:gap-1.5 sm:px-3">
+              <MapPin className="size-3.5 shrink-0 sm:size-4" />
+              <span className="truncate">{validatedNeighborhood || "Entrega"}</span>
             </span>
-            <span className="flex items-center gap-1.5 rounded-full bg-[#ffd400] px-3 py-1.5 font-black text-black shadow-sm">
-              <Bike className="size-4" /> Taxa de entrega: {deliveryFeeLabel()}
+            <span className="flex min-w-0 items-center justify-center gap-1 rounded-full bg-[#ffd400] px-2 py-1.5 font-black text-black shadow-sm sm:justify-start sm:gap-1.5 sm:px-3">
+              <Bike className="size-3.5 shrink-0 sm:size-4" />
+              <span className="truncate">Taxa: {deliveryFeeLabel()}</span>
             </span>
           </div>
         </div>
@@ -3209,7 +3212,21 @@ function CustomerHome() {
         <MapPin className="mx-auto mb-1 size-4" />
         {storeName} • Todos os direitos reservados
         <div className="mt-1 font-semibold">CNPJ 67.798.065/0001-03</div>
-        <div className="mt-1">
+
+        <div className="mt-3 flex justify-center">
+          <a
+            href="https://www.instagram.com/hotboxbatata/"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Instagram da HotBox Delivery"
+            className="inline-flex items-center gap-2 rounded-full border bg-white px-3 py-2 font-bold text-foreground transition hover:bg-muted"
+          >
+            <Instagram className="size-4" />
+            @hotboxbatata
+          </a>
+        </div>
+
+        <div className="mt-2">
           <Link to="/politica-de-privacidade" className="underline hover:text-foreground">
             Política de Privacidade
           </Link>
