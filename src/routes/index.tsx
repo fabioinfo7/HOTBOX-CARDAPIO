@@ -415,7 +415,6 @@ function CustomerHome() {
   const [detailAddonQty, setDetailAddonQty] = useState<Record<string, number>>({});
   const [detailOrderBumpId, setDetailOrderBumpId] = useState<string | null>(null);
   const [detailReturnView, setDetailReturnView] = useState<"list" | "cart" | "checkout">("list");
-  const [ingredientNames, setIngredientNames] = useState<string[]>([]);
   const [addonGroupsByProduct, setAddonGroupsByProduct] = useState<Record<string, AddonGroup[]>>({});
   const [orderBumps, setOrderBumps] = useState<OrderBump[]>([]);
 
@@ -1112,13 +1111,7 @@ function CustomerHome() {
     setDetailAddonQty({});
     setDetailOrderBumpId(orderBumpId || null);
     setDetailReturnView(returnView);
-    setIngredientNames([]);
     setView("detail");
-    supabase
-      .from("recipe_items")
-      .select("ingredients(name)")
-      .eq("product_id", p.id)
-      .then(({ data }) => setIngredientNames((data ?? []).map((r: any) => r.ingredients?.name).filter(Boolean)));
   }
 
   function addonQty(optionId: string) {
@@ -1632,17 +1625,27 @@ function CustomerHome() {
               <p className="mt-1 text-2xl font-extrabold text-primary">{brl(eff.price)}</p>
             );
           })()}
+
+          {publicReviews.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowPublicReviews(true)}
+              className="mt-3 flex w-full items-center gap-2 rounded-2xl border border-amber-200/70 bg-amber-50/60 px-3 py-2.5 text-left shadow-sm transition hover:bg-amber-50"
+            >
+              <PublicReviewStars value={publicReviewsAverage} />
+              <span className="text-sm font-black text-zinc-900">{publicReviewsAverage.toFixed(1)}</span>
+              <span className="min-w-0 flex-1 truncate text-[11px] text-zinc-500">
+                {publicReviews.length} {publicReviews.length === 1 ? "avaliação" : "avaliações"} de clientes
+              </span>
+              <span className="shrink-0 text-[11px] font-black text-primary">Ver avaliações</span>
+              <ChevronRight className="size-3.5 shrink-0 text-primary" />
+            </button>
+          )}
+
           {p.description && <p className="mt-3 text-sm leading-relaxed text-foreground/75">{p.description}</p>}
           {!p.active && (
             <div className="mt-4 rounded-2xl border border-zinc-300 bg-zinc-100 px-4 py-3 text-center">
               <p className="font-black uppercase tracking-wide text-zinc-700">Esgotado por hoje</p>
-            </div>
-          )}
-
-          {ingredientNames.length > 0 && (
-            <div className="mt-5 rounded-2xl border bg-card p-4">
-              <h3 className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Ingredientes</h3>
-              <p className="mt-1 text-sm">{ingredientNames.join(", ")}</p>
             </div>
           )}
 
@@ -1793,7 +1796,41 @@ function CustomerHome() {
               onChange={(e) => setDetailNotes(e.target.value)}
             />
           </div>
+
+          {publicReviews.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowPublicReviews(true)}
+              className="mt-6 w-full rounded-[22px] border border-amber-200 bg-gradient-to-br from-amber-50 to-white p-4 text-left shadow-sm transition hover:border-amber-300"
+            >
+              <p className="text-[10px] font-black uppercase tracking-[0.14em] text-amber-700">
+                Aprovado pelos clientes
+              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <PublicReviewStars value={publicReviewsAverage} />
+                <span className="text-lg font-black text-zinc-950">{publicReviewsAverage.toFixed(1)} de 5</span>
+              </div>
+              <p className="mt-1 text-sm font-semibold text-zinc-700">
+                Avaliado com {publicReviewsAverage.toFixed(1)} estrelas pelos clientes
+              </p>
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <span className="text-xs text-muted-foreground">
+                  Baseado em {publicReviews.length} {publicReviews.length === 1 ? "avaliação" : "avaliações"}
+                </span>
+                <span className="flex items-center gap-1 text-xs font-black text-primary">
+                  Ver avaliações <ChevronRight className="size-3.5" />
+                </span>
+              </div>
+            </button>
+          )}
         </div>
+
+        <PublicReviewsModal
+          open={showPublicReviews}
+          onClose={() => setShowPublicReviews(false)}
+          reviews={publicReviews}
+          average={publicReviewsAverage}
+        />
 
         <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 px-5 py-3 backdrop-blur">
           <div className="mx-auto flex max-w-2xl items-center gap-3">
