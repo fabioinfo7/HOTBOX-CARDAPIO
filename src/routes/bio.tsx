@@ -14,6 +14,7 @@ const WHATSAPP_URL = `https://wa.me/${WHATSAPP_NUMBER}?text=${WHATSAPP_MSG}`;
 const IFOOD_URL =
   "https://www.ifood.com.br/delivery/duque-de-caxias-rj/hotbox-delivery-jardim-gramacho/812f264d-658d-4e54-88d1-ac4f6d040916";
 const NFOOD_URL = "https://oia.99app.com/dlp9/3SsCkm?area=BR";
+const DIGITAL_MENU_URL = "https://hotbox.up.railway.app/";
 
 const BAIRROS_ZAP = [
   "Chacrinha",
@@ -257,6 +258,12 @@ function BioPage() {
           background: linear-gradient(135deg, #ffe400 0%, #ffcf00 70%, #ffb800 100%);
           box-shadow: 0 14px 34px rgba(0,0,0,.28), 0 8px 28px rgba(255,213,0,.10);
         }
+        .order-link--digital {
+          color: #fff;
+          border: 1px solid rgba(255,112,29,.40);
+          background: linear-gradient(135deg, #e3151b 0%, #f04b17 48%, #ff9f0a 100%);
+          box-shadow: 0 14px 34px rgba(0,0,0,.28), 0 8px 28px rgba(227,21,27,.16);
+        }
 
         .brand-icon {
           width: 54px;
@@ -269,6 +276,7 @@ function BioPage() {
         .order-link--whatsapp .brand-icon { background: rgba(0,0,0,.18); }
         .order-link--ifood .brand-icon { background: #fff; box-shadow: inset 0 0 0 1px rgba(0,0,0,.04); }
         .order-link--99 .brand-icon { background: rgba(255,255,255,.32); }
+        .order-link--digital .brand-icon { background: rgba(0,0,0,.16); color: #fff; }
         .brand-icon img { display: block; max-width: 38px; max-height: 38px; object-fit: contain; }
         .brand-icon--ifood img { width: 43px; max-width: 43px; }
         .brand-icon--99 img { width: 38px; height: 38px; }
@@ -290,6 +298,7 @@ function BioPage() {
         .order-link--whatsapp .order-arrow { background: rgba(255,255,255,.08); color: rgba(255,255,255,.72); }
         .order-link--ifood .order-arrow { background: rgba(234,29,44,.08); color: #ea1d2c; }
         .order-link--99 .order-arrow { background: rgba(18,18,18,.08); color: #121212; }
+        .order-link--digital .order-arrow { background: rgba(255,255,255,.12); color: #fff; }
 
         .delivery-card {
           position: relative;
@@ -402,6 +411,26 @@ function BioPage() {
                 <div className="order-copy">
                   <div className="order-name">Peça direto pelo WhatsApp</div>
                   <div className="order-desc">Atendimento direto e fácil para os bairros atendidos</div>
+                </div>
+                <div className="order-arrow"><ArrowIcon /></div>
+              </a>
+
+              <a
+                href={DIGITAL_MENU_URL} data-analytics="bio_cardapio_digital"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="order-link order-link--digital"
+              >
+                <div className="brand-icon" aria-hidden="true">
+                  <svg viewBox="0 0 48 48" width="32" height="32" fill="none">
+                    <rect x="8" y="7" width="32" height="34" rx="8" fill="rgba(255,255,255,.16)" stroke="white" strokeWidth="2" />
+                    <path d="M15 17h18M15 24h18M15 31h11" stroke="white" strokeWidth="2.5" strokeLinecap="round" />
+                    <circle cx="33" cy="31" r="3" fill="#ffd02a" />
+                  </svg>
+                </div>
+                <div className="order-copy">
+                  <div className="order-name">Cardápio Digital</div>
+                  <div className="order-desc">Veja os sabores, monte seu pedido e finalize direto pelo cardápio</div>
                 </div>
                 <div className="order-arrow"><ArrowIcon /></div>
               </a>
