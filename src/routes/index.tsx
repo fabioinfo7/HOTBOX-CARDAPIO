@@ -3,7 +3,6 @@ import { useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { toast } from "sonner";
 import {
-  //
   ShoppingCart,
   Minus,
   Plus,
@@ -150,6 +149,9 @@ type SavedAreaAccess = {
   neighborhood: string;
   city?: string;
   deliveryFee: number;
+  deliveryCutoffTime?: string | null;
+  outsideDeliveryHours?: boolean;
+  schedulingEnabled?: boolean;
   savedAt: number;
 };
 
@@ -353,6 +355,95 @@ function PublicReviewsModal({
   );
 }
 
+
+type StoreBusinessRange = { days: number[]; open: string; close: string };
+type PublicStoreStatus = {
+  manual_store_status?: "open" | "closed" | null;
+  business_hours_enabled?: boolean;
+  business_hours?: StoreBusinessRange[];
+  business_hours_closed_message?: string | null;
+};
+
+function productMenuGroupPriority(product: Product) {
+  const normalize = (value: unknown) =>
+    String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const category = normalize(product.category);
+  const name = normalize(product.name);
+
+  if (category.includes("batata") || name.includes("batata recheada")) return 0;
+  if (
+    product.kind === "beverage" ||
+    category.includes("bebida") ||
+    category.includes("refrigerante") ||
+    category.includes("suco")
+  ) return 1;
+  return 2;
+}
+
+function storeTimeToMinutes(value: unknown) {
+  const match = String(value || "").match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+function brasiliaClockNow() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Sao_Paulo",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+  const weekday = String(parts.find((part) => part.type === "weekday")?.value || "Sun");
+  const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const hour = Number(parts.find((part) => part.type === "hour")?.value || 0);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value || 0);
+  return { day: map[weekday] ?? 0, minutes: hour * 60 + minute };
+}
+
+function isStoreOpenByBusinessHours(config: PublicStoreStatus | null) {
+  if (!config) return true;
+  if (config.manual_store_status === "open") return true;
+  if (config.manual_store_status === "closed") return false;
+  if (config.business_hours_enabled !== true) return true;
+
+  const ranges = Array.isArray(config.business_hours) ? config.business_hours : [];
+  if (!ranges.length) return false;
+
+  const now = brasiliaClockNow();
+  const previousDay = (now.day + 6) % 7;
+
+  return ranges.some((range) => {
+    const days = Array.isArray(range.days) ? range.days.map(Number) : [];
+    const open = storeTimeToMinutes(range.open);
+    const close = storeTimeToMinutes(range.close);
+    if (open == null || close == null || !days.length) return false;
+
+    if (open === close) return days.includes(now.day);
+    if (close > open) return days.includes(now.day) && now.minutes >= open && now.minutes < close;
+
+    return (days.includes(now.day) && now.minutes >= open) ||
+      (days.includes(previousDay) && now.minutes < close);
+  });
+}
+
+function formatStoreBusinessHours(config: PublicStoreStatus | null) {
+  const ranges = Array.isArray(config?.business_hours) ? config!.business_hours! : [];
+  if (!ranges.length) return "horário não informado";
+
+  const names = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+  return ranges
+    .filter((r) => Array.isArray(r.days) && r.days.length && r.open && r.close)
+    .map((r) => {
+      const days = [...r.days].map(Number).sort((a, b) => a - b);
+      return `${days.map((d) => names[d] || "").filter(Boolean).join(", ")}: ${String(r.open).slice(0, 5)} às ${String(r.close).slice(0, 5)}`;
+    })
+    .join(" • ");
+}
+
 function CustomerHome() {
   const nav = useNavigate();
   const [products, setProducts] = useState<Product[]>([]);
@@ -388,6 +479,7 @@ function CustomerHome() {
   const [payOnDeliveryPixEnabled, setPayOnDeliveryPixEnabled] = useState(true);
   const [paymentChoice, setPaymentChoice] = useState<PaymentChoice>("online");
   const [digitalMenuEnabled, setDigitalMenuEnabled] = useState(true);
+  const [publicStoreStatus, setPublicStoreStatus] = useState<PublicStoreStatus | null>(null);
   const [configLoaded, setConfigLoaded] = useState(false);
   const [customerSession, setCustomerSession] = useState<Session | null>(null);
   const [areaStatus, setAreaStatus] = useState<AreaStatus>("idle");
@@ -399,6 +491,10 @@ function CustomerHome() {
   const [manualAreaMode, setManualAreaMode] = useState(false);
   const [areaMessage, setAreaMessage] = useState("");
   const [validatedNeighborhood, setValidatedNeighborhood] = useState("");
+  const [deliveryCutoffTime, setDeliveryCutoffTime] = useState<string | null>(null);
+  const [outsideDeliveryHours, setOutsideDeliveryHours] = useState(false);
+  const [schedulingEnabled, setSchedulingEnabled] = useState(false);
+  const [scheduleAccepted, setScheduleAccepted] = useState(false);
 
 
   const [couponInput, setCouponInput] = useState("");
@@ -501,6 +597,10 @@ function CustomerHome() {
     setAccessNumber(saved.number || "");
     setValidatedNeighborhood(saved.neighborhood);
     setDeliveryFee(Number(saved.deliveryFee || 0));
+    setDeliveryCutoffTime(saved.deliveryCutoffTime || null);
+    setOutsideDeliveryHours(saved.outsideDeliveryHours === true);
+    setSchedulingEnabled(saved.schedulingEnabled === true);
+    setScheduleAccepted(false);
     setForm((current) => ({
       ...current,
       deliveryMode: "delivery",
@@ -596,11 +696,12 @@ function CustomerHome() {
         )
         .maybeSingle(),
       (supabase as any).rpc("get_public_payment_config"),
+      (supabase as any).rpc("get_public_store_status"),
       (supabase as any).from("menu_addon_groups").select("id,name,display_title,description,display_subtitle,required,min_select,max_select,active,sort_order").eq("active", true).order("sort_order"),
       (supabase as any).from("menu_addon_options").select("id,group_id,name,display_name,description,display_description,image_url,price,linked_product_id,use_linked_product_price,active,sort_order").eq("active", true).order("sort_order"),
       (supabase as any).from("product_addon_groups").select("product_id,group_id,sort_order").order("sort_order"),
       (supabase as any).from("menu_order_bumps").select("id,product_id,title,subtitle,placement,price_override,active,sort_order").eq("active", true).order("sort_order"),
-    ]).then(([storeResult, paymentResult, groupResult, optionResult, linkResult, bumpResult]: any[]) => {
+    ]).then(([storeResult, paymentResult, storeStatusResult, groupResult, optionResult, linkResult, bumpResult]: any[]) => {
       const data = storeResult?.data;
       if (data) {
         setStoreName(data.store_name ?? "HotBox Delivery");
@@ -628,6 +729,8 @@ function CustomerHome() {
         setCardEnabled((data as any).digital_menu_card_enabled !== false);
         if (data.banner_tagline) setBannerTagline(data.banner_tagline);
       }
+      setPublicStoreStatus((storeStatusResult?.data || {}) as PublicStoreStatus);
+
       const pay = paymentResult?.data || {};
       const provider: CheckoutPayment = pay.provider === "mercadopago" ? "mercadopago" : pay.provider === "appmax" ? "appmax" : "infinitepay";
       setPaymentProvider(provider);
@@ -673,7 +776,10 @@ function CustomerHome() {
   }, [form.payment, paymentProvider]);
 
   useEffect(() => {
-    if (form.deliveryMode === "pickup" && paymentChoice !== "online") setPaymentChoice("online");
+    if (form.deliveryMode === "pickup") {
+      if (paymentChoice !== "online") setPaymentChoice("online");
+      setScheduleAccepted(false);
+    }
   }, [form.deliveryMode, paymentChoice]);
 
   useEffect(() => {
@@ -707,6 +813,25 @@ function CustomerHome() {
     return result as any;
   }
 
+  function applyDeliveryWindowFromQuote(quote: any) {
+    setDeliveryCutoffTime(quote?.deliveryCutoffTime || null);
+    setOutsideDeliveryHours(quote?.outsideDeliveryHours === true);
+    setSchedulingEnabled(quote?.schedulingEnabled === true);
+    setScheduleAccepted(false);
+  }
+
+  function deliveryWindowMessage(neighborhood?: string) {
+    const name = neighborhood || validatedNeighborhood || form.neighborhood || "seu bairro";
+    if (!deliveryCutoffTime) return "";
+    if (!outsideDeliveryHours) {
+      return `Entregas para ${name} disponíveis hoje até ${deliveryCutoffTime} (horário de Brasília).`;
+    }
+    if (schedulingEnabled) {
+      return `O horário de entrega para ${name} encerrou às ${deliveryCutoffTime} (horário de Brasília). Você pode agendar o pedido para o próximo horário disponível; a HotBox entrará em contato para confirmar a entrega.`;
+    }
+    return `O horário de entrega para ${name} encerrou às ${deliveryCutoffTime} (horário de Brasília). Não é possível finalizar pedidos para este bairro agora.`;
+  }
+
   async function validateCepAccess() {
     const cep = onlyDigits(accessCep);
     if (cep.length !== 8) {
@@ -734,6 +859,7 @@ function CustomerHome() {
         return;
       }
       const quote = await checkDeliveryArea(address.bairro, address.logradouro || undefined, accessNumber || undefined, address.localidade || undefined);
+      applyDeliveryWindowFromQuote(quote);
       if (quote?.supported && quote?.needsNumber) {
         const supportedNeighborhood = String(quote.neighborhood || address.bairro);
         setDeliveryPricingMode("distance");
@@ -782,6 +908,9 @@ function CustomerHome() {
         neighborhood: supportedNeighborhood,
         city: address.localidade || "",
         deliveryFee: Number.isFinite(fee) ? fee : 0,
+        deliveryCutoffTime: quote?.deliveryCutoffTime || null,
+        outsideDeliveryHours: quote?.outsideDeliveryHours === true,
+        schedulingEnabled: quote?.schedulingEnabled === true,
         savedAt: Date.now(),
       });
       setAreaStatus("supported");
@@ -805,6 +934,7 @@ function CustomerHome() {
     setAreaStatus("checking");
     try {
       const quote = await checkDeliveryArea(neighborhood);
+      applyDeliveryWindowFromQuote(quote);
       if (!quote?.supported) {
         setValidatedNeighborhood(neighborhood);
         redirectOutsideArea();
@@ -829,6 +959,9 @@ function CustomerHome() {
       saveAreaAccess({
         neighborhood: supportedNeighborhood,
         deliveryFee: Number.isFinite(fee) ? fee : 0,
+        deliveryCutoffTime: quote?.deliveryCutoffTime || null,
+        outsideDeliveryHours: quote?.outsideDeliveryHours === true,
+        schedulingEnabled: quote?.schedulingEnabled === true,
         savedAt: Date.now(),
       });
       setAreaStatus("supported");
@@ -847,6 +980,7 @@ function CustomerHome() {
     if (!number) return;
     try {
       const quote = await checkDeliveryArea(form.neighborhood, form.street, number, form.city);
+      applyDeliveryWindowFromQuote(quote);
       if (quote?.supported && quote?.fee != null && !quote?.quoteUnavailable) {
         const fee = Number(quote.fee);
         if (Number.isFinite(fee)) {
@@ -858,6 +992,9 @@ function CustomerHome() {
             neighborhood: String(quote.neighborhood || form.neighborhood || validatedNeighborhood || ""),
             city: form.city || "",
             deliveryFee: fee,
+            deliveryCutoffTime: quote?.deliveryCutoffTime || null,
+            outsideDeliveryHours: quote?.outsideDeliveryHours === true,
+            schedulingEnabled: quote?.schedulingEnabled === true,
             savedAt: Date.now(),
           });
         }
@@ -877,6 +1014,10 @@ function CustomerHome() {
     setAccessCep("");
     setAccessNumber("");
     setDeliveryDistanceKm(null);
+    setDeliveryCutoffTime(null);
+    setOutsideDeliveryHours(false);
+    setSchedulingEnabled(false);
+    setScheduleAccepted(false);
     setManualNeighborhood("");
     setManualAreaMode(false);
     setCart([]);
@@ -893,6 +1034,8 @@ function CustomerHome() {
       products
         .filter((p) => p.featured && p.active)
         .sort((a, b) => {
+          const groupDiff = productMenuGroupPriority(a) - productMenuGroupPriority(b);
+          if (groupDiff !== 0) return groupDiff;
           const aOrder = Number.isFinite(Number(a.sort_order)) ? Number(a.sort_order) : 999999;
           const bOrder = Number.isFinite(Number(b.sort_order)) ? Number(b.sort_order) : 999999;
           return aOrder - bOrder;
@@ -918,8 +1061,12 @@ function CustomerHome() {
         return matchesCategory && matchesQuery && matchesStatus;
       })
       .sort((a, b) => {
+        const groupDiff = productMenuGroupPriority(a) - productMenuGroupPriority(b);
+        if (groupDiff !== 0) return groupDiff;
+
         const activeDiff = Number(b.active) - Number(a.active);
         if (activeDiff !== 0) return activeDiff;
+
         const aOrder = Number.isFinite(Number(a.sort_order)) ? Number(a.sort_order) : 999999;
         const bOrder = Number.isFinite(Number(b.sort_order)) ? Number(b.sort_order) : 999999;
         return aOrder - bOrder || String(a.name || "").localeCompare(String(b.name || ""), "pt-BR");
@@ -1222,8 +1369,23 @@ function CustomerHome() {
     return true;
   }
 
+  function canStartPurchaseNow() {
+    if (isStoreOpenByBusinessHours(publicStoreStatus)) return true;
+
+    const hours = formatStoreBusinessHours(publicStoreStatus);
+    const custom = String(publicStoreStatus?.business_hours_closed_message || "").trim();
+    toast.error(
+      custom
+        ? `${custom} Horário de funcionamento: ${hours}.`
+        : `Loja fechada no momento. Horário de funcionamento: ${hours}.`,
+      { duration: 7000 },
+    );
+    return false;
+  }
+
   function addToCartFromDetail() {
     if (!selectedProduct) return;
+    if (!canStartPurchaseNow()) return;
     if (!selectedProduct.active) {
       toast.error("Este produto está esgotado por hoje.");
       return;
@@ -1250,6 +1412,7 @@ function CustomerHome() {
   }
 
   function addOrderBump(bump: OrderBump) {
+    if (!canStartPurchaseNow()) return;
     const product = products.find((p) => String(p.id) === String(bump.product_id));
     if (!product || !product.active) return;
     if ((addonGroupsByProduct[product.id] || []).length) {
@@ -1276,7 +1439,14 @@ function CustomerHome() {
     if (!cart.length) return toast.error("Seu carrinho está vazio");
     if (!form.name || !form.phone) return toast.error("Preencha nome e telefone");
     if (isDelivery && (!form.street || !form.number || !form.neighborhood)) return toast.error("Preencha rua, número e bairro");
+    if (!canStartPurchaseNow()) return;
     if (isDelivery && areaStatus !== "supported") return toast.error("Valide sua área de entrega antes de finalizar");
+    if (isDelivery && outsideDeliveryHours && !schedulingEnabled) {
+      return toast.error(deliveryWindowMessage());
+    }
+    if (isDelivery && outsideDeliveryHours && schedulingEnabled && !scheduleAccepted) {
+      return toast.error("Confirme o agendamento para o próximo horário disponível antes de finalizar.");
+    }
     if (paymentChoice === "online" && (!(pixEnabled || cardEnabled) || !paymentAvailable)) return toast.error("Pagamento online indisponível no momento");
     if (paymentChoice !== "online" && !isDelivery) return toast.error("Pagamento na entrega só está disponível quando você escolhe entrega.");
     if (paymentChoice === "delivery_card" && (!payOnDeliveryEnabled || !payOnDeliveryCardEnabled)) return toast.error("Cartão na entrega está indisponível.");
@@ -1301,6 +1471,7 @@ function CustomerHome() {
           address_city: isDelivery ? form.city || null : null,
           address_cep: isDelivery ? form.cep || null : null,
           payment_kind: paymentChoice === "online" ? paymentProvider : paymentChoice,
+          scheduled: isDelivery && outsideDeliveryHours && schedulingEnabled && scheduleAccepted,
           coupon_code: appliedCoupon?.code || null,
           access_token: customerSession?.access_token || null,
           items: cart.map((i) => ({
@@ -2222,6 +2393,50 @@ function CustomerHome() {
                       <span className="text-2xl font-black text-emerald-950">{brl(deliveryFee)}</span>
                     </div>
                   </div>
+
+                  {deliveryCutoffTime && (
+                    <div className={`mt-3 rounded-2xl border-2 p-4 ${
+                      outsideDeliveryHours
+                        ? schedulingEnabled
+                          ? "border-violet-300 bg-violet-50"
+                          : "border-red-300 bg-red-50"
+                        : "border-sky-200 bg-sky-50"
+                    }`}>
+                      <p className={`text-sm font-black ${
+                        outsideDeliveryHours
+                          ? schedulingEnabled ? "text-violet-900" : "text-red-900"
+                          : "text-sky-900"
+                      }`}>
+                        {outsideDeliveryHours
+                          ? `Entrega encerrada às ${deliveryCutoffTime} para ${validatedNeighborhood || form.neighborhood}`
+                          : `Entrega disponível até ${deliveryCutoffTime}`}
+                      </p>
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                        {deliveryWindowMessage()}
+                      </p>
+
+                      {outsideDeliveryHours && schedulingEnabled && (
+                        <label className={`mt-3 flex cursor-pointer items-start gap-3 rounded-xl border p-3 ${
+                          scheduleAccepted ? "border-violet-400 bg-white" : "border-violet-200 bg-white/70"
+                        }`}>
+                          <input
+                            type="checkbox"
+                            checked={scheduleAccepted}
+                            onChange={(e) => setScheduleAccepted(e.target.checked)}
+                            className="mt-0.5 size-5 accent-violet-600"
+                          />
+                          <span>
+                            <span className="block text-sm font-black text-violet-950">
+                              Agendar meu pedido
+                            </span>
+                            <span className="mt-0.5 block text-[11px] leading-relaxed text-violet-800">
+                              Estou ciente de que este é um AGENDAMENTO. A HotBox entrará em contato para informar a entrega no próximo horário disponível.
+                            </span>
+                          </span>
+                        </label>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -2514,6 +2729,32 @@ function CustomerHome() {
             />
           </div>
         )}
+        {deliveryCutoffTime && (
+          <div className={`mb-3 rounded-2xl border px-4 py-3 ${
+            outsideDeliveryHours
+              ? schedulingEnabled
+                ? "border-violet-200 bg-violet-50"
+                : "border-red-200 bg-red-50"
+              : "border-sky-200 bg-sky-50"
+          }`}>
+            <p className="text-sm font-black">
+              {outsideDeliveryHours
+                ? `⏰ Entregas para ${validatedNeighborhood || form.neighborhood} encerradas às ${deliveryCutoffTime}`
+                : `🕒 Entregas para ${validatedNeighborhood || form.neighborhood} até ${deliveryCutoffTime}`}
+            </p>
+            {outsideDeliveryHours && (
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                {schedulingEnabled
+                  ? "Você pode montar seu pedido normalmente e, ao finalizar, escolher AGENDAR para o próximo horário disponível."
+                  : "No momento não é possível finalizar um pedido para este bairro."}
+              </p>
+            )}
+            <p className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Horário de Brasília
+            </p>
+          </div>
+        )}
+
         {!query && activeCategory === "Tudo" && publicReviews.length > 0 && (
           <button
             type="button"
