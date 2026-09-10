@@ -387,6 +387,127 @@ function isBeverageProduct(product: Product) {
   );
 }
 
+
+function NormalizedBeverageImage({
+  src,
+  alt,
+  className = "",
+}: {
+  src: string;
+  alt: string;
+  className?: string;
+}) {
+  const [normalizedSrc, setNormalizedSrc] = useState(src);
+
+  useEffect(() => {
+    let cancelled = false;
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+
+    image.onload = () => {
+      if (cancelled) return;
+
+      try {
+        const maxScan = 900;
+        const ratio = Math.min(1, maxScan / Math.max(image.naturalWidth || 1, image.naturalHeight || 1));
+        const scanW = Math.max(1, Math.round(image.naturalWidth * ratio));
+        const scanH = Math.max(1, Math.round(image.naturalHeight * ratio));
+
+        const scan = document.createElement("canvas");
+        scan.width = scanW;
+        scan.height = scanH;
+        const sctx = scan.getContext("2d", { willReadFrequently: true });
+        if (!sctx) return;
+
+        sctx.clearRect(0, 0, scanW, scanH);
+        sctx.drawImage(image, 0, 0, scanW, scanH);
+
+        const pixels = sctx.getImageData(0, 0, scanW, scanH).data;
+        let minX = scanW;
+        let minY = scanH;
+        let maxX = -1;
+        let maxY = -1;
+
+        // Beverage photos in the catalog normally use white/transparent backgrounds.
+        // Ignore those margins and find the actual visible can/bottle.
+        for (let y = 0; y < scanH; y++) {
+          for (let x = 0; x < scanW; x++) {
+            const p = (y * scanW + x) * 4;
+            const r = pixels[p];
+            const g = pixels[p + 1];
+            const b = pixels[p + 2];
+            const a = pixels[p + 3];
+
+            const isTransparent = a < 20;
+            const isNearWhite = r > 242 && g > 242 && b > 242;
+            if (isTransparent || isNearWhite) continue;
+
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+          }
+        }
+
+        if (maxX < minX || maxY < minY) return;
+
+        const cropW = maxX - minX + 1;
+        const cropH = maxY - minY + 1;
+
+        // Avoid accidental microscopic crops if the source has an unusual background.
+        if (cropW < 8 || cropH < 8) return;
+
+        const canvasSize = 420;
+        const padding = 42;
+        const available = canvasSize - padding * 2;
+        const scale = Math.min(available / cropW, available / cropH);
+        const drawW = cropW * scale;
+        const drawH = cropH * scale;
+        const dx = (canvasSize - drawW) / 2;
+        const dy = (canvasSize - drawH) / 2;
+
+        const out = document.createElement("canvas");
+        out.width = canvasSize;
+        out.height = canvasSize;
+        const octx = out.getContext("2d");
+        if (!octx) return;
+
+        octx.fillStyle = "#ffffff";
+        octx.fillRect(0, 0, canvasSize, canvasSize);
+        octx.drawImage(
+          scan,
+          minX,
+          minY,
+          cropW,
+          cropH,
+          dx,
+          dy,
+          drawW,
+          drawH,
+        );
+
+        const dataUrl = out.toDataURL("image/webp", 0.92);
+        if (!cancelled) setNormalizedSrc(dataUrl);
+      } catch {
+        // If the browser blocks canvas processing for any image, keep the original.
+        if (!cancelled) setNormalizedSrc(src);
+      }
+    };
+
+    image.onerror = () => {
+      if (!cancelled) setNormalizedSrc(src);
+    };
+
+    image.src = src;
+
+    return () => {
+      cancelled = true;
+    };
+  }, [src]);
+
+  return <img src={normalizedSrc} alt={alt} className={className} />;
+}
+
 function productMenuGroupPriority(product: Product) {
   const normalize = (value: unknown) =>
     String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -2007,10 +2128,10 @@ function CustomerHome() {
           {p.image_url ? (
             isBeverageProduct(p) ? (
               <div className="grid h-64 w-full place-items-center bg-white sm:h-80">
-                <img
+                <NormalizedBeverageImage
                   src={p.image_url}
                   alt={p.name}
-                  className="h-56 w-56 max-w-[78%] object-contain p-3 sm:h-64 sm:w-64"
+                  className="h-56 w-56 max-w-[78%] object-contain sm:h-64 sm:w-64"
                 />
               </div>
             ) : (
@@ -2403,10 +2524,10 @@ function CustomerHome() {
                   {i.product.image_url ? (
                     isBeverageProduct(i.product) ? (
                       <div className="grid size-24 shrink-0 place-items-center overflow-hidden rounded-2xl border border-black/5 bg-white">
-                        <img
+                        <NormalizedBeverageImage
                           src={i.product.image_url}
                           alt={i.product.name}
-                          className="size-20 object-contain p-1.5"
+                          className="size-20 object-contain"
                         />
                       </div>
                     ) : (
@@ -2487,11 +2608,15 @@ function CustomerHome() {
                     <div key={bump.id} className="flex items-center gap-3 rounded-2xl border bg-white p-3">
                       {product.image_url ? (
                         <div className="grid size-14 shrink-0 place-items-center overflow-hidden rounded-xl border border-black/5 bg-white">
-                          <img
-                            src={product.image_url}
-                            alt={product.name}
-                            className={isBeverageProduct(product) ? "size-12 object-contain p-1" : "size-full object-cover"}
-                          />
+                          {isBeverageProduct(product) ? (
+                            <NormalizedBeverageImage
+                              src={product.image_url}
+                              alt={product.name}
+                              className="size-12 object-contain"
+                            />
+                          ) : (
+                            <img src={product.image_url} alt={product.name} className="size-full object-cover" />
+                          )}
                         </div>
                       ) : <div className="size-14 rounded-xl bg-muted" />}
                       <div className="min-w-0 flex-1">
@@ -2833,11 +2958,15 @@ function CustomerHome() {
                     <div key={bump.id} className="flex items-center gap-3 rounded-2xl border bg-white p-3">
                       {product.image_url ? (
                         <div className="grid size-12 shrink-0 place-items-center overflow-hidden rounded-xl border border-black/5 bg-white">
-                          <img
-                            src={product.image_url}
-                            alt={product.name}
-                            className={isBeverageProduct(product) ? "size-10 object-contain p-1" : "size-full object-cover"}
-                          />
+                          {isBeverageProduct(product) ? (
+                            <NormalizedBeverageImage
+                              src={product.image_url}
+                              alt={product.name}
+                              className="size-10 object-contain"
+                            />
+                          ) : (
+                            <img src={product.image_url} alt={product.name} className="size-full object-cover" />
+                          )}
                         </div>
                       ) : <div className="size-12 rounded-xl bg-muted" />}
                       <div className="min-w-0 flex-1">
@@ -3117,10 +3246,10 @@ function CustomerHome() {
                       {p.image_url ? (
                         isBeverageProduct(p) ? (
                           <div className="absolute inset-0 grid place-items-center bg-white">
-                            <img
+                            <NormalizedBeverageImage
                               src={p.image_url}
                               alt={p.name}
-                              className="h-[78%] w-[78%] object-contain p-2 transition group-hover:scale-105"
+                              className="h-[78%] w-[78%] object-contain transition group-hover:scale-105"
                             />
                           </div>
                         ) : (
@@ -3175,10 +3304,10 @@ function CustomerHome() {
                       {p.image_url ? (
                         isBeverageProduct(p) ? (
                           <div className="grid size-24 shrink-0 place-items-center overflow-hidden rounded-2xl border border-black/5 bg-white">
-                            <img
+                            <NormalizedBeverageImage
                               src={p.image_url}
                               alt={p.name}
-                              className="size-20 object-contain p-1.5"
+                              className="size-20 object-contain"
                             />
                           </div>
                         ) : (
