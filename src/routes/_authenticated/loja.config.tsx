@@ -1024,6 +1024,25 @@ function ConfigPage() {
           Quando ativo, o cliente monta o pedido sozinho pela página pública e o pedido cai no sistema marcado como{" "}
           <b>cardápio digital</b>. Quando desativado, a página mostra um aviso pedindo pra chamar no WhatsApp.
         </p>
+
+        <div className={`rounded-2xl border p-4 ${
+          c.digital_menu_closed_reservations_enabled === true ? "border-amber-300 bg-amber-50" : "bg-muted/30"
+        }`}>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="font-black">🗓️ Reservas quando a loja estiver fechada</p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                Quando ativado, o cliente pode montar o pedido, escolher uma data e pagar normalmente mesmo com a loja fechada.
+                O pedido entra no sistema como <strong>PEDIDO AGENDADO</strong> e exige contato com o cliente antes da entrega.
+              </p>
+            </div>
+            <Switch
+              checked={c.digital_menu_closed_reservations_enabled === true}
+              onCheckedChange={(v) => setC({ ...c, digital_menu_closed_reservations_enabled: v })}
+            />
+          </div>
+        </div>
+
         <div className="space-y-4">
           <div>
             <Label>Pagamento online</Label>
@@ -2843,7 +2862,7 @@ function ManualStoreStatusCard() {
           <h2 className="font-semibold">Abrir/fechar loja agora — IA + cardápio</h2>
           <p className="mt-1 text-xs text-muted-foreground">
             Sobrepõe o horário configurado abaixo. Quando você fechar a loja por aqui, o cliente ainda pode navegar no
-            cardápio, mas não consegue adicionar produtos nem finalizar uma compra.
+            cardápio. Se a opção de reservas estiver ativada, ele poderá pagar normalmente e deixar o pedido agendado para entrega posterior.
           </p>
         </div>
         {!loading && status !== "auto" && (
