@@ -86,21 +86,37 @@ function attribution() {
 
   const q = new URLSearchParams(window.location.search);
   const ref = document.referrer || "";
-  const explicitSource = q.get("utm_source") || q.get("source");
+  const explicitSourceRaw = q.get("utm_source") || q.get("source");
+  const explicitSource = String(explicitSourceRaw || "").trim().toLowerCase();
+  const fbclid = q.get("fbclid");
 
   let source = explicitSource || "direct";
   let medium = q.get("utm_medium") || (ref ? "referral" : "none");
 
-  if (!explicitSource && /instagram\.com|l\.instagram\.com/i.test(ref)) {
+  // Prioridade: quando o próprio link informa a origem, respeitamos essa informação.
+  if (explicitSource) {
+    if (["fb", "facebook", "facebook_ads"].includes(explicitSource)) {
+      source = "facebook";
+    } else if (["ig", "instagram", "instagram_ads"].includes(explicitSource)) {
+      source = "instagram";
+    } else if (["meta", "meta_ads", "metaads"].includes(explicitSource)) {
+      source = "meta_ads";
+    }
+  } else if (/instagram\.com|l\.instagram\.com/i.test(ref)) {
     source = "instagram";
-    medium = "social";
-  } else if (!explicitSource && /facebook\.com|fb\.com/i.test(ref)) {
+    medium = fbclid ? "paid_social" : "social";
+  } else if (/facebook\.com|fb\.com/i.test(ref)) {
     source = "facebook";
-    medium = "social";
-  } else if (!explicitSource && /google\./i.test(ref)) {
+    medium = fbclid ? "paid_social" : "social";
+  } else if (fbclid) {
+    // O fbclid prova que o clique passou pela Meta, mas sozinho não informa
+    // com segurança se veio do Facebook ou do Instagram.
+    source = "meta_ads";
+    medium = "paid_social";
+  } else if (/google\./i.test(ref)) {
     source = "google";
     medium = "organic";
-  } else if (!explicitSource && /wa\.me|whatsapp/i.test(ref)) {
+  } else if (/wa\.me|whatsapp/i.test(ref)) {
     source = "whatsapp";
     medium = "social";
   }
@@ -113,7 +129,7 @@ function attribution() {
     term: q.get("utm_term"),
     content: q.get("utm_content"),
     click_id:
-      q.get("fbclid") ||
+      fbclid ||
       q.get("gclid") ||
       q.get("ttclid") ||
       q.get("msclkid"),
