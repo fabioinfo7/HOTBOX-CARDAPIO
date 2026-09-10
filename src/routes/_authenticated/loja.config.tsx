@@ -1845,7 +1845,11 @@ function ConfigPage() {
       </div>
 
       <div style={tabStyle("entrega")}>
-        <BairrosAtendidosCard pricingMode={c.delivery_pricing_mode === "distance" ? "distance" : "neighborhood"} />
+        <BairrosAtendidosCard
+          pricingMode={c.delivery_pricing_mode === "distance" ? "distance" : "neighborhood"}
+          schedulingEnabled={c.digital_menu_scheduling_enabled === true}
+          onSchedulingChange={(enabled) => setC((current: any) => ({ ...current, digital_menu_scheduling_enabled: enabled }))}
+        />
       </div>
 
       <div style={tabStyle("entrega")}>
@@ -2156,16 +2160,27 @@ function AiInstructionsCard() {
 // Card de bairros atendidos (lista oficial, usada pelo sistema pra decidir
 // área de entrega — tem prioridade sobre o cálculo por distância/km)
 // ============================================================
-function BairrosAtendidosCard({ pricingMode }: { pricingMode: "neighborhood" | "distance" }) {
+function BairrosAtendidosCard({
+  pricingMode,
+  schedulingEnabled,
+  onSchedulingChange,
+}: {
+  pricingMode: "neighborhood" | "distance";
+  schedulingEnabled: boolean;
+  onSchedulingChange: (enabled: boolean) => void;
+}) {
   const [bairros, setBairros] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [newNome, setNewNome] = useState("");
   const [newFee, setNewFee] = useState("");
+  const [newCutoff, setNewCutoff] = useState("");
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingNome, setEditingNome] = useState("");
   const [editingFee, setEditingFee] = useState("");
+  const [editingCutoff, setEditingCutoff] = useState("");
   const [saving, setSaving] = useState(false);
+  const [savingScheduling, setSavingScheduling] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -2183,7 +2198,12 @@ function BairrosAtendidosCard({ pricingMode }: { pricingMode: "neighborhood" | "
     if (!nome) return;
     setAdding(true);
     const fee = newFee === "" ? null : Math.max(0, Number(newFee));
-    const { error } = await (supabase as any).from("bairros_atendidos").insert({ nome, ativo: true, delivery_fee: Number.isFinite(fee as number) ? fee : null });
+    const { error } = await (supabase as any).from("bairros_atendidos").insert({
+      nome,
+      ativo: true,
+      delivery_fee: Number.isFinite(fee as number) ? fee : null,
+      delivery_cutoff_time: newCutoff || null,
+    });
     if (error) {
       toast.error(error.message.includes("duplicate") ? "Esse bairro já está cadastrado." : error.message);
       setAdding(false);
@@ -2191,6 +2211,7 @@ function BairrosAtendidosCard({ pricingMode }: { pricingMode: "neighborhood" | "
     }
     setNewNome("");
     setNewFee("");
+    setNewCutoff("");
     toast.success("Bairro adicionado!");
     setAdding(false);
     load();
@@ -2205,12 +2226,14 @@ function BairrosAtendidosCard({ pricingMode }: { pricingMode: "neighborhood" | "
     setEditingId(b.id);
     setEditingNome(b.nome);
     setEditingFee(b.delivery_fee == null ? "" : String(b.delivery_fee));
+    setEditingCutoff(b.delivery_cutoff_time ? String(b.delivery_cutoff_time).slice(0, 5) : "");
   }
 
   function cancelEdit() {
     setEditingId(null);
     setEditingNome("");
     setEditingFee("");
+    setEditingCutoff("");
   }
 
   async function saveEdit(id: string) {
@@ -2218,7 +2241,11 @@ function BairrosAtendidosCard({ pricingMode }: { pricingMode: "neighborhood" | "
     if (!nome) return;
     setSaving(true);
     const fee = editingFee === "" ? null : Math.max(0, Number(editingFee));
-    const { error } = await (supabase as any).from("bairros_atendidos").update({ nome, delivery_fee: Number.isFinite(fee as number) ? fee : null }).eq("id", id);
+    const { error } = await (supabase as any).from("bairros_atendidos").update({
+      nome,
+      delivery_fee: Number.isFinite(fee as number) ? fee : null,
+      delivery_cutoff_time: editingCutoff || null,
+    }).eq("id", id);
     if (error) {
       toast.error(error.message.includes("duplicate") ? "Esse bairro já está cadastrado." : error.message);
       setSaving(false);
@@ -2228,6 +2255,22 @@ function BairrosAtendidosCard({ pricingMode }: { pricingMode: "neighborhood" | "
     cancelEdit();
     toast.success("Bairro atualizado!");
     load();
+  }
+
+  async function toggleScheduling(enabled: boolean) {
+    setSavingScheduling(true);
+    onSchedulingChange(enabled);
+    const { error } = await (supabase as any)
+      .from("store_config")
+      .update({ digital_menu_scheduling_enabled: enabled })
+      .eq("id", 1);
+    setSavingScheduling(false);
+    if (error) {
+      onSchedulingChange(!enabled);
+      toast.error("Não foi possível alterar o agendamento: " + error.message);
+      return;
+    }
+    toast.success(enabled ? "Agendamento fora do horário habilitado!" : "Agendamento fora do horário desabilitado.");
   }
 
   async function remove(id: string) {
@@ -2245,8 +2288,28 @@ function BairrosAtendidosCard({ pricingMode }: { pricingMode: "neighborhood" | "
         </p>
       </div>
 
+      <div className={`rounded-2xl border p-4 ${schedulingEnabled ? "border-violet-200 bg-violet-50" : "bg-muted/30"}`}>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="font-black">📅 Agendamento após o horário limite</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              Quando ativado, se o cliente tentar pedir depois do horário máximo do bairro, ele poderá concluir como
+              <strong> AGENDAMENTO</strong>. A loja entra em contato para confirmar a entrega no próximo horário disponível.
+            </p>
+          </div>
+          <Switch
+            checked={schedulingEnabled}
+            onCheckedChange={(enabled) => void toggleScheduling(enabled)}
+            disabled={savingScheduling}
+          />
+        </div>
+        <p className="mt-2 text-[11px] font-semibold text-violet-700">
+          Todos os horários abaixo usam o horário de Brasília (America/Sao_Paulo).
+        </p>
+      </div>
+
       {/* form para adicionar */}
-      <div className="grid gap-2 sm:grid-cols-[1fr_150px_auto]">
+      <div className="grid gap-2 sm:grid-cols-[1fr_140px_150px_auto]">
         <Input
           placeholder="Nome do bairro (ex: Vila São Luís)"
           value={newNome}
@@ -2258,6 +2321,13 @@ function BairrosAtendidosCard({ pricingMode }: { pricingMode: "neighborhood" | "
           <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground">R$</span>
           <Input type="number" min="0" step="0.01" placeholder="Taxa" value={newFee} onChange={(e) => setNewFee(e.target.value)} className="rounded-xl pl-9 text-sm" />
         </div>
+        <Input
+          type="time"
+          value={newCutoff}
+          onChange={(e) => setNewCutoff(e.target.value)}
+          className="rounded-xl text-sm"
+          title="Horário máximo de entrega — Brasília"
+        />
         <Button size="sm" onClick={add} disabled={adding || !newNome.trim()}>
           <Plus className="size-4" /> Adicionar
         </Button>
@@ -2290,6 +2360,13 @@ function BairrosAtendidosCard({ pricingMode }: { pricingMode: "neighborhood" | "
                     <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-muted-foreground">R$</span>
                     <Input type="number" min="0" step="0.01" value={editingFee} onChange={(e) => setEditingFee(e.target.value)} className="h-8 rounded-lg pl-7 text-sm" />
                   </div>
+                  <Input
+                    type="time"
+                    value={editingCutoff}
+                    onChange={(e) => setEditingCutoff(e.target.value)}
+                    className="h-8 w-28 shrink-0 rounded-lg text-xs"
+                    title="Horário máximo — Brasília"
+                  />
                   <Button
                     size="icon"
                     variant="ghost"
@@ -2305,7 +2382,18 @@ function BairrosAtendidosCard({ pricingMode }: { pricingMode: "neighborhood" | "
                 </>
               ) : (
                 <>
-                  <div className="min-w-0 flex-1"><p className="text-sm font-semibold leading-snug">{b.nome}</p><p className="mt-0.5 text-[11px] text-muted-foreground">Taxa: <strong className="text-foreground">{b.delivery_fee == null ? "padrão" : `R$ ${Number(b.delivery_fee).toFixed(2).replace(".", ",")}`}</strong>{pricingMode === "distance" ? " • ignorada enquanto km estiver ativo" : ""}</p></div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold leading-snug">{b.nome}</p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      Taxa: <strong className="text-foreground">{b.delivery_fee == null ? "padrão" : `R$ ${Number(b.delivery_fee).toFixed(2).replace(".", ",")}`}</strong>
+                      {pricingMode === "distance" ? " • ignorada enquanto km estiver ativo" : ""}
+                    </p>
+                    <p className="mt-0.5 text-[11px] font-semibold text-violet-700">
+                      {b.delivery_cutoff_time
+                        ? `Entrega até ${String(b.delivery_cutoff_time).slice(0, 5)} • horário de Brasília`
+                        : "Sem horário máximo específico"}
+                    </p>
+                  </div>
                   <Button size="icon" variant="ghost" className="size-7 shrink-0" onClick={() => startEdit(b)}>
                     <Pencil className="size-3.5" />
                   </Button>
@@ -2701,7 +2789,7 @@ function formatRangeDays(days: number[]): string {
 
 /** Botão de abrir/fechar a loja manualmente — sobrepõe o horário automático
  *  abaixo. Enquanto estiver em "Aberta manualmente" ou "Fechada
- *  manualmente", o horário configurado no card abaixo é ignorado pela IA. */
+ *  manualmente", o horário configurado no card abaixo é ignorado pela IA e pelo cardápio digital. */
 function ManualStoreStatusCard() {
   const [status, setStatus] = useState<"auto" | "open" | "closed">("auto");
   const [loading, setLoading] = useState(true);
@@ -2737,25 +2825,25 @@ function ManualStoreStatusCard() {
       next === "auto"
         ? "Voltou a seguir o horário automático."
         : next === "open"
-          ? "Loja aberta manualmente — a IA atende normalmente, mesmo fora do horário configurado."
-          : "Loja fechada manualmente — a IA vai avisar que está fechada, mesmo dentro do horário configurado.",
+          ? "Loja aberta manualmente — IA e cardápio aceitam pedidos, mesmo fora do horário configurado."
+          : "Loja fechada manualmente — a IA informa que está fechada e o cardápio bloqueia novas compras.",
     );
   }
 
   const OPTIONS: { value: "auto" | "open" | "closed"; label: string; desc: string }[] = [
     { value: "auto", label: "Automático", desc: "Segue o horário configurado abaixo" },
-    { value: "open", label: "Forçar aberta", desc: "IA atende, mesmo fora do horário" },
-    { value: "closed", label: "Forçar fechada", desc: "IA informa que está fechada, mesmo no horário" },
+    { value: "open", label: "Forçar aberta", desc: "IA e cardápio aceitam pedidos" },
+    { value: "closed", label: "Forçar fechada", desc: "Cardápio visível, mas sem novas compras" },
   ];
 
   return (
     <Card className="space-y-3 p-5">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="font-semibold">Abrir/fechar loja agora</h2>
+          <h2 className="font-semibold">Abrir/fechar loja agora — IA + cardápio</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            Sobrepõe o horário de atendimento configurado abaixo — sempre que você abrir ou fechar a loja por aqui,
-            essa escolha manda na hora, e a IA acata ela.
+            Sobrepõe o horário configurado abaixo. Quando você fechar a loja por aqui, o cliente ainda pode navegar no
+            cardápio, mas não consegue adicionar produtos nem finalizar uma compra.
           </p>
         </div>
         {!loading && status !== "auto" && (
@@ -2794,7 +2882,8 @@ function ManualStoreStatusCard() {
           </div>
           {status === "closed" && (
             <p className="rounded-lg bg-red-50 p-3 text-xs text-red-700">
-              Enquanto estiver em "Forçar fechada", a IA responde a qualquer contato com: <br />
+              Enquanto estiver em "Forçar fechada", a IA avisa que a loja está fechada e o cardápio continua visível,
+              mas bloqueia novas compras. A mensagem configurada abaixo informa o horário de funcionamento. <br />
               <span className="italic">
                 "Estamos fechados devido a problemas na nossa operação. Amanhã abriremos normalmente."
               </span>
@@ -2883,8 +2972,8 @@ function BusinessHoursCard() {
         <div>
           <h2 className="font-semibold">Horário de atendimento</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            Configure os dias e horários em que a loja atende. Fora desse horário, a IA avisa automaticamente que a loja
-            está fechada e informa quando volta a atender — sem processar pedido novo enquanto estiver fechada.
+            Configure os dias e horários em que a loja atende. Fora desse horário, a IA avisa que a loja está fechada e
+            o cardápio digital continua totalmente visível, mas bloqueia adicionar produtos e finalizar compras.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
