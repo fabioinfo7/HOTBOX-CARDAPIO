@@ -106,7 +106,7 @@ export function MetaPixelInjector({ placement }: { placement: Placement }) {
 
       ensureFacebookPixel(pixelId);
     }
-
+//
     void load();
 
     return () => {
