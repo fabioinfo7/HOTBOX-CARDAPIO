@@ -366,6 +366,27 @@ type PublicStoreStatus = {
   closed_reservations_enabled?: boolean;
 };
 
+function isBeverageProduct(product: Product) {
+  const normalize = (value: unknown) =>
+    String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+  const category = normalize(product.category);
+  const name = normalize(product.name);
+  const kind = normalize(product.kind);
+
+  return (
+    kind === "beverage" ||
+    category.includes("bebida") ||
+    category.includes("refrigerante") ||
+    category.includes("suco") ||
+    category.includes("drink") ||
+    name.includes("coca") ||
+    name.includes("guarana") ||
+    name.includes("refrigerante") ||
+    name.includes("suco")
+  );
+}
+
 function productMenuGroupPriority(product: Product) {
   const normalize = (value: unknown) =>
     String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -1984,7 +2005,17 @@ function CustomerHome() {
             40 - 60 Minutos
           </div>
           {p.image_url ? (
-            <img src={p.image_url} alt={p.name} className="h-64 w-full object-cover sm:h-80" />
+            isBeverageProduct(p) ? (
+              <div className="grid h-64 w-full place-items-center bg-white sm:h-80">
+                <img
+                  src={p.image_url}
+                  alt={p.name}
+                  className="h-56 w-56 max-w-[78%] object-contain p-3 sm:h-64 sm:w-64"
+                />
+              </div>
+            ) : (
+              <img src={p.image_url} alt={p.name} className="h-64 w-full object-cover sm:h-80" />
+            )
           ) : (
             <div className="grid h-64 w-full place-items-center bg-muted text-sm text-muted-foreground sm:h-80">
               Sem foto
@@ -2370,13 +2401,23 @@ function CustomerHome() {
               <div key={idx} className="rounded-2xl border bg-card p-3">
                 <div className="flex gap-3">
                   {i.product.image_url ? (
-                    <img
-                      src={i.product.image_url}
-                      alt={i.product.name}
-                      className="size-24 shrink-0 rounded-2xl object-contain"
-                    />
+                    isBeverageProduct(i.product) ? (
+                      <div className="grid size-24 shrink-0 place-items-center overflow-hidden rounded-2xl border border-black/5 bg-white">
+                        <img
+                          src={i.product.image_url}
+                          alt={i.product.name}
+                          className="size-20 object-contain p-1.5"
+                        />
+                      </div>
+                    ) : (
+                      <img
+                        src={i.product.image_url}
+                        alt={i.product.name}
+                        className="size-24 shrink-0 rounded-2xl object-contain"
+                      />
+                    )
                   ) : (
-                    <div className="grid size-16 shrink-0 place-items-center rounded-xl bg-muted text-[9px] text-muted-foreground">
+                    <div className="grid size-24 shrink-0 place-items-center rounded-2xl bg-muted text-[9px] text-muted-foreground">
                       Sem foto
                     </div>
                   )}
@@ -2444,7 +2485,15 @@ function CustomerHome() {
                   const bumpPrice = bump.price_override == null ? getEffectivePrice(product).price : Number(bump.price_override);
                   return (
                     <div key={bump.id} className="flex items-center gap-3 rounded-2xl border bg-white p-3">
-                      {product.image_url ? <img src={product.image_url} alt={product.name} className="size-14 rounded-xl object-cover" /> : <div className="size-14 rounded-xl bg-muted" />}
+                      {product.image_url ? (
+                        <div className="grid size-14 shrink-0 place-items-center overflow-hidden rounded-xl border border-black/5 bg-white">
+                          <img
+                            src={product.image_url}
+                            alt={product.name}
+                            className={isBeverageProduct(product) ? "size-12 object-contain p-1" : "size-full object-cover"}
+                          />
+                        </div>
+                      ) : <div className="size-14 rounded-xl bg-muted" />}
                       <div className="min-w-0 flex-1">
                         <p className="text-xs font-black uppercase text-amber-700">{bump.title}</p>
                         <p className="truncate text-sm font-black">{product.name}</p>
@@ -2782,7 +2831,15 @@ function CustomerHome() {
                   const bumpPrice = bump.price_override == null ? getEffectivePrice(product).price : Number(bump.price_override);
                   return (
                     <div key={bump.id} className="flex items-center gap-3 rounded-2xl border bg-white p-3">
-                      {product.image_url ? <img src={product.image_url} alt={product.name} className="size-12 rounded-xl object-cover" /> : <div className="size-12 rounded-xl bg-muted" />}
+                      {product.image_url ? (
+                        <div className="grid size-12 shrink-0 place-items-center overflow-hidden rounded-xl border border-black/5 bg-white">
+                          <img
+                            src={product.image_url}
+                            alt={product.name}
+                            className={isBeverageProduct(product) ? "size-10 object-contain p-1" : "size-full object-cover"}
+                          />
+                        </div>
+                      ) : <div className="size-12 rounded-xl bg-muted" />}
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-black">{product.name}</p>
                         <p className="truncate text-[11px] text-muted-foreground">{bump.subtitle || bump.title}</p>
@@ -3058,11 +3115,21 @@ function CustomerHome() {
                       className="group relative aspect-[4/5] overflow-hidden rounded-[24px] bg-white text-left shadow-sm ring-1 ring-black/5"
                     >
                       {p.image_url ? (
-                        <img
-                          src={p.image_url}
-                          alt={p.name}
-                          className="absolute inset-0 size-full object-cover transition group-hover:scale-105"
-                        />
+                        isBeverageProduct(p) ? (
+                          <div className="absolute inset-0 grid place-items-center bg-white">
+                            <img
+                              src={p.image_url}
+                              alt={p.name}
+                              className="h-[78%] w-[78%] object-contain p-2 transition group-hover:scale-105"
+                            />
+                          </div>
+                        ) : (
+                          <img
+                            src={p.image_url}
+                            alt={p.name}
+                            className="absolute inset-0 size-full object-cover transition group-hover:scale-105"
+                          />
+                        )
                       ) : (
                         <div className="absolute inset-0 bg-muted" />
                       )}
@@ -3106,9 +3173,19 @@ function CustomerHome() {
                       }`}
                     >
                       {p.image_url ? (
-                        <img src={p.image_url} alt={p.name} className="size-24 shrink-0 rounded-2xl object-contain" />
+                        isBeverageProduct(p) ? (
+                          <div className="grid size-24 shrink-0 place-items-center overflow-hidden rounded-2xl border border-black/5 bg-white">
+                            <img
+                              src={p.image_url}
+                              alt={p.name}
+                              className="size-20 object-contain p-1.5"
+                            />
+                          </div>
+                        ) : (
+                          <img src={p.image_url} alt={p.name} className="size-24 shrink-0 rounded-2xl object-contain" />
+                        )
                       ) : (
-                        <div className="grid size-16 shrink-0 place-items-center rounded-xl bg-muted text-[9px] text-muted-foreground">
+                        <div className="grid size-24 shrink-0 place-items-center rounded-2xl bg-muted text-[9px] text-muted-foreground">
                           Sem foto
                         </div>
                       )}
