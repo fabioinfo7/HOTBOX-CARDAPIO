@@ -362,6 +362,7 @@ type PublicStoreStatus = {
   business_hours_enabled?: boolean;
   business_hours?: StoreBusinessRange[];
   business_hours_closed_message?: string | null;
+  closed_reservations_enabled?: boolean;
 };
 
 function productMenuGroupPriority(product: Product) {
@@ -430,6 +431,89 @@ function isStoreOpenByBusinessHours(config: PublicStoreStatus | null) {
   });
 }
 
+
+function brasiliaDatePartsNow() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+
+  const weekday = String(parts.find((part) => part.type === "weekday")?.value || "Sun");
+  const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return {
+    year: Number(parts.find((part) => part.type === "year")?.value || 0),
+    month: Number(parts.find((part) => part.type === "month")?.value || 1),
+    day: Number(parts.find((part) => part.type === "day")?.value || 1),
+    weekday: map[weekday] ?? 0,
+    hour: Number(parts.find((part) => part.type === "hour")?.value || 0),
+    minute: Number(parts.find((part) => part.type === "minute")?.value || 0),
+  };
+}
+
+function ymdFromUTCDate(date: Date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
+function reservationDayAllowed(config: PublicStoreStatus | null, ymd: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return false;
+  const [year, month, day] = ymd.split("-").map(Number);
+  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+  if (config?.business_hours_enabled !== true) return true;
+  const ranges = Array.isArray(config?.business_hours) ? config!.business_hours! : [];
+  return ranges.some((range) => Array.isArray(range.days) && range.days.map(Number).includes(weekday));
+}
+
+function nextReservationDate(config: PublicStoreStatus | null) {
+  const now = brasiliaDatePartsNow();
+  const base = new Date(Date.UTC(now.year, now.month - 1, now.day));
+  const currentMinutes = now.hour * 60 + now.minute;
+  const ranges = Array.isArray(config?.business_hours) ? config!.business_hours! : [];
+
+  for (let offset = 0; offset <= 30; offset += 1) {
+    const candidate = new Date(base.getTime() + offset * 86400000);
+    const ymd = ymdFromUTCDate(candidate);
+    if (!reservationDayAllowed(config, ymd)) continue;
+
+    if (offset === 0 && config?.business_hours_enabled === true) {
+      const weekday = candidate.getUTCDay();
+      const hasFutureOpening = ranges.some((range) => {
+        if (!Array.isArray(range.days) || !range.days.map(Number).includes(weekday)) return false;
+        const open = storeTimeToMinutes(range.open);
+        return open != null && open > currentMinutes;
+      });
+      if (!hasFutureOpening) continue;
+    }
+    return ymd;
+  }
+
+  const tomorrow = new Date(base.getTime() + 86400000);
+  return ymdFromUTCDate(tomorrow);
+}
+
+function maxReservationDate() {
+  const now = brasiliaDatePartsNow();
+  const base = new Date(Date.UTC(now.year, now.month - 1, now.day));
+  return ymdFromUTCDate(new Date(base.getTime() + 30 * 86400000));
+}
+
+function formatReservationDate(ymd: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return ymd;
+  const [year, month, day] = ymd.split("-").map(Number);
+  return new Intl.DateTimeFormat("pt-BR", {
+    weekday: "long",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(year, month - 1, day)));
+}
+
 function formatStoreBusinessHours(config: PublicStoreStatus | null) {
   const ranges = Array.isArray(config?.business_hours) ? config!.business_hours! : [];
   if (!ranges.length) return "horário não informado";
@@ -480,6 +564,9 @@ function CustomerHome() {
   const [paymentChoice, setPaymentChoice] = useState<PaymentChoice>("online");
   const [digitalMenuEnabled, setDigitalMenuEnabled] = useState(true);
   const [publicStoreStatus, setPublicStoreStatus] = useState<PublicStoreStatus | null>(null);
+  const [closedStoreReservationMode, setClosedStoreReservationMode] = useState(false);
+  const [reservationDate, setReservationDate] = useState("");
+  const [reservationAccepted, setReservationAccepted] = useState(false);
   const [configLoaded, setConfigLoaded] = useState(false);
   const [customerSession, setCustomerSession] = useState<Session | null>(null);
   const [areaStatus, setAreaStatus] = useState<AreaStatus>("idle");
@@ -729,7 +816,11 @@ function CustomerHome() {
         setCardEnabled((data as any).digital_menu_card_enabled !== false);
         if (data.banner_tagline) setBannerTagline(data.banner_tagline);
       }
-      setPublicStoreStatus((storeStatusResult?.data || {}) as PublicStoreStatus);
+      const loadedStoreStatus = (storeStatusResult?.data || {}) as PublicStoreStatus;
+      setPublicStoreStatus(loadedStoreStatus);
+      if (!isStoreOpenByBusinessHours(loadedStoreStatus) && loadedStoreStatus.closed_reservations_enabled === true) {
+        setReservationDate((current) => current || nextReservationDate(loadedStoreStatus));
+      }
 
       const pay = paymentResult?.data || {};
       const provider: CheckoutPayment = pay.provider === "mercadopago" ? "mercadopago" : pay.provider === "appmax" ? "appmax" : "infinitepay";
@@ -1374,6 +1465,19 @@ function CustomerHome() {
 
     const hours = formatStoreBusinessHours(publicStoreStatus);
     const custom = String(publicStoreStatus?.business_hours_closed_message || "").trim();
+
+    if (publicStoreStatus?.closed_reservations_enabled === true) {
+      setClosedStoreReservationMode(true);
+      setReservationDate((current) => current || nextReservationDate(publicStoreStatus));
+      toast.info(
+        custom
+          ? `${custom} Você pode reservar seu pedido agora para receber quando estivermos em funcionamento.`
+          : "A loja está fechada agora, mas você pode reservar seu pedido e garantir sua posição na fila do próximo atendimento.",
+        { duration: 6500 },
+      );
+      return true;
+    }
+
     toast.error(
       custom
         ? `${custom} Horário de funcionamento: ${hours}.`
@@ -1439,7 +1543,21 @@ function CustomerHome() {
     if (!cart.length) return toast.error("Seu carrinho está vazio");
     if (!form.name || !form.phone) return toast.error("Preencha nome e telefone");
     if (isDelivery && (!form.street || !form.number || !form.neighborhood)) return toast.error("Preencha rua, número e bairro");
-    if (!canStartPurchaseNow()) return;
+    const storeOpenNow = isStoreOpenByBusinessHours(publicStoreStatus);
+    if (!storeOpenNow) {
+      if (publicStoreStatus?.closed_reservations_enabled !== true) {
+        canStartPurchaseNow();
+        return;
+      }
+      if (!closedStoreReservationMode) setClosedStoreReservationMode(true);
+      if (!reservationDate) return toast.error("Escolha a data da sua reserva.");
+      if (!reservationDayAllowed(publicStoreStatus, reservationDate)) {
+        return toast.error("Escolha um dia em que a HotBox esteja em funcionamento.");
+      }
+      if (!reservationAccepted) {
+        return toast.error("Confirme que você está ciente de que este pedido é uma reserva para entrega posterior.");
+      }
+    }
     if (isDelivery && areaStatus !== "supported") return toast.error("Valide sua área de entrega antes de finalizar");
     if (isDelivery && outsideDeliveryHours && !schedulingEnabled) {
       return toast.error(deliveryWindowMessage());
@@ -1454,7 +1572,7 @@ function CustomerHome() {
 
     trackAnalytics("checkout_started", {
       event_category: "commerce", value: total, customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: paymentChoice === "online" ? paymentProvider : paymentChoice,
-      properties: { delivery_mode: form.deliveryMode, neighborhood: form.neighborhood, cep_prefix: onlyDigits(form.cep).slice(0,5), delivery_fee: deliveryFee, subtotal, discount: couponDiscount, coupon: appliedCoupon?.code || null, items: cart.map(i => ({ product_id: i.product.id, product_name: i.product.name, qty: i.qty, unit_price: cartUnitPrice(i) })) }
+      properties: { reservation: !isStoreOpenByBusinessHours(publicStoreStatus) && closedStoreReservationMode, reservation_date: reservationDate || null, delivery_mode: form.deliveryMode, neighborhood: form.neighborhood, cep_prefix: onlyDigits(form.cep).slice(0,5), delivery_fee: deliveryFee, subtotal, discount: couponDiscount, coupon: appliedCoupon?.code || null, items: cart.map(i => ({ product_id: i.product.id, product_name: i.product.name, qty: i.qty, unit_price: cartUnitPrice(i) })) }
     });
     setPlacing(true);
     try {
@@ -1472,6 +1590,8 @@ function CustomerHome() {
           address_cep: isDelivery ? form.cep || null : null,
           payment_kind: paymentChoice === "online" ? paymentProvider : paymentChoice,
           scheduled: isDelivery && outsideDeliveryHours && schedulingEnabled && scheduleAccepted,
+          store_reservation: !storeOpenNow && publicStoreStatus?.closed_reservations_enabled === true && closedStoreReservationMode,
+          reservation_date: !storeOpenNow && closedStoreReservationMode ? reservationDate : null,
           coupon_code: appliedCoupon?.code || null,
           access_token: customerSession?.access_token || null,
           items: cart.map((i) => ({
@@ -2394,7 +2514,16 @@ function CustomerHome() {
                     </div>
                   </div>
 
-                  {deliveryCutoffTime && (
+                  {!isStoreOpenByBusinessHours(publicStoreStatus) && publicStoreStatus?.closed_reservations_enabled === true && (
+          <div className="mb-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3">
+            <p className="text-sm font-black text-amber-950">🗓️ Loja fechada agora — reservas abertas</p>
+            <p className="mt-1 text-xs leading-relaxed text-amber-900">
+              Você pode montar e pagar seu pedido normalmente. Ele ficará reservado para a data escolhida e a HotBox entrará em contato antes da entrega.
+            </p>
+          </div>
+        )}
+
+        {deliveryCutoffTime && (
                     <div className={`mt-3 rounded-2xl border-2 p-4 ${
                       outsideDeliveryHours
                         ? schedulingEnabled
@@ -2522,7 +2651,81 @@ function CustomerHome() {
                       <div className="flex-1">
                         <div className="flex items-center justify-between gap-2">
                           <p className="text-sm font-black">Pagar agora</p>
-                          {paymentChoice === "online" && <span className="rounded-full bg-primary px-2 py-1 text-[10px] font-black text-primary-foreground">SELECIONADO</span>}
+                          {!isStoreOpenByBusinessHours(publicStoreStatus) && publicStoreStatus?.closed_reservations_enabled === true && (
+            <div className="mb-5 rounded-[24px] border-2 border-amber-300 bg-gradient-to-br from-amber-50 to-orange-50 p-4 shadow-sm">
+              <div className="flex items-start gap-3">
+                <div className="grid size-10 shrink-0 place-items-center rounded-full bg-amber-400 text-xl">🗓️</div>
+                <div className="min-w-0">
+                  <p className="text-xs font-black uppercase tracking-[0.14em] text-amber-800">Reserva HotBox</p>
+                  <h3 className="mt-0.5 text-lg font-black text-zinc-950">Garanta seu pedido para quando abrirmos</h3>
+                  <p className="mt-1 text-xs leading-relaxed text-zinc-700">
+                    A loja está fechada agora, mas você pode pagar normalmente e deixar seu pedido reservado.
+                    Ele <strong>não entra em preparo agora</strong>. Antes da entrega, a HotBox entrará em contato para confirmar o horário com você.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]">
+                <div>
+                  <Label className="text-xs font-black text-zinc-800">Data desejada</Label>
+                  <Input
+                    type="date"
+                    min={nextReservationDate(publicStoreStatus)}
+                    max={maxReservationDate()}
+                    value={reservationDate}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (value && !reservationDayAllowed(publicStoreStatus, value)) {
+                        toast.error("Nesse dia a HotBox não possui horário de funcionamento cadastrado.");
+                        return;
+                      }
+                      setReservationDate(value);
+                      setReservationAccepted(false);
+                    }}
+                    className="mt-1 h-11 rounded-xl bg-white text-base"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReservationDate(nextReservationDate(publicStoreStatus));
+                    setReservationAccepted(false);
+                  }}
+                  className="self-end rounded-xl border border-amber-300 bg-white px-4 py-3 text-xs font-black text-amber-900"
+                >
+                  Próximo atendimento
+                </button>
+              </div>
+
+              {reservationDate && (
+                <p className="mt-2 text-xs font-semibold text-amber-900">
+                  Data selecionada: {formatReservationDate(reservationDate)}
+                </p>
+              )}
+
+              <label className={`mt-4 flex cursor-pointer items-start gap-3 rounded-2xl border p-3 ${
+                reservationAccepted ? "border-emerald-400 bg-emerald-50" : "border-amber-300 bg-white"
+              }`}>
+                <input
+                  type="checkbox"
+                  checked={reservationAccepted}
+                  onChange={(e) => setReservationAccepted(e.target.checked)}
+                  className="mt-0.5 size-5 accent-emerald-600"
+                />
+                <span>
+                  <span className="block text-sm font-black text-zinc-950">
+                    Sim, quero reservar este pedido
+                  </span>
+                  <span className="mt-0.5 block text-[11px] leading-relaxed text-zinc-600">
+                    Estou ciente de que o pagamento será feito agora, mas a entrega será realizada posteriormente,
+                    dentro do horário de funcionamento. A HotBox fará contato antes da entrega.
+                  </span>
+                </span>
+              </label>
+            </div>
+          )}
+
+          {paymentChoice === "online" && <span className="rounded-full bg-primary px-2 py-1 text-[10px] font-black text-primary-foreground">SELECIONADO</span>}
                         </div>
                         <p className="text-[11px] text-muted-foreground">{paymentProvider === "mercadopago" ? "Pagamento rápido e seguro dentro da HotBox" : paymentProvider === "appmax" ? "Checkout transparente Appmax dentro da HotBox" : "Pagamento seguro pela InfinitePay"}</p>
                       </div>
