@@ -3122,7 +3122,9 @@ function CustomerHome() {
                     <div key={p.id}>
                     <button
                       onClick={() => openDetail(p)}
-                      className={`flex w-full items-center gap-4 rounded-[24px] border border-black/5 bg-white p-3.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${!p.active ? "grayscale opacity-55" : ""}`}
+                      className={`flex w-full items-center gap-4 rounded-[24px] border border-black/5 bg-white p-3.5 text-left shadow-sm transition ${
+                        p.active ? "hover:-translate-y-0.5 hover:shadow-md" : "grayscale opacity-55"
+                      }`}
                     >
                       {p.image_url ? (
                         <img src={p.image_url} alt={p.name} className="size-24 shrink-0 rounded-2xl object-contain" />
@@ -3132,7 +3134,15 @@ function CustomerHome() {
                         </div>
                       )}
                       <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-1.5"><h4 className="font-bold uppercase leading-tight">{p.name}</h4>{p.is_combo && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-black text-amber-800">COMBO</span>}</div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <h4 className="font-bold uppercase leading-tight">{p.name}</h4>
+                          {p.is_combo && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-black text-amber-800">COMBO</span>}
+                          {!p.active && (
+                            <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-zinc-700">
+                              Esgotado por hoje
+                            </span>
+                          )}
+                        </div>
                         {p.description && (
                           <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{p.description}</p>
                         )}
@@ -3153,8 +3163,10 @@ function CustomerHome() {
                           );
                         })()}
                       </div>
-                      <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[#ffd400] text-black shadow-sm">
-                        <Plus className="size-5 stroke-[3]" />
+                      <span className={`grid size-9 shrink-0 place-items-center rounded-full shadow-sm ${
+                        p.active ? "bg-[#ffd400] text-black" : "bg-zinc-200 text-zinc-500"
+                      }`}>
+                        {p.active ? <Plus className="size-5 stroke-[3]" /> : <X className="size-4" />}
                       </span>
                     </button>
                     {!query && activeCategory === "Tudo" && reviewsWithComments.length > 0 && index === 3 && (
