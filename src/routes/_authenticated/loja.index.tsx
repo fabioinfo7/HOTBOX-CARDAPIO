@@ -71,10 +71,10 @@ type Order = {
   ifood_driver_assigned_at: string | null;
   nfood_driver_assigned_at: string | null;
   loyalty_reward_used?: boolean;
-  subtotal?: number | null;
-  delivery_fee?: number | null;
-  coupon_code?: string | null;
-  coupon_discount?: number | null;
+  is_scheduled?: boolean;
+  scheduled_for_date?: string | null;
+  reservation_requires_contact?: boolean;
+  scheduled_delivery_note?: string | null;
 };
 
 function statusLabelFor(o: Order): string {
@@ -101,15 +101,6 @@ function OrdersDashboard() {
     }
   });
   const [manualOpen, setManualOpen] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
-
-  useEffect(() => {
-    const media = window.matchMedia("(max-width: 767px)");
-    const sync = () => setIsMobile(media.matches);
-    sync();
-    media.addEventListener?.("change", sync);
-    return () => media.removeEventListener?.("change", sync);
-  }, []);
 
   function toggleView() {
     const next = viewMode === "cards" ? "rows" : "cards";
@@ -308,59 +299,37 @@ function OrdersDashboard() {
   const activeList = orders.filter((o) => o.status !== "failed");
 
   return (
-    <div className="space-y-4 md:space-y-6">
-      <div className="hb-orders-mobile-hero flex flex-col gap-3 md:flex-row md:flex-wrap md:items-center md:justify-between">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl font-black tracking-tight md:text-2xl">Pedidos ao vivo</h1>
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">Pedidos ao vivo</h1>
+          <p className="text-sm text-muted-foreground">
+            Atualização em tempo real.{" "}
             {pendingCount > 0 && (
-              <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-primary px-2 py-0.5 text-[11px] font-black text-primary-foreground">
-                {pendingCount}
-              </span>
+              <span className="font-semibold text-primary">{pendingCount} aguardando confirmação</span>
             )}
-          </div>
-          <p className="mt-0.5 text-xs text-muted-foreground md:text-sm">
-            Atualização em tempo real
-            {pendingCount > 0 && <span className="font-semibold text-primary"> • {pendingCount} aguardando</span>}
           </p>
         </div>
-
-        <div className="grid grid-cols-[1fr_auto] gap-2 md:flex md:items-center">
-          <Button className="min-h-11 rounded-xl font-bold md:min-h-9" onClick={() => setManualOpen(true)}>
-            <PackagePlus className="size-4" /> Novo pedido
+        <div className="flex items-center gap-2">
+          <Button variant="default" onClick={() => setManualOpen(true)}>
+            <PackagePlus className="size-4" /> Novo pedido manual
           </Button>
-
           <Button
             variant="outline"
             size="icon"
-            className="hidden rounded-xl md:inline-flex"
             title={viewMode === "cards" ? "Ver como lista" : "Ver como cards"}
             onClick={toggleView}
           >
             {viewMode === "cards" ? <List className="size-4" /> : <LayoutGrid className="size-4" />}
           </Button>
-
-          <Button
-            variant="outline"
-            size="icon"
-            className="min-h-11 min-w-11 rounded-xl md:hidden"
-            onClick={() => setAlarmOn(!alarmOn)}
-            title={alarmOn ? "Silenciar alarme" : "Ativar alarme"}
-          >
-            {alarmOn ? <Bell className="size-4" /> : <BellOff className="size-4" />}
-          </Button>
-
-          <Button variant="outline" className="hidden md:inline-flex" onClick={() => setAlarmOn(!alarmOn)}>
+          <Button variant="outline" onClick={() => setAlarmOn(!alarmOn)}>
             {alarmOn ? <Bell className="size-4" /> : <BellOff className="size-4" />}{" "}
             {alarmOn ? "Alarme ativo" : "Alarme mudo"}
           </Button>
+          {alarmOn && !soundReady && (
+            <span className="text-xs text-muted-foreground">Clique em qualquer lugar da tela pra liberar o som</span>
+          )}
         </div>
-
-        {alarmOn && !soundReady && (
-          <span className="hidden text-xs text-muted-foreground md:inline">
-            Clique em qualquer lugar da tela pra liberar o som
-          </span>
-        )}
       </div>
 
       <ManualOrderDialog open={manualOpen} onOpenChange={setManualOpen} />
@@ -368,7 +337,7 @@ function OrdersDashboard() {
       {/* áudio do alarme agora é o singleton compartilhado (src/lib/alarm-audio.ts) */}
 
       {lowStock.length > 0 && (
-        <div className="flex flex-col items-stretch gap-3 rounded-2xl border-2 border-warning bg-warning/10 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+        <div className="flex items-center justify-between gap-3 rounded-xl border-2 border-warning bg-warning/10 p-4">
           <div>
             <h3 className="font-bold text-warning-foreground">
               ⚠ Estoque baixo: {lowStock.map((i) => i.name).join(", ")}
@@ -398,7 +367,7 @@ function OrdersDashboard() {
 
       {!activeList.length && !failedInList.length ? (
         <Card className="p-10 text-center text-muted-foreground">Nenhum pedido em andamento</Card>
-      ) : !isMobile && viewMode === "rows" ? (
+      ) : viewMode === "rows" ? (
         <Card className="overflow-hidden p-0">
           <table className="w-full text-sm">
             <thead className="bg-muted text-left text-xs uppercase tracking-wide">
@@ -445,10 +414,16 @@ function OrdersDashboard() {
                         {o.source === "whatsapp" && <MessageCircle className="size-3 text-emerald-600" />}
                         {o.source === "ifood" && <UtensilsCrossed className="size-3 text-red-600" />}
                         {o.source === "99food" && <UtensilsCrossed className="size-3 text-yellow-700" />}
-                        {o.source === "site" && <Store className="size-3 text-orange-600" />}
                         <span className="font-semibold">{o.customer_name}</span>
                       </div>
                       <div className="text-[11px] text-muted-foreground">{formatDateTime(o.created_at)}</div>
+                      {o.is_scheduled && (
+                        <div className="mt-1 inline-flex flex-col rounded-lg border-2 border-amber-400 bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-950">
+                          <span>🗓️ PEDIDO AGENDADO</span>
+                          <span>FAZER CONTATO ANTES DE ENTREGAR</span>
+                          {o.scheduled_for_date && <span>Data: {new Date(`${o.scheduled_for_date}T12:00:00`).toLocaleDateString("pt-BR")}</span>}
+                        </div>
+                      )}
                     </td>
                     <td className="max-w-[260px] p-2 text-xs">
                       {o.address_street ? `${o.address_street}, ${o.address_number}` : "—"}
@@ -490,7 +465,7 @@ function OrdersDashboard() {
           </table>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:gap-4 xl:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {activeList.map((o) => {
             const isPending = o.status === "pending" || o.status === "pending_review";
             // pedido da iFood parado sem ninguém aceitar há mais de 3 minutos —
@@ -509,8 +484,20 @@ function OrdersDashboard() {
             return (
               <Card
                 key={o.id}
-                className={`w-full min-w-0 overflow-hidden rounded-[22px] border p-0 shadow-sm transition-shadow hover:shadow-lg ${customerHasUnread ? "customer-message-pulse border-2 border-emerald-500" : platformStuck ? "ifood-urgent-pulse border-2 border-red-500" : isPending ? "alarm-pulse" : ""}`}
+                className={`overflow-hidden rounded-2xl border p-0 shadow-sm transition-shadow hover:shadow-lg ${customerHasUnread ? "customer-message-pulse border-2 border-emerald-500" : platformStuck ? "ifood-urgent-pulse border-2 border-red-500" : isPending ? "alarm-pulse" : ""}`}
               >
+                {o.is_scheduled && (
+                  <div className="-mx-4 -mt-4 mb-4 border-b-2 border-amber-500 bg-amber-300 px-4 py-3 text-center text-amber-950">
+                    <p className="text-sm font-black uppercase tracking-wide">🗓️ PEDIDO AGENDADO / RESERVADO</p>
+                    <p className="mt-0.5 text-xs font-black">FAZER CONTATO COM O CLIENTE ANTES DE ENTREGAR</p>
+                    {o.scheduled_for_date && (
+                      <p className="mt-1 text-xs font-bold">
+                        Data escolhida: {new Date(`${o.scheduled_for_date}T12:00:00`).toLocaleDateString("pt-BR")}
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {o.loyalty_reward_used && (
                   <div className="flex items-center justify-center gap-2 bg-emerald-600 px-3 py-3 text-center text-sm font-black uppercase tracking-wide text-white shadow-inner">
                     <Gift className="size-5" /> CLIENTE FIEL — TEM DIREITO A UMA BATATA GRÁTIS
@@ -534,7 +521,7 @@ function OrdersDashboard() {
                   </span>
                 </div>
 
-                <div className="px-3.5 pb-1 pt-3 sm:px-4">
+                <div className="px-4 pb-1 pt-3">
                   <div className="flex items-center justify-between gap-2">
                     <span className="flex items-center gap-1.5 text-sm font-bold">
                       {o.source === "whatsapp" && (
@@ -550,11 +537,6 @@ function OrdersDashboard() {
                       {o.source === "99food" && (
                         <span className="flex items-center gap-1 rounded-full bg-yellow-100 px-1.5 py-0.5 text-[10px] font-bold text-yellow-800">
                           <UtensilsCrossed className="size-3" /> 99Food
-                        </span>
-                      )}
-                      {o.source === "site" && (
-                        <span className="flex items-center gap-1 rounded-full bg-orange-50 px-1.5 py-0.5 text-[10px] font-bold text-orange-700">
-                          <Store className="size-3" /> Cardápio Hotbox
                         </span>
                       )}
                       Pedido: {orderDisplayRef(o)}
@@ -631,19 +613,6 @@ function OrdersDashboard() {
                     )}
                   </div>
 
-                  {o.coupon_code && Number(o.coupon_discount || 0) > 0 && (
-                    <div className="mt-2.5 rounded-xl border border-fuchsia-200 bg-fuchsia-50 px-3 py-2">
-                      <div className="flex items-center justify-between gap-2 text-[11px] font-black text-fuchsia-800">
-                        <span>🎟 CUPOM {o.coupon_code}</span>
-                        <span>-{brl(Number(o.coupon_discount || 0))}</span>
-                      </div>
-                      <div className="mt-1 grid grid-cols-2 gap-x-3 text-[10px] text-fuchsia-900/80">
-                        <span>Subtotal: {brl(Number(o.subtotal || 0))}</span>
-                        <span className="text-right">Entrega: {brl(Number(o.delivery_fee || 0))}</span>
-                      </div>
-                    </div>
-                  )}
-
                   <div className="mt-2.5 flex items-center justify-between border-t border-dashed pt-2">
                     <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                       Total
@@ -686,12 +655,12 @@ function OrdersDashboard() {
                 )}
 
                 {/* ações — grade 2 colunas, compacta */}
-                <div className="grid grid-cols-2 gap-2 border-t bg-muted/30 p-3">
+                <div className="grid grid-cols-2 gap-1.5 border-t bg-muted/30 p-3">
                   <Link to="/loja/pedido/$id" params={{ id: o.id }} search={{}} className="col-span-2">
                     <Button
                       size="sm"
                       variant="outline"
-                      className="min-h-11 w-full rounded-xl border-2 font-bold sm:min-h-9 sm:rounded-full sm:font-semibold"
+                      className="w-full rounded-full border-2 font-semibold"
                       disabled={o.customer_cancel_requested}
                     >
                       <Eye className="size-3.5" /> Ver detalhes
@@ -707,7 +676,7 @@ function OrdersDashboard() {
                   {o.status === "pending" && !o.customer_cancel_requested && (
                     <Button
                       size="sm"
-                      className="min-h-11 rounded-xl font-bold shadow-sm sm:min-h-9 sm:rounded-full sm:font-semibold"
+                      className="rounded-full font-semibold shadow-sm"
                       onClick={() => updateStatus(o, "preparing")}
                     >
                       <ChefHat className="size-3.5" /> Aceitar
@@ -716,7 +685,7 @@ function OrdersDashboard() {
                   {o.status === "preparing" && !o.customer_cancel_requested && (
                     <Button
                       size="sm"
-                      className="min-h-11 rounded-xl font-bold shadow-sm sm:min-h-9 sm:rounded-full sm:font-semibold"
+                      className="rounded-full font-semibold shadow-sm"
                       onClick={() => updateStatus(o, "ready_pickup")}
                     >
                       <Package className="size-3.5" /> Pronto
@@ -725,7 +694,7 @@ function OrdersDashboard() {
                   {o.status === "ready_pickup" && !o.customer_cancel_requested && (
                     <Button
                       size="sm"
-                      className="min-h-11 rounded-xl font-bold shadow-sm sm:min-h-9 sm:rounded-full sm:font-semibold"
+                      className="rounded-full font-semibold shadow-sm"
                       onClick={() => updateStatus(o, "out_for_delivery")}
                     >
                       <Bike className="size-3.5" /> Saindo
@@ -735,7 +704,7 @@ function OrdersDashboard() {
                     <Button
                       size="sm"
                       variant="secondary"
-                      className="min-h-11 rounded-xl font-bold shadow-sm sm:min-h-9 sm:rounded-full sm:font-semibold"
+                      className="rounded-full font-semibold shadow-sm"
                       onClick={() => updateStatus(o, "delivered")}
                     >
                       <CheckCircle2 className="size-3.5" /> Entregue
@@ -763,7 +732,7 @@ function OrdersDashboard() {
                     <Button
                       size="sm"
                       variant={customerHasUnread ? "default" : "outline"}
-                      className="min-h-11 w-full rounded-xl font-bold sm:min-h-9 sm:rounded-full sm:font-semibold"
+                      className="w-full rounded-full font-semibold"
                     >
                       <MessageCircle className="size-3.5" />
                       {customerHasUnread ? "Nova mensagem — abrir conversa" : "Conversar com cliente"}
