@@ -1977,6 +1977,10 @@ function CustomerHome() {
           <div className="absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-2xl bg-white/95 p-1.5 shadow-lg backdrop-blur">
             <img src={HOTBOX_LOGO_URL} alt="HotBox Delivery" className="size-9 rounded-xl object-contain" />
           </div>
+          <div className="absolute right-4 top-4 z-10 inline-flex items-center gap-1.5 rounded-full bg-black/65 px-3 py-2 text-xs font-black text-white shadow-lg backdrop-blur">
+            <Clock className="size-3.5" />
+            40 - 60 Minutos
+          </div>
           {p.image_url ? (
             <img src={p.image_url} alt={p.name} className="h-64 w-full object-cover sm:h-80" />
           ) : (
@@ -2009,18 +2013,6 @@ function CustomerHome() {
               <p className="mt-1 text-2xl font-extrabold text-primary">{brl(eff.price)}</p>
             );
           })()}
-
-          {deliveryTime && (
-            <div className="mt-3 flex items-center gap-3 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sky-950">
-              <span className="grid size-9 shrink-0 place-items-center rounded-full bg-sky-100">
-                <Clock className="size-4" />
-              </span>
-              <div>
-                <p className="text-xs font-black uppercase tracking-wide">Previsão de entrega</p>
-                <p className="text-sm font-bold">{deliveryTime}-{deliveryTime + 15} minutos</p>
-              </div>
-            </div>
-          )}
 
           {publicReviews.length > 0 && (
             <button
@@ -2131,11 +2123,6 @@ function CustomerHome() {
                             >
                               <div className="flex flex-wrap items-center gap-1.5">
                                 <p className="text-sm font-bold text-zinc-900">{option.display_name || option.name}</p>
-                                {option.linked_product_id && (
-                                  <span className="rounded-full bg-sky-50 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-sky-700">
-                                    Produto do cardápio
-                                  </span>
-                                )}
                               </div>
                               {(option.display_description || option.description) && <p className="mt-0.5 text-[11px] text-muted-foreground">{option.display_description || option.description}</p>}
                               <p className="mt-0.5 text-xs font-black text-primary">
