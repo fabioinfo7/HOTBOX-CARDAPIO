@@ -1334,6 +1334,15 @@ function customerNameFromDigitalPaymentMessage(text: string): string | null {
   return name || null;
 }
 
+function totalFromDigitalPaymentMessage(text: string): string | null {
+  // O cardápio já envia o total final (itens + adicionais + entrega - descontos).
+  // Pegamos exatamente esse valor para o operador gerar o link correto.
+  const raw = String(text ?? "");
+  const match = raw.match(/(?:^|\n)\s*\*?Total:\s*R\$\s*([0-9.]+,[0-9]{2})\*?/i);
+  if (!match?.[1]) return null;
+  return `R$ ${match[1]}`;
+}
+
 // ============================================================
 // SUPORTE A PEDIDOS DO CARDÁPIO DIGITAL / SITE
 // ============================================================
@@ -5007,7 +5016,7 @@ async function handleIncomingMessageUnlocked(
       conversationId: conversation.id,
       phone,
       customerName: customerNameFromDigitalPaymentMessage(text) || conversation.customer_name || null,
-      reason: "CLIENTE SOLICITANDO LINK DE PAGAMENTO",
+      reason: `CLIENTE SOLICITANDO LINK DE PAGAMENTO${totalFromDigitalPaymentMessage(text) ? ` | TOTAL DO LINK: ${totalFromDigitalPaymentMessage(text)}` : ""}`,
       severity: "warn",
     });
 
