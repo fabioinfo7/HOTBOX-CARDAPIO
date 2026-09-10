@@ -11,9 +11,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Plus, Trash2, Pencil, Pizza, GlassWater, Upload, AlertTriangle, Star, Tag, Ticket } from "lucide-react";
+import { Plus, Trash2, Pencil, Pizza, GlassWater, Upload, AlertTriangle, Star, Tag, Ticket, GripVertical, Loader2 } from "lucide-react";
 import { getEffectivePrice, isPromotionActive, PROMOTION_DAY_LABELS } from "@/lib/promotions";
-import { MenuSalesTools } from "@/components/menu-sales-tools";
 
 export const Route = createFileRoute("/_authenticated/loja/produtos")({
   component: ProductsPage,
@@ -122,7 +121,7 @@ function PriceWithPromo({ product }: { product: any }) {
 }
 
 function ProductsPage() {
-  const [tab, setTab] = useState<"recipe" | "beverage" | "sales" | "ingredients">("recipe");
+  const [tab, setTab] = useState<"recipe" | "beverage" | "ingredients">("recipe");
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold">Cardápio & Insumos</h1>
@@ -131,7 +130,7 @@ function ProductsPage() {
           className={`px-3 py-2 text-sm font-medium ${tab === "recipe" ? "border-b-2 border-primary text-primary" : "text-muted-foreground"}`}
           onClick={() => setTab("recipe")}
         >
-          <Pizza className="mr-1 inline size-4" /> Produtos & Combos
+          <Pizza className="mr-1 inline size-4" /> Pizzas & Lanches
         </button>
         <button
           className={`px-3 py-2 text-sm font-medium ${tab === "beverage" ? "border-b-2 border-primary text-primary" : "text-muted-foreground"}`}
@@ -140,35 +139,39 @@ function ProductsPage() {
           <GlassWater className="mr-1 inline size-4" /> Bebidas
         </button>
         <button
-          className={`px-3 py-2 text-sm font-medium ${tab === "sales" ? "border-b-2 border-primary text-primary" : "text-muted-foreground"}`}
-          onClick={() => setTab("sales")}
-        >
-          ✨ Adicionais & Vendas
-        </button>
-        <button
           className={`px-3 py-2 text-sm font-medium ${tab === "ingredients" ? "border-b-2 border-primary text-primary" : "text-muted-foreground"}`}
           onClick={() => setTab("ingredients")}
         >
           🥫 Insumos
         </button>
       </div>
-      {tab === "sales" ? <MenuSalesTools /> : tab !== "ingredients" ? <ProductList kind={tab as "recipe" | "beverage"} /> : <IngredientList />}
+      {tab !== "ingredients" ? <ProductList kind={tab} /> : <IngredientList />}
     </div>
   );
 }
 
 function ProductList({ kind }: { kind: "recipe" | "beverage" }) {
   const [rows, setRows] = useState<any[]>([]);
-  const [statusFilter, setStatusFilter] = useState<"active" | "inactive" | "all">("active");
+  const [statusFilter, setStatusFilter] = useState<"active" | "inactive" | "all">("all");
   const [editing, setEditing] = useState<any | null>(null);
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [savingOrder, setSavingOrder] = useState(false);
+
   const load = () =>
     supabase
       .from("products")
       .select("*")
       .eq("kind", kind)
-      .order("category")
+      .order("sort_order", { ascending: true, nullsFirst: false })
       .order("name")
-      .then(({ data }) => setRows(data ?? []));
+      .then(({ data }) => {
+        const ordered = [...(data ?? [])].sort((a: any, b: any) => {
+          const aOrder = Number.isFinite(Number(a.sort_order)) ? Number(a.sort_order) : 999999;
+          const bOrder = Number.isFinite(Number(b.sort_order)) ? Number(b.sort_order) : 999999;
+          return aOrder - bOrder || String(a.name || "").localeCompare(String(b.name || ""), "pt-BR");
+        });
+        setRows(ordered);
+      });
   useEffect(() => {
     load();
   }, [kind]);
@@ -193,6 +196,67 @@ function ProductList({ kind }: { kind: "recipe" | "beverage" }) {
     const { error } = await supabase.from("products").update({ featured: !p.featured }).eq("id", p.id);
     if (error) toast.error(error.message);
     else load();
+  }
+
+  async function persistProductOrder(nextRows: any[]) {
+    setSavingOrder(true);
+    try {
+      // Usa intervalos de 10 para facilitar inserções futuras.
+      const normalized = nextRows.map((row, index) => ({
+        ...row,
+        sort_order: (index + 1) * 10,
+      }));
+      setRows(normalized);
+
+      const results = await Promise.all(
+        normalized.map((row) =>
+          supabase
+            .from("products")
+            .update({ sort_order: row.sort_order })
+            .eq("id", row.id),
+        ),
+      );
+      const failed = results.find((result: any) => result.error);
+      if (failed?.error) throw failed.error;
+      toast.success("Ordem do cardápio salva");
+    } catch (error: any) {
+      toast.error(error?.message || "Não foi possível salvar a nova ordem");
+      await load();
+    } finally {
+      setSavingOrder(false);
+    }
+  }
+
+  async function moveProduct(draggedProductId: string, targetProductId: string) {
+    if (!draggedProductId || draggedProductId === targetProductId || savingOrder) return;
+
+    const current = [...rows];
+    const from = current.findIndex((row) => String(row.id) === String(draggedProductId));
+    const to = current.findIndex((row) => String(row.id) === String(targetProductId));
+    if (from < 0 || to < 0) return;
+
+    const [moved] = current.splice(from, 1);
+    current.splice(to, 0, moved);
+    await persistProductOrder(current);
+  }
+
+  async function moveProductByButton(productId: string, direction: -1 | 1) {
+    if (savingOrder) return;
+    const current = [...rows];
+    const index = current.findIndex((row) => String(row.id) === String(productId));
+    if (index < 0) return;
+
+    const visibleIds = visibleRows.map((row) => String(row.id));
+    const visibleIndex = visibleIds.indexOf(String(productId));
+    const targetVisibleId = visibleIds[visibleIndex + direction];
+    if (!targetVisibleId) return;
+
+    const targetIndex = current.findIndex((row) => String(row.id) === targetVisibleId);
+    const [moved] = current.splice(index, 1);
+    const recalculatedTarget = current.findIndex((row) => String(row.id) === targetVisibleId);
+    const insertAt = direction > 0 ? recalculatedTarget + 1 : recalculatedTarget;
+    current.splice(Math.max(0, insertAt), 0, moved);
+    await persistProductOrder(current);
   }
 
   const visibleRows = rows.filter((p) =>
@@ -233,13 +297,76 @@ function ProductList({ kind }: { kind: "recipe" | "beverage" }) {
           );
         })}
       </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3">
+        <div className="min-w-0">
+          <p className="flex items-center gap-2 text-sm font-black text-zinc-900">
+            <GripVertical className="size-4 text-amber-700" />
+            Organizar posição no cardápio
+          </p>
+          <p className="mt-0.5 text-xs text-zinc-600">
+            Clique e arraste um card para mudar a sequência. A alteração é salva automaticamente e aparece no cardápio do cliente.
+          </p>
+        </div>
+        {savingOrder && (
+          <span className="flex items-center gap-1.5 text-xs font-bold text-amber-800">
+            <Loader2 className="size-3.5 animate-spin" /> Salvando ordem...
+          </span>
+        )}
+      </div>
+
       <div className="grid gap-3 md:grid-cols-2">
-        {visibleRows.map((p) => (
-          <Card key={p.id} className="flex gap-3 overflow-hidden rounded-2xl p-3 shadow-sm">
+        {visibleRows.map((p, visibleIndex) => (
+          <Card
+            key={p.id}
+            draggable={!savingOrder}
+            onDragStart={(event) => {
+              setDraggedId(String(p.id));
+              event.dataTransfer.effectAllowed = "move";
+              event.dataTransfer.setData("text/plain", String(p.id));
+            }}
+            onDragEnd={() => setDraggedId(null)}
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "move";
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              const sourceId = event.dataTransfer.getData("text/plain") || draggedId;
+              setDraggedId(null);
+              if (sourceId) void moveProduct(sourceId, String(p.id));
+            }}
+            className={`relative flex gap-3 overflow-hidden rounded-2xl p-3 shadow-sm transition ${
+              draggedId === String(p.id) ? "scale-[0.99] opacity-50 ring-2 ring-primary/40" : "hover:border-primary/30"
+            } ${savingOrder ? "pointer-events-none" : "cursor-grab active:cursor-grabbing"}`}
+          >
+            <div className="absolute left-1 top-1 z-10 flex items-center gap-0.5 rounded-full border bg-background/95 p-0.5 shadow-sm">
+              <GripVertical className="size-4 text-muted-foreground" aria-hidden="true" />
+              <button
+                type="button"
+                className="grid size-6 place-items-center rounded-full text-[11px] font-black text-muted-foreground hover:bg-muted disabled:opacity-30"
+                onClick={(event) => { event.stopPropagation(); void moveProductByButton(String(p.id), -1); }}
+                disabled={savingOrder || visibleIndex === 0}
+                title="Mover uma posição para cima"
+                aria-label={`Mover ${p.name} uma posição para cima`}
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                className="grid size-6 place-items-center rounded-full text-[11px] font-black text-muted-foreground hover:bg-muted disabled:opacity-30"
+                onClick={(event) => { event.stopPropagation(); void moveProductByButton(String(p.id), 1); }}
+                disabled={savingOrder || visibleIndex === visibleRows.length - 1}
+                title="Mover uma posição para baixo"
+                aria-label={`Mover ${p.name} uma posição para baixo`}
+              >
+                ↓
+              </button>
+            </div>
             {p.image_url ? (
-              <img src={p.image_url} alt={p.name} className="size-24 shrink-0 rounded-xl object-cover" />
+              <img src={p.image_url} alt={p.name} className="mt-7 size-24 shrink-0 rounded-xl object-cover" />
             ) : (
-              <div className="grid size-24 shrink-0 place-items-center rounded-xl bg-muted text-[10px] text-muted-foreground">
+              <div className="mt-7 grid size-24 shrink-0 place-items-center rounded-xl bg-muted text-[10px] text-muted-foreground">
                 Sem foto
               </div>
             )}
