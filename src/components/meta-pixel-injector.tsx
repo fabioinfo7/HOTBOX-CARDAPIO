@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { trackAnalytics } from "@/lib/analytics";
 
 type Placement = "menu" | "bio";
 
@@ -9,6 +10,7 @@ declare global {
     _fbq?: any;
     __hotboxMetaPixels?: Set<string>;
     __hotboxMetaPageViews?: Set<string>;
+    __hotboxMetaInjectorViews?: Set<string>;
   }
 }
 
@@ -27,9 +29,7 @@ function extractPixelId(source: string) {
     if (match?.[1]) return match[1];
   }
 
-  // Também aceita somente o ID numérico no campo.
   if (/^\d{5,}$/.test(text)) return text;
-
   return "";
 }
 
@@ -68,28 +68,32 @@ function ensureFacebookPixel(pixelId: string) {
     window.fbq?.("init", pixelId);
     window.__hotboxMetaPixels.add(pixelId);
   }
-
-  const pageKey = `${pixelId}:${window.location.pathname}${window.location.search}`;
-  window.__hotboxMetaPageViews ??= new Set<string>();
-
-  if (!window.__hotboxMetaPageViews.has(pageKey)) {
-    window.fbq?.("track", "PageView");
-    window.__hotboxMetaPageViews.add(pageKey);
-  }
 }
 
-export function MetaPixelInjector({ placement }: { placement: Placement }) {
+export function MetaPixelInjector({
+  placement,
+}: {
+  placement: Placement;
+}) {
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
       const { data, error } = await (supabase as any)
         .from("store_config")
-        .select("meta_pixel_enabled, meta_pixel_script, meta_pixel_on_menu, meta_pixel_on_bio")
+        .select(
+          "meta_pixel_enabled, meta_pixel_script, meta_pixel_on_menu, meta_pixel_on_bio",
+        )
         .eq("id", 1)
         .maybeSingle();
 
-      if (cancelled || error || !data?.meta_pixel_enabled) return;
+      if (
+        cancelled ||
+        error ||
+        !data?.meta_pixel_enabled
+      ) {
+        return;
+      }
 
       const allowed =
         placement === "menu"
@@ -100,13 +104,34 @@ export function MetaPixelInjector({ placement }: { placement: Placement }) {
 
       const pixelId = extractPixelId(data.meta_pixel_script || "");
       if (!pixelId) {
-        console.warn("[meta-pixel] Não foi possível identificar o Pixel ID no script salvo.");
+        console.warn(
+          "[meta-pixel] Não foi possível identificar o Pixel ID no script salvo.",
+        );
         return;
       }
 
       ensureFacebookPixel(pixelId);
+
+      // PageView passa pelo mesmo pipeline do Analytics 360:
+      // Browser Pixel + CAPI usam o MESMO event_id para deduplicação.
+      const pageKey =
+        `${pixelId}:${placement}:` +
+        `${window.location.pathname}${window.location.search}`;
+
+      window.__hotboxMetaInjectorViews ??= new Set<string>();
+
+      if (!window.__hotboxMetaInjectorViews.has(pageKey)) {
+        window.__hotboxMetaInjectorViews.add(pageKey);
+        trackAnalytics("page_view", {
+          event_category: "navigation",
+          properties: {
+            placement,
+            pixel_id: pixelId,
+          },
+        });
+      }
     }
-//
+
     void load();
 
     return () => {
