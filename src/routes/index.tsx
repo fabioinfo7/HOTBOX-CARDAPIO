@@ -42,10 +42,20 @@ import { quoteLoyaltyReward } from "@/lib/loyalty.functions";
 import { quoteSiteDelivery } from "@/lib/site-checkout.functions";
 import { getPublicTestimonialsFn } from "@/lib/satisfaction.functions";
 import { trackAnalytics, analyticsIdentity } from "@/lib/analytics";
+import { MetaPixelInjector } from "@/components/meta-pixel-injector";
 
 export const Route = createFileRoute("/")({
-  component: CustomerHome,
+  component: CustomerHomeTracked,
 });
+
+function CustomerHomeTracked() {
+  return (
+    <>
+      <MetaPixelInjector placement="menu" />
+      <CustomerHome />
+    </>
+  );
+}
 
 type Product = {
   id: string;
@@ -1350,6 +1360,39 @@ function CustomerHome() {
   const couponDiscount = appliedCoupon?.discount ?? 0;
   const total = Math.max(0, subtotal - couponDiscount) + (cart.length && isDelivery ? deliveryFee : 0);
 
+  function metaCartContents() {
+    return cart.map((item) => ({
+      id: String(item.product.id),
+      product_id: String(item.product.id),
+      name: item.product.name,
+      quantity: Number(item.qty || 1),
+      item_price: Number(cartUnitPrice(item).toFixed(2)),
+    }));
+  }
+
+  function metaCartItemCount() {
+    return cart.reduce(
+      (sum, item) => sum + Math.max(1, Number(item.qty || 1)),
+      0,
+    );
+  }
+
+  function metaCommerceProperties(extra: Record<string, unknown> = {}) {
+    return {
+      contents: metaCartContents(),
+      items_count: metaCartItemCount(),
+      subtotal: Number(subtotal.toFixed(2)),
+      delivery_fee: Number(
+        (cart.length && isDelivery ? deliveryFee : 0).toFixed(2),
+      ),
+      discount: Number(couponDiscount.toFixed(2)),
+      coupon: appliedCoupon?.code || null,
+      delivery_mode: form.deliveryMode,
+      neighborhood: form.neighborhood || null,
+      ...extra,
+    };
+  }
+
   function deliveryFeeLabel() {
     if (!isDelivery) return "Retirada";
     if (areaStatus !== "supported") return "A calcular";
@@ -1531,7 +1574,26 @@ function CustomerHome() {
   }, [subtotal, form.phone, form.deliveryMode, cart, appliedCoupon?.code, customerSession?.access_token]);
 
   function openDetail(p: Product, orderBumpId?: string | null, returnView: "list" | "cart" | "checkout" = "list") {
-    trackAnalytics("product_view", { event_category: "commerce", product_id: p.id, product_name: p.name, value: Number(getEffectivePrice(p).price || 0), properties: { category: p.category, featured: p.featured, order_bump: Boolean(orderBumpId) } });
+    const productPrice = Number(getEffectivePrice(p).price || 0);
+    trackAnalytics("product_view", {
+      event_category: "commerce",
+      product_id: p.id,
+      product_name: p.name,
+      quantity: 1,
+      value: productPrice,
+      properties: {
+        category: p.category,
+        featured: p.featured,
+        order_bump: Boolean(orderBumpId),
+        contents: [
+          {
+            id: String(p.id),
+            quantity: 1,
+            item_price: productPrice,
+          },
+        ],
+      },
+    });
     setSelectedProduct(p);
     setDetailQty(1);
     setDetailNotes("");
@@ -1703,7 +1765,40 @@ function CustomerHome() {
       if (ex) return c.map((i) => (i === ex ? { ...i, qty: i.qty + detailQty } : i));
       return [...c, { product: selectedProduct, qty: detailQty, notes: detailNotes, addons, orderBumpId: detailOrderBumpId, bumpPrice }];
     });
-    trackAnalytics("add_to_cart", { event_category: "commerce", product_id: selectedProduct.id, product_name: selectedProduct.name, quantity: detailQty, value: Number(getEffectivePrice(selectedProduct).price || 0), properties: { addons: addons.map(a => a.name), addon_total: addons.reduce((sum,a)=>sum+Number(a.price||0)*Math.max(1,Number(a.qty||1)),0), order_bump_id: detailOrderBumpId || null } });
+    const addonTotal = addons.reduce(
+      (sum, a) =>
+        sum +
+        Number(a.price || 0) * Math.max(1, Number(a.qty || 1)),
+      0,
+    );
+    const baseSelectedPrice = Number(
+      detailOrderBumpId && bumpPrice != null
+        ? bumpPrice
+        : getEffectivePrice(selectedProduct).price || 0,
+    );
+    const selectedUnitPrice = Number(
+      (baseSelectedPrice + addonTotal).toFixed(2),
+    );
+    trackAnalytics("add_to_cart", {
+      event_category: "commerce",
+      product_id: selectedProduct.id,
+      product_name: selectedProduct.name,
+      quantity: detailQty,
+      value: Number((selectedUnitPrice * detailQty).toFixed(2)),
+      properties: {
+        category: selectedProduct.category,
+        addons: addons.map((a) => a.name),
+        addon_total: Number(addonTotal.toFixed(2)),
+        order_bump_id: detailOrderBumpId || null,
+        contents: [
+          {
+            id: String(selectedProduct.id),
+            quantity: detailQty,
+            item_price: selectedUnitPrice,
+          },
+        ],
+      },
+    });
     toast.success(`${selectedProduct.name} adicionado`);
     setDetailOrderBumpId(null);
     setView(detailReturnView);
@@ -1723,7 +1818,28 @@ function CustomerHome() {
       if (existing) return current.map((i) => i === existing ? { ...i, qty: i.qty + 1 } : i);
       return [...current, { product, qty: 1, notes: "", addons: [], orderBumpId: bump.id, bumpPrice }];
     });
-    trackAnalytics("order_bump_added", { event_category: "commerce", product_id: product.id, product_name: product.name, quantity: 1, value: Number(bumpPrice ?? getEffectivePrice(product).price ?? 0), properties: { bump_id: bump.id, placement: bump.placement } });
+    const trackedBumpPrice = Number(
+      bumpPrice ?? getEffectivePrice(product).price ?? 0,
+    );
+    trackAnalytics("order_bump_added", {
+      event_category: "commerce",
+      product_id: product.id,
+      product_name: product.name,
+      quantity: 1,
+      value: trackedBumpPrice,
+      properties: {
+        category: product.category,
+        bump_id: bump.id,
+        placement: bump.placement,
+        contents: [
+          {
+            id: String(product.id),
+            quantity: 1,
+            item_price: trackedBumpPrice,
+          },
+        ],
+      },
+    });
     toast.success(`${product.name} adicionado à sacola`);
   }
 
@@ -1790,7 +1906,13 @@ function CustomerHome() {
 
     trackAnalytics("checkout_started", {
       event_category: "commerce", value: total, customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: paymentChoice === "online" ? paymentProvider : paymentChoice,
-      properties: { reservation: !isStoreOpenByBusinessHours(publicStoreStatus) && closedStoreReservationMode, reservation_date: reservationDate || null, delivery_mode: form.deliveryMode, neighborhood: form.neighborhood, cep_prefix: onlyDigits(form.cep).slice(0,5), delivery_fee: deliveryFee, subtotal, discount: couponDiscount, coupon: appliedCoupon?.code || null, items: cart.map(i => ({ product_id: i.product.id, product_name: i.product.name, qty: i.qty, unit_price: cartUnitPrice(i) })) }
+      properties: metaCommerceProperties({
+        reservation:
+          !isStoreOpenByBusinessHours(publicStoreStatus) &&
+          closedStoreReservationMode,
+        reservation_date: reservationDate || null,
+        cep_prefix: onlyDigits(form.cep).slice(0, 5),
+      }),
     });
     setPlacing(true);
     try {
@@ -1827,7 +1949,22 @@ function CustomerHome() {
       trackAnalytics("checkout_created", { event_category: "commerce", checkout_id: String(created.checkout.id), order_id: created?.order_id ? String(created.order_id) : null, customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: paymentChoice === "online" ? paymentProvider : paymentChoice, value: Number(created.checkout.total || total), properties: { pay_on_delivery: Boolean(created?.pay_on_delivery), provider: created.checkout.payment_provider || paymentProvider } });
 
       if (created?.pay_on_delivery && created?.order_id) {
-        trackAnalytics("purchase", { event_category: "commerce", checkout_id: String(created.checkout.id), order_id: String(created.order_id), customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: String(created.payment_method || paymentChoice), value: Number(created.checkout.total || total), properties: { payment_timing: "delivery" } });
+        trackAnalytics("purchase", {
+          event_category: "commerce",
+          checkout_id: String(created.checkout.id),
+          order_id: String(created.order_id),
+          customer_name: form.name,
+          customer_phone: onlyDigits(form.phone),
+          payment_method: String(
+            created.payment_method || paymentChoice,
+          ),
+          value: Number(created.checkout.total || total),
+          quantity: metaCartItemCount(),
+          properties: metaCommerceProperties({
+            payment_timing: "delivery",
+            provider: "pay_on_delivery",
+          }),
+        });
         pushMyOrder(String(created.order_id));
         void refreshActiveOrders();
         setCart([]);
@@ -1840,7 +1977,16 @@ function CustomerHome() {
       if (provider === "mercadopago") {
         setPaymentProvider("mercadopago");
         setForm((current) => ({ ...current, payment: "mercadopago" }));
-        trackAnalytics("payment_started", { event_category: "payment", checkout_id: String(created.checkout.id), payment_method: "mercadopago", value: Number(created.checkout.total || total) });
+        trackAnalytics("payment_started", {
+          event_category: "payment",
+          checkout_id: String(created.checkout.id),
+          payment_method: "mercadopago",
+          value: Number(created.checkout.total || total),
+          quantity: metaCartItemCount(),
+          properties: metaCommerceProperties({
+            provider: "mercadopago",
+          }),
+        });
         setMpCheckout({ id: String(created.checkout.id), total: Number(created.checkout.total || total) });
         scrollToCheckoutSection("payment-section");
         return;
@@ -1849,7 +1995,16 @@ function CustomerHome() {
       if (provider === "appmax") {
         setPaymentProvider("appmax");
         setForm((current) => ({ ...current, payment: "appmax" }));
-        trackAnalytics("payment_started", { event_category: "payment", checkout_id: String(created.checkout.id), payment_method: "appmax", value: Number(created.checkout.total || total) });
+        trackAnalytics("payment_started", {
+          event_category: "payment",
+          checkout_id: String(created.checkout.id),
+          payment_method: "appmax",
+          value: Number(created.checkout.total || total),
+          quantity: metaCartItemCount(),
+          properties: metaCommerceProperties({
+            provider: "appmax",
+          }),
+        });
         setAppmaxCheckout({ id: String(created.checkout.id), total: Number(created.checkout.total || total) });
         scrollToCheckoutSection("payment-section");
         return;
@@ -1890,8 +2045,25 @@ function CustomerHome() {
   }
 
   function finishMercadoPago(orderId?: string | null) {
-    if (orderId) { pushMyOrder(orderId); void refreshActiveOrders(); }
     const checkoutId = mpCheckout?.id || "";
+    if (orderId) {
+      trackAnalytics("purchase", {
+        event_category: "commerce",
+        checkout_id: checkoutId,
+        order_id: String(orderId),
+        customer_name: form.name,
+        customer_phone: onlyDigits(form.phone),
+        payment_method: "mercadopago",
+        value: Number(mpCheckout?.total || total),
+        quantity: metaCartItemCount(),
+        properties: metaCommerceProperties({
+          provider: "mercadopago",
+          payment_timing: "online",
+        }),
+      });
+      pushMyOrder(orderId);
+      void refreshActiveOrders();
+    }
     setCart([]);
     removeCoupon();
     setMpCheckout(null);
@@ -1908,8 +2080,25 @@ function CustomerHome() {
   }
 
   function finishAppmax(orderId?: string | null) {
-    if (orderId) { pushMyOrder(orderId); void refreshActiveOrders(); }
     const checkoutId = appmaxCheckout?.id || "";
+    if (orderId) {
+      trackAnalytics("purchase", {
+        event_category: "commerce",
+        checkout_id: checkoutId,
+        order_id: String(orderId),
+        customer_name: form.name,
+        customer_phone: onlyDigits(form.phone),
+        payment_method: "appmax",
+        value: Number(appmaxCheckout?.total || total),
+        quantity: metaCartItemCount(),
+        properties: metaCommerceProperties({
+          provider: "appmax",
+          payment_timing: "online",
+        }),
+      });
+      pushMyOrder(orderId);
+      void refreshActiveOrders();
+    }
     setCart([]);
     removeCoupon();
     setAppmaxCheckout(null);
@@ -3013,7 +3202,7 @@ function CustomerHome() {
                 {isDelivery && payOnDeliveryEnabled && payOnDeliveryCardEnabled && (
                   <button
                     type="button"
-                    onClick={() => { setPaymentChoice("delivery_card"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "delivery_card" }); scrollToCheckoutSection("checkout-action"); }}
+                    onClick={() => { setPaymentChoice("delivery_card"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "delivery_card", value: total, quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: "pay_on_delivery" }) }); scrollToCheckoutSection("checkout-action"); }}
                     className={`w-full rounded-2xl border-2 p-4 text-left transition ${paymentChoice === "delivery_card" ? "border-amber-500 bg-amber-50 shadow-sm" : "border-border bg-white hover:border-amber-300"}`}
                   >
                     <div className="flex items-center gap-3">
@@ -3032,7 +3221,7 @@ function CustomerHome() {
                 {isDelivery && payOnDeliveryEnabled && payOnDeliveryPixEnabled && (
                   <button
                     type="button"
-                    onClick={() => { setPaymentChoice("delivery_pix"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "delivery_pix" }); scrollToCheckoutSection("checkout-action"); }}
+                    onClick={() => { setPaymentChoice("delivery_pix"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "delivery_pix", value: total, quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: "pay_on_delivery" }) }); scrollToCheckoutSection("checkout-action"); }}
                     className={`w-full rounded-2xl border-2 p-4 text-left transition ${paymentChoice === "delivery_pix" ? "border-amber-500 bg-amber-50 shadow-sm" : "border-border bg-white hover:border-amber-300"}`}
                   >
                     <div className="flex items-center gap-3">
