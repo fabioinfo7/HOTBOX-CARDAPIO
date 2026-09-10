@@ -28,6 +28,7 @@ type CheckoutInput = {
   address_city?: string | null;
   address_cep?: string | null;
   payment_kind: SitePaymentKind;
+  scheduled?: boolean | null;
   coupon_code?: string | null;
   access_token?: string | null;
   items: CheckoutItemInput[];
@@ -35,6 +36,119 @@ type CheckoutInput = {
 
 function digits(v: unknown) {
   return String(v ?? "").replace(/\D/g, "");
+}
+
+function brasiliaMinutesNow() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date());
+  const hour = Number(parts.find((part) => part.type === "hour")?.value || 0);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value || 0);
+  return hour * 60 + minute;
+}
+
+function cutoffMinutes(value: unknown) {
+  const match = String(value || "").match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+function businessTimeToMinutes(value: unknown) {
+  const match = String(value || "").match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+function brasiliaDayAndMinutes() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Sao_Paulo",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+  const weekday = String(parts.find((part) => part.type === "weekday")?.value || "Sun");
+  const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const hour = Number(parts.find((part) => part.type === "hour")?.value || 0);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value || 0);
+  return { day: map[weekday] ?? 0, minutes: hour * 60 + minute };
+}
+
+function storeIsOpenNow(cfg: any) {
+  if (cfg?.manual_store_status === "open") return true;
+  if (cfg?.manual_store_status === "closed") return false;
+  if (cfg?.business_hours_enabled !== true) return true;
+
+  const ranges = Array.isArray(cfg?.business_hours) ? cfg.business_hours : [];
+  if (!ranges.length) return false;
+
+  const now = brasiliaDayAndMinutes();
+  const previousDay = (now.day + 6) % 7;
+
+  return ranges.some((range: any) => {
+    const days = Array.isArray(range?.days) ? range.days.map(Number) : [];
+    const open = businessTimeToMinutes(range?.open);
+    const close = businessTimeToMinutes(range?.close);
+    if (open == null || close == null || !days.length) return false;
+
+    if (open === close) return days.includes(now.day);
+    if (close > open) return days.includes(now.day) && now.minutes >= open && now.minutes < close;
+
+    return (days.includes(now.day) && now.minutes >= open) ||
+      (days.includes(previousDay) && now.minutes < close);
+  });
+}
+
+function formatBusinessHoursForCustomer(cfg: any) {
+  const ranges = Array.isArray(cfg?.business_hours) ? cfg.business_hours : [];
+  if (!ranges.length) return "horário não informado";
+
+  const names = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+  return ranges
+    .filter((r: any) => Array.isArray(r?.days) && r.days.length && r.open && r.close)
+    .map((r: any) => {
+      const days = [...r.days].map(Number).sort((a, b) => a - b);
+      return `${days.map((d) => names[d] || "").filter(Boolean).join(", ")}: ${String(r.open).slice(0, 5)} às ${String(r.close).slice(0, 5)}`;
+    })
+    .join(" • ");
+}
+
+async function getNeighborhoodDeliveryWindow(supabaseAdmin: any, neighborhood: string) {
+  const [{ data: neighborhoodConfig }, { data: storeConfig }] = await Promise.all([
+    (supabaseAdmin as any)
+      .from("bairros_atendidos")
+      .select("nome,delivery_cutoff_time")
+      .eq("ativo", true)
+      .ilike("nome", String(neighborhood || "").trim())
+      .limit(1)
+      .maybeSingle(),
+    (supabaseAdmin as any)
+      .from("store_config")
+      .select("digital_menu_scheduling_enabled")
+      .eq("id", 1)
+      .maybeSingle(),
+  ]);
+
+  const rawCutoff = neighborhoodConfig?.delivery_cutoff_time
+    ? String(neighborhoodConfig.delivery_cutoff_time).slice(0, 5)
+    : null;
+  const cutoff = cutoffMinutes(rawCutoff);
+  const outsideDeliveryHours = cutoff != null ? brasiliaMinutesNow() > cutoff : false;
+
+  return {
+    deliveryCutoffTime: rawCutoff,
+    outsideDeliveryHours,
+    schedulingEnabled: storeConfig?.digital_menu_scheduling_enabled === true,
+  };
 }
 
 
@@ -61,6 +175,7 @@ export const quoteSiteDelivery = createServerFn({ method: "POST" })
     if (!area?.supported) return { supported: false, reason: area?.reason || "outside_area", neighborhood: area?.neighborhood || neighborhood } as const;
 
     const normalizedNeighborhood = String(area?.neighborhood || neighborhood);
+    const deliveryWindow = await getNeighborhoodDeliveryWindow(supabaseAdmin, normalizedNeighborhood);
     const pricingMode = area?.pricing_mode === "distance" ? "distance" : "neighborhood";
     if (pricingMode === "neighborhood") {
       const fee = Number(area?.fee ?? 0);
@@ -71,6 +186,7 @@ export const quoteSiteDelivery = createServerFn({ method: "POST" })
         fee: Number.isFinite(fee) ? fee : 0,
         distanceKm: null,
         needsNumber: false,
+        ...deliveryWindow,
       } as const;
     }
 
@@ -82,6 +198,7 @@ export const quoteSiteDelivery = createServerFn({ method: "POST" })
         fee: null,
         distanceKm: null,
         needsNumber: true,
+        ...deliveryWindow,
       } as const;
     }
 
@@ -91,7 +208,7 @@ export const quoteSiteDelivery = createServerFn({ method: "POST" })
       .eq("id", 1)
       .maybeSingle();
     if (!cfg || cfg.store_lat == null || cfg.store_lng == null) {
-      return { supported: true, pricingMode, neighborhood: normalizedNeighborhood, needsNumber: false, quoteUnavailable: true, reason: "store_location_missing" } as const;
+      return { supported: true, pricingMode, neighborhood: normalizedNeighborhood, needsNumber: false, quoteUnavailable: true, reason: "store_location_missing", ...deliveryWindow } as const;
     }
 
     const fullAddress = `${street}, ${number}, ${normalizedNeighborhood}, ${city || cfg.fixed_delivery_city || "Duque de Caxias"} - RJ, Brasil`;
@@ -112,10 +229,10 @@ export const quoteSiteDelivery = createServerFn({ method: "POST" })
     );
 
     if (result.outOfArea) {
-      return { supported: false, pricingMode, neighborhood: normalizedNeighborhood, reason: "distance_outside_area", distanceKm: result.distanceKm } as const;
+      return { supported: false, pricingMode, neighborhood: normalizedNeighborhood, reason: "distance_outside_area", distanceKm: result.distanceKm, ...deliveryWindow } as const;
     }
     if (!result.usedDistancePricing || result.distanceKm == null) {
-      return { supported: true, pricingMode, neighborhood: normalizedNeighborhood, needsNumber: false, quoteUnavailable: true, reason: "distance_unavailable" } as const;
+      return { supported: true, pricingMode, neighborhood: normalizedNeighborhood, needsNumber: false, quoteUnavailable: true, reason: "distance_unavailable", ...deliveryWindow } as const;
     }
     return {
       supported: true,
@@ -125,6 +242,7 @@ export const quoteSiteDelivery = createServerFn({ method: "POST" })
       distanceKm: Number(result.distanceKm),
       needsNumber: false,
       uncertain: Boolean(result.uncertain),
+      ...deliveryWindow,
     } as const;
   });
 
@@ -148,9 +266,20 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
 
     const { data: cfg } = await supabaseAdmin
       .from("store_config")
-      .select("digital_payment_provider,infinitepay_enabled,infinitepay_handle,mercadopago_enabled,mercadopago_public_key,mercadopago_access_token,appmax_enabled,appmax_merchant_client_id,appmax_merchant_client_secret,appmax_external_id,digital_menu_card_enabled,digital_menu_pix_enabled,digital_menu_pay_on_delivery_enabled,digital_menu_pay_on_delivery_card_enabled,digital_menu_pay_on_delivery_pix_enabled,delivery_pricing_mode,store_lat,store_lng,google_maps_api_key,delivery_fee_tiers,default_delivery_fee,fixed_delivery_city")
+      .select("digital_payment_provider,infinitepay_enabled,infinitepay_handle,mercadopago_enabled,mercadopago_public_key,mercadopago_access_token,appmax_enabled,appmax_merchant_client_id,appmax_merchant_client_secret,appmax_external_id,digital_menu_card_enabled,digital_menu_pix_enabled,digital_menu_pay_on_delivery_enabled,digital_menu_pay_on_delivery_card_enabled,digital_menu_pay_on_delivery_pix_enabled,digital_menu_scheduling_enabled,manual_store_status,business_hours_enabled,business_hours,business_hours_closed_message,delivery_pricing_mode,store_lat,store_lng,google_maps_api_key,delivery_fee_tiers,default_delivery_fee,fixed_delivery_city")
       .eq("id", 1)
       .maybeSingle();
+
+    if (!storeIsOpenNow(cfg)) {
+      const hours = formatBusinessHoursForCustomer(cfg);
+      const custom = String(cfg?.business_hours_closed_message || "").trim();
+      return {
+        error: custom
+          ? `${custom} Horário de funcionamento: ${hours}.`
+          : `Loja fechada no momento. Horário de funcionamento: ${hours}.`,
+        storeClosed: true,
+      };
+    }
 
     const requestedPayment = String(data.payment_kind || "");
     const isPayOnDelivery = requestedPayment === "delivery_card" || requestedPayment === "delivery_pix";
@@ -196,6 +325,25 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
       if (!area?.supported) return { error: "Esse endereço está fora da área de entrega própria." };
       normalizedNeighborhood = String(area?.neighborhood || data.address_neighborhood);
 
+      const deliveryWindow = await getNeighborhoodDeliveryWindow(supabaseAdmin, normalizedNeighborhood);
+      if (deliveryWindow.outsideDeliveryHours) {
+        if (data.scheduled === true && deliveryWindow.schedulingEnabled) {
+          // O pedido pode continuar, mas será marcado como AGENDAMENTO.
+        } else if (deliveryWindow.schedulingEnabled) {
+          return {
+            error: `As entregas para ${normalizedNeighborhood} vão até ${deliveryWindow.deliveryCutoffTime} (horário de Brasília). Para continuar agora, marque a opção de agendamento para o próximo horário disponível.`,
+            requiresScheduling: true,
+            deliveryCutoffTime: deliveryWindow.deliveryCutoffTime,
+          };
+        } else {
+          return {
+            error: `As entregas para ${normalizedNeighborhood} vão somente até ${deliveryWindow.deliveryCutoffTime} (horário de Brasília). No momento não é possível finalizar um pedido para este bairro.`,
+            requiresScheduling: false,
+            deliveryCutoffTime: deliveryWindow.deliveryCutoffTime,
+          };
+        }
+      }
+
       if (area?.pricing_mode === "distance") {
         const { calculateDeliveryFee } = await import("@/lib/delivery-distance.server");
         const fullAddress = `${data.address_street}, ${data.address_number}, ${normalizedNeighborhood}, ${data.address_city || cfg?.fixed_delivery_city || "Duque de Caxias"} - RJ, Brasil`;
@@ -221,6 +369,21 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
       }
     }
 
+    let isScheduled = false;
+    let scheduledDeliveryNote: string | null = null;
+    let scheduledDeliveryCutoff: string | null = null;
+    if (data.delivery_mode === "delivery" && normalizedNeighborhood) {
+      const currentWindow = await getNeighborhoodDeliveryWindow(supabaseAdmin, normalizedNeighborhood);
+      isScheduled = currentWindow.outsideDeliveryHours && data.scheduled === true && currentWindow.schedulingEnabled;
+      scheduledDeliveryCutoff = currentWindow.deliveryCutoffTime;
+      if (isScheduled) {
+        scheduledDeliveryNote =
+          `AGENDAMENTO: pedido realizado após o horário de entrega de ${normalizedNeighborhood} ` +
+          `(limite ${currentWindow.deliveryCutoffTime}, horário de Brasília). ` +
+          `A loja deve entrar em contato com o cliente para confirmar a entrega no próximo horário disponível.`;
+      }
+    }
+
     const requestedIds = Array.from(new Set(data.items.map((i) => String(i.product_id || "")).filter(Boolean)));
     const { data: products, error: productError } = await supabaseAdmin
       .from("products")
@@ -241,12 +404,12 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
 
     const [{ data: addonOptions }, { data: addonLinks }, { data: addonGroups }, { data: orderBumps }] = await Promise.all([
       requestedAddonIds.length
-        ? (supabaseAdmin as any).from("menu_addon_options").select("id,group_id,name,price,linked_product_id,use_linked_product_price,active").in("id", requestedAddonIds)
+        ? (supabaseAdmin as any).from("menu_addon_options").select("id,group_id,name,display_name,price,linked_product_id,use_linked_product_price,active").in("id", requestedAddonIds)
         : Promise.resolve({ data: [] }),
       requestedIds.length
         ? (supabaseAdmin as any).from("product_addon_groups").select("product_id,group_id").in("product_id", requestedIds)
         : Promise.resolve({ data: [] }),
-      (supabaseAdmin as any).from("menu_addon_groups").select("id,name,required,min_select,max_select,active"),
+      (supabaseAdmin as any).from("menu_addon_groups").select("id,name,display_title,required,min_select,max_select,active"),
       requestedBumpIds.length
         ? (supabaseAdmin as any).from("menu_order_bumps").select("id,product_id,price_override,active").in("id", requestedBumpIds)
         : Promise.resolve({ data: [] }),
@@ -323,7 +486,7 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
         );
 
         let addonPrice = Number(option.price || 0);
-        let addonName = String(option.name);
+        let addonName = String(option.display_name || option.name);
 
         if (option.linked_product_id) {
           const linkedProduct: any = linkedAddonProductById.get(String(option.linked_product_id));
@@ -333,7 +496,7 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
 
           // O nome sempre acompanha o produto real. O preço pode acompanhar o
           // preço atual/promoção do produto ou usar um preço especial de adicional.
-          addonName = String(linkedProduct.name || option.name);
+          addonName = String(option.display_name || linkedProduct.name || option.name);
 
           if (option.use_linked_product_price === true) {
             const linkedEffective = getEffectivePrice(linkedProduct);
@@ -488,6 +651,9 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
       address_neighborhood: data.delivery_mode === "delivery" ? normalizedNeighborhood : null,
       address_city: data.delivery_mode === "delivery" ? data.address_city || null : null,
       address_cep: data.delivery_mode === "delivery" ? digits(data.address_cep) || null : null,
+      is_scheduled: isScheduled,
+      scheduled_delivery_note: scheduledDeliveryNote,
+      delivery_cutoff_time: scheduledDeliveryCutoff,
     };
 
     if (customerUser) {
@@ -556,10 +722,12 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
         order_id: finalized.order_id,
         pay_on_delivery: true,
         payment_method: method,
+        scheduled: isScheduled,
+        scheduled_delivery_note: scheduledDeliveryNote,
       };
     }
 
-    return { checkout };
+    return { checkout, scheduled: isScheduled, scheduled_delivery_note: scheduledDeliveryNote };
   });
 
 export const getSiteCheckoutStatus = createServerFn({ method: "GET" })
