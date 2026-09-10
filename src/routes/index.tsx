@@ -564,6 +564,7 @@ function CustomerHome() {
   const [paymentChoice, setPaymentChoice] = useState<PaymentChoice>("online");
   const [digitalMenuEnabled, setDigitalMenuEnabled] = useState(true);
   const [publicStoreStatus, setPublicStoreStatus] = useState<PublicStoreStatus | null>(null);
+  const [, setStoreClockTick] = useState(0);
   const [closedStoreReservationMode, setClosedStoreReservationMode] = useState(false);
   const [reservationDate, setReservationDate] = useState("");
   const [reservationAccepted, setReservationAccepted] = useState(false);
@@ -617,6 +618,12 @@ function CustomerHome() {
     cep: "",
     payment: "infinitepay" as CheckoutPayment,
   });
+
+  // Atualiza automaticamente o indicador Aberto/Fechado conforme o horário da loja.
+  useEffect(() => {
+    const timer = window.setInterval(() => setStoreClockTick((value) => value + 1), 30000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   // Mantém a sacola mesmo se o cliente atualizar ou fechar/abrir a página.
   useEffect(() => {
@@ -2770,13 +2777,6 @@ function CustomerHome() {
           )}
 
           <div id="payment-section" className="scroll-mt-24">
-            <div className="mb-3">
-              <h3 className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Como você prefere pagar?</h3>
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                Escolha a opção mais conveniente. A HotBox mostra somente as formas habilitadas pela loja.
-              </p>
-            </div>
-
             {mpCheckout ? (
               <MercadoPagoPayment
                 checkoutId={mpCheckout.id}
@@ -2803,92 +2803,6 @@ function CustomerHome() {
               />
             ) : (
               <div className="space-y-3">
-                {(pixEnabled || cardEnabled) && (
-                  <button
-                    type="button"
-                    onClick={() => { setPaymentChoice("online"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: paymentProvider }); scrollToCheckoutSection("checkout-action"); }}
-                    disabled={!paymentAvailable}
-                    className={`w-full rounded-2xl border-2 p-4 text-left transition ${
-                      paymentChoice === "online" ? "border-primary bg-primary/5 shadow-sm" : "border-border bg-white"
-                    } ${!paymentAvailable ? "opacity-50" : "hover:border-primary/50"}`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground"><ShieldCheck className="size-5" /></span>
-                      <div className="flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-sm font-black">Pagar agora</p>
-                          {!isStoreOpenByBusinessHours(publicStoreStatus) && publicStoreStatus?.closed_reservations_enabled === true && (
-            <div className="mb-5 rounded-[24px] border-2 border-amber-300 bg-gradient-to-br from-amber-50 to-orange-50 p-4 shadow-sm">
-              <div className="flex items-start gap-3">
-                <div className="grid size-10 shrink-0 place-items-center rounded-full bg-amber-400 text-xl">🗓️</div>
-                <div className="min-w-0">
-                  <p className="text-xs font-black uppercase tracking-[0.14em] text-amber-800">Reserva HotBox</p>
-                  <h3 className="mt-0.5 text-lg font-black text-zinc-950">Garanta seu pedido para quando abrirmos</h3>
-                  <p className="mt-1 text-xs leading-relaxed text-zinc-700">
-                    A loja está fechada agora, mas você pode pagar normalmente e deixar seu pedido reservado.
-                    Ele <strong>não entra em preparo agora</strong>. Antes da entrega, a HotBox entrará em contato para confirmar o horário com você.
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]">
-                <div>
-                  <Label className="text-xs font-black text-zinc-800">Data desejada</Label>
-                  <Input
-                    type="date"
-                    min={nextReservationDate(publicStoreStatus)}
-                    max={maxReservationDate()}
-                    value={reservationDate}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      if (value && !reservationDayAllowed(publicStoreStatus, value)) {
-                        toast.error("Nesse dia a HotBox não possui horário de funcionamento cadastrado.");
-                        return;
-                      }
-                      setReservationDate(value);
-                    }}
-                    className="mt-1 h-11 rounded-xl bg-white text-base"
-                  />
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setReservationDate(nextReservationDate(publicStoreStatus));
-                  }}
-                  className="self-end rounded-xl border border-amber-300 bg-white px-4 py-3 text-xs font-black text-amber-900"
-                >
-                  Próximo atendimento
-                </button>
-              </div>
-
-              {reservationDate && (
-                <p className="mt-2 text-xs font-semibold text-amber-900">
-                  Data selecionada: {formatReservationDate(reservationDate)}
-                </p>
-              )}
-              <div className="mt-4 rounded-2xl border border-amber-300 bg-white/80 p-3">
-                <p className="text-xs font-black uppercase tracking-wide text-amber-900">Reserva confirmada no próximo passo</p>
-                <p className="mt-1 text-xs leading-relaxed text-zinc-700">
-                  Antes do pagamento, você receberá uma última confirmação obrigatória informando novamente que
-                  este pedido é <strong>AGENDADO / RESERVADO</strong> e que a HotBox fará contato antes da entrega.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {paymentChoice === "online" && <span className="rounded-full bg-primary px-2 py-1 text-[10px] font-black text-primary-foreground">SELECIONADO</span>}
-                        </div>
-                        <p className="text-[11px] text-muted-foreground">{paymentProvider === "mercadopago" ? "Pagamento rápido e seguro dentro da HotBox" : paymentProvider === "appmax" ? "Checkout transparente Appmax dentro da HotBox" : "Pagamento seguro pela InfinitePay"}</p>
-                      </div>
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold">
-                      {pixEnabled && <div className="flex items-center gap-2 rounded-xl bg-white px-3 py-2"><QrCode className="size-4" /> Pix</div>}
-                      {cardEnabled && <div className="flex items-center gap-2 rounded-xl bg-white px-3 py-2"><CreditCard className="size-4" /> Cartão</div>}
-                    </div>
-                    {!paymentAvailable && <p className="mt-2 text-xs font-semibold text-amber-700">Pagamento online temporariamente indisponível.</p>}
-                  </button>
-                )}
-
                 {isDelivery && payOnDeliveryEnabled && payOnDeliveryCardEnabled && (
                   <button
                     type="button"
@@ -3013,8 +2927,13 @@ function CustomerHome() {
         }
       >
         <div className="mx-auto max-w-2xl">
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-black/25 px-3 py-1 text-xs font-bold uppercase tracking-wide backdrop-blur">
-            <Flame className="size-3.5" /> Aberto agora
+          <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide backdrop-blur ${
+            isStoreOpenByBusinessHours(publicStoreStatus)
+              ? "bg-emerald-500/90 text-white"
+              : "bg-black/55 text-white"
+          }`}>
+            <Flame className="size-3.5" />
+            {isStoreOpenByBusinessHours(publicStoreStatus) ? "Aberto agora" : "Fechado agora"}
           </span>
           <h1 className="mt-3 font-display text-3xl font-black uppercase leading-[1.05] tracking-tight sm:text-4xl">
             Sua fome pediu.
@@ -3068,7 +2987,7 @@ function CustomerHome() {
       </header>
 
       <main className="mx-auto max-w-2xl px-4 py-5">
-        {!query && activeCategory === "Tudo" && (
+        {!query && (activeCategory === "Tudo" || activeCategory === "Batata") && (
           <div className="mb-5">
             <CustomerLoyaltyClub
               session={customerSession}
@@ -3105,13 +3024,10 @@ function CustomerHome() {
                   : "No momento não é possível finalizar um pedido para este bairro."}
               </p>
             )}
-            <p className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-              Horário de Brasília
-            </p>
           </div>
         )}
 
-        {!query && activeCategory === "Tudo" && publicReviews.length > 0 && (
+        {!query && (activeCategory === "Tudo" || activeCategory === "Batata") && publicReviews.length > 0 && (
           <button
             type="button"
             onClick={() => setShowPublicReviews(true)}
