@@ -156,6 +156,12 @@ function ProductList({ kind }: { kind: "recipe" | "beverage" }) {
   const [editing, setEditing] = useState<any | null>(null);
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [savingOrder, setSavingOrder] = useState(false);
+  const rowsRef = useRef<any[]>([]);
+  const pointerDragRef = useRef<{ id: string; pointerId: number; moved: boolean } | null>(null);
+
+  useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
 
   const load = () =>
     supabase
@@ -227,18 +233,91 @@ function ProductList({ kind }: { kind: "recipe" | "beverage" }) {
     }
   }
 
-  async function moveProduct(draggedProductId: string, targetProductId: string) {
-    if (!draggedProductId || draggedProductId === targetProductId || savingOrder) return;
+  function reorderProductLocally(draggedProductId: string, targetProductId: string) {
+    if (!draggedProductId || draggedProductId === targetProductId) return false;
 
-    const current = [...rows];
+    const current = [...rowsRef.current];
     const from = current.findIndex((row) => String(row.id) === String(draggedProductId));
     const to = current.findIndex((row) => String(row.id) === String(targetProductId));
-    if (from < 0 || to < 0) return;
+    if (from < 0 || to < 0) return false;
 
     const [moved] = current.splice(from, 1);
     current.splice(to, 0, moved);
-    await persistProductOrder(current);
+    rowsRef.current = current;
+    setRows(current);
+    return true;
   }
+
+  function startPointerDrag(event: React.PointerEvent<HTMLButtonElement>, productId: string) {
+    if (savingOrder || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    pointerDragRef.current = {
+      id: String(productId),
+      pointerId: event.pointerId,
+      moved: false,
+    };
+    setDraggedId(String(productId));
+
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {}
+
+    if (typeof document !== "undefined") {
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "grabbing";
+    }
+  }
+
+  useEffect(() => {
+    if (!draggedId) return;
+
+    const onPointerMove = (event: PointerEvent) => {
+      const drag = pointerDragRef.current;
+      if (!drag || event.pointerId !== drag.pointerId) return;
+
+      const element = document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null;
+      const card = element?.closest?.("[data-product-sort-id]") as HTMLElement | null;
+      const targetId = card?.dataset?.productSortId;
+      if (!targetId || targetId === drag.id) return;
+
+      if (reorderProductLocally(drag.id, targetId)) {
+        drag.moved = true;
+      }
+    };
+
+    const finishPointerDrag = (event: PointerEvent) => {
+      const drag = pointerDragRef.current;
+      if (!drag || event.pointerId !== drag.pointerId) return;
+
+      pointerDragRef.current = null;
+      setDraggedId(null);
+
+      if (typeof document !== "undefined") {
+        document.body.style.userSelect = "";
+        document.body.style.cursor = "";
+      }
+
+      if (drag.moved) {
+        void persistProductOrder(rowsRef.current);
+      }
+    };
+
+    window.addEventListener("pointermove", onPointerMove, { passive: true });
+    window.addEventListener("pointerup", finishPointerDrag);
+    window.addEventListener("pointercancel", finishPointerDrag);
+
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", finishPointerDrag);
+      window.removeEventListener("pointercancel", finishPointerDrag);
+      if (typeof document !== "undefined") {
+        document.body.style.userSelect = "";
+        document.body.style.cursor = "";
+      }
+    };
+  }, [draggedId, savingOrder]);
 
   async function moveProductByButton(productId: string, direction: -1 | 1) {
     if (savingOrder) return;
@@ -305,7 +384,7 @@ function ProductList({ kind }: { kind: "recipe" | "beverage" }) {
             Organizar posição no cardápio
           </p>
           <p className="mt-0.5 text-xs text-zinc-600">
-            Clique e arraste um card para mudar a sequência. A alteração é salva automaticamente e aparece no cardápio do cliente.
+            Segure o ícone ⋮⋮ no canto do card e arraste para a posição desejada. A sequência muda na hora e é salva quando você soltar.
           </p>
         </div>
         {savingOrder && (
@@ -319,29 +398,29 @@ function ProductList({ kind }: { kind: "recipe" | "beverage" }) {
         {visibleRows.map((p, visibleIndex) => (
           <Card
             key={p.id}
-            draggable={!savingOrder}
-            onDragStart={(event) => {
-              setDraggedId(String(p.id));
-              event.dataTransfer.effectAllowed = "move";
-              event.dataTransfer.setData("text/plain", String(p.id));
-            }}
-            onDragEnd={() => setDraggedId(null)}
-            onDragOver={(event) => {
-              event.preventDefault();
-              event.dataTransfer.dropEffect = "move";
-            }}
-            onDrop={(event) => {
-              event.preventDefault();
-              const sourceId = event.dataTransfer.getData("text/plain") || draggedId;
-              setDraggedId(null);
-              if (sourceId) void moveProduct(sourceId, String(p.id));
-            }}
+            data-product-sort-id={String(p.id)}
             className={`relative flex gap-3 overflow-hidden rounded-2xl p-3 shadow-sm transition ${
-              draggedId === String(p.id) ? "scale-[0.99] opacity-50 ring-2 ring-primary/40" : "hover:border-primary/30"
-            } ${savingOrder ? "pointer-events-none" : "cursor-grab active:cursor-grabbing"}`}
+              draggedId === String(p.id)
+                ? "scale-[0.99] opacity-55 ring-2 ring-primary/50"
+                : draggedId
+                  ? "border-dashed hover:border-primary hover:bg-primary/[0.03]"
+                  : "hover:border-primary/30"
+            } ${savingOrder ? "pointer-events-none" : ""}`}
           >
             <div className="absolute left-1 top-1 z-10 flex items-center gap-0.5 rounded-full border bg-background/95 p-0.5 shadow-sm">
-              <GripVertical className="size-4 text-muted-foreground" aria-hidden="true" />
+              <button
+                type="button"
+                onPointerDown={(event) => startPointerDrag(event, String(p.id))}
+                className={`grid size-8 touch-none place-items-center rounded-full transition ${
+                  draggedId === String(p.id)
+                    ? "bg-primary text-primary-foreground"
+                    : "cursor-grab text-muted-foreground hover:bg-muted active:cursor-grabbing"
+                }`}
+                title="Segure e arraste para mudar a posição"
+                aria-label={`Arrastar ${p.name} para mudar a posição`}
+              >
+                <GripVertical className="size-5" aria-hidden="true" />
+              </button>
               <button
                 type="button"
                 className="grid size-6 place-items-center rounded-full text-[11px] font-black text-muted-foreground hover:bg-muted disabled:opacity-30"
