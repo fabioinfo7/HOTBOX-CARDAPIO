@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Copy, CreditCard, Loader2, MessageCircle, QrCode, RefreshCw, ShieldCheck, X } from "lucide-react";
+import { CheckCircle2, Copy, CreditCard, Loader2, QrCode, ShieldCheck, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { createMercadoPagoPayment, checkMercadoPagoPayment } from "@/lib/mercadopago.functions";
+import { trackAnalytics } from "@/lib/analytics";
 
 const SDK_SRC = "https://sdk.mercadopago.com/js/v2";
 const SECURITY_SRC = "https://www.mercadopago.com/v2/security.js";
@@ -22,16 +23,9 @@ type Props = {
   customerEmail?: string | null;
   environment?: "test" | "production";
   origin: string;
-  supportWhatsappUrl?: string;
   onPaid: (orderId?: string | null) => void;
   onCancel: () => void;
 };
-
-type RejectionState = {
-  message: string;
-};
-
-type PaymentMode = "all" | "card" | "pix";
 
 type PendingState = {
   paymentId: string;
@@ -75,18 +69,61 @@ function loadScript(src: string, attrs?: Record<string, string>) {
   });
 }
 
-export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallments = 1, customerEmail, environment = "production", origin, supportWhatsappUrl, onPaid, onCancel }: Props) {
+export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallments = 1, customerEmail, environment = "production", origin, onPaid, onCancel }: Props) {
   const [ready, setReady] = useState(false);
   const [pending, setPending] = useState<PendingState | null>(null);
   const [checking, setChecking] = useState(false);
   const [fatalError, setFatalError] = useState("");
-  const [rejection, setRejection] = useState<RejectionState | null>(null);
-  const [paymentMode, setPaymentMode] = useState<PaymentMode>("all");
-  const [switchingToPix, setSwitchingToPix] = useState(false);
   const [brickKey, setBrickKey] = useState(0);
   const controllerRef = useRef<any>(null);
   const challengeFrameRef = useRef<HTMLIFrameElement | null>(null);
-  const lastPayerEmailRef = useRef<string>(customerEmail || "");
+  const rejectionTrackedRef = useRef<Set<string>>(new Set());
+
+  function friendlyRejectionReason(code: unknown, fallback?: unknown) {
+    const detail = String(code || "").trim();
+    const map: Record<string, string> = {
+      card_not_authorized: "Cartão não autorizado pelo Mercado Pago ou pelo banco",
+      cc_rejected_bad_filled_card_number: "Número do cartão não foi aceito",
+      cc_rejected_bad_filled_date: "Validade do cartão não foi aceita",
+      cc_rejected_bad_filled_security_code: "Código de segurança não foi aceito",
+      cc_rejected_insufficient_amount: "Cartão sem limite disponível",
+      cc_rejected_call_for_authorize: "Banco pediu autorização para a compra",
+      cc_rejected_card_disabled: "Cartão bloqueado ou desativado",
+      cc_rejected_duplicated_payment: "Tentativa considerada duplicada",
+      cc_rejected_high_risk: "Compra recusada pela análise de segurança",
+      cc_rejected_3ds_challenge: "Confirmação de segurança do banco não foi concluída",
+    };
+    return map[detail] || String(fallback || "Pagamento no cartão não foi aprovado");
+  }
+
+  function trackRejectedPayment(input: {
+    key: string;
+    statusDetail?: unknown;
+    message?: unknown;
+    paymentId?: unknown;
+    paymentMethodId?: unknown;
+    attemptId?: unknown;
+  }) {
+    if (!input.key || rejectionTrackedRef.current.has(input.key)) return;
+    rejectionTrackedRef.current.add(input.key);
+
+    trackAnalytics("payment_failed", {
+      event_category: "payment",
+      checkout_id: String(checkoutId),
+      payment_method: "card",
+      value: Number(amount || 0),
+      properties: {
+        provider: "mercadopago",
+        payment_type: "card",
+        reason_code: String(input.statusDetail || "card_not_authorized"),
+        reason_friendly: friendlyRejectionReason(input.statusDetail, input.message),
+        payment_id: input.paymentId ? String(input.paymentId) : null,
+        payment_method_id: input.paymentMethodId ? String(input.paymentMethodId) : null,
+        attempt_id: input.attemptId ? String(input.attemptId) : null,
+      },
+    });
+  }
+
   const brickContainerId = useMemo(
     () => `hotbox_payment_brick_${String(checkoutId).replace(/[^a-zA-Z0-9_-]/g, "_")}`,
     [checkoutId],
@@ -120,33 +157,32 @@ export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallme
             payer: brickEmail ? { email: brickEmail } : undefined,
           },
           customization: {
-            paymentMethods: paymentMode === "card"
-              ? {
-                  creditCard: "all",
-                  minInstallments: 1,
-                  maxInstallments: Math.min(12, Math.max(1, Number(maxInstallments || 1))),
-                }
-              : paymentMode === "pix"
-                ? { bankTransfer: "all" }
-                : {
-                    bankTransfer: "all",
-                    creditCard: "all",
-                    minInstallments: 1,
-                    maxInstallments: Math.min(12, Math.max(1, Number(maxInstallments || 1))),
-                  },
+            paymentMethods: {
+              bankTransfer: "all",
+              creditCard: "all",
+              minInstallments: 1,
+              maxInstallments: Math.min(12, Math.max(1, Number(maxInstallments || 1))),
+            },
           },
           callbacks: {
             onReady: () => alive && setReady(true),
             onError: (error: any) => {
               console.error("[mercadopago-brick]", error);
+              const detail =
+                error?.message ||
+                error?.cause?.message ||
+                error?.error ||
+                error?.type ||
+                "";
               if (alive) {
-                setFatalError("Não foi possível carregar o pagamento agora. Tente novamente em alguns instantes.");
+                setFatalError(
+                  detail
+                    ? `Mercado Pago: ${String(detail)}`
+                    : "Não foi possível carregar o formulário de pagamento. Atualize a página e tente novamente.",
+                );
               }
             },
             onSubmit: async ({ formData }: any) => {
-              const submittedEmail = String(formData?.payer?.email || "").trim();
-              if (submittedEmail) lastPayerEmailRef.current = submittedEmail;
-              setRejection(null);
               const attemptId = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
               const result: any = await createMercadoPagoPayment({
                 data: {
@@ -160,14 +196,24 @@ export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallme
 
               if (!result?.ok) {
                 if (result?.rejected) {
-                  setPending(null);
-                  setRejection({
-                    message: "O Mercado Pago não autorizou esta transação. Você pode tentar outro cartão ou pagar via PIX. O que prefere?",
-                  });
-                  return { ok: true };
+                  const methodId = String(
+                    formData?.payment_method_id ||
+                      formData?.paymentMethodId ||
+                      "",
+                  );
+                  if (methodId && methodId !== "pix") {
+                    trackRejectedPayment({
+                      key: `submit:${attemptId}`,
+                      statusDetail: result?.statusDetail,
+                      message: result?.error,
+                      paymentId: result?.paymentId,
+                      paymentMethodId: methodId,
+                      attemptId,
+                    });
+                  }
                 }
-                setFatalError("Não conseguimos processar o pagamento agora. Tente novamente ou fale com a Hotbox pelo WhatsApp.");
-                return { ok: true };
+                toast.error(result?.error || "Pagamento não aprovado. Confira os dados e tente novamente.");
+                throw new Error(result?.error || "Pagamento não aprovado");
               }
               if (result.approved) {
                 onPaid(result.order_id || null);
@@ -199,7 +245,7 @@ export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallme
       try { controller?.unmount?.(); } catch {}
       controllerRef.current = null;
     };
-  }, [checkoutId, amount, publicKey, maxInstallments, customerEmail, environment, origin, paymentMode, brickKey, brickContainerId]);
+  }, [checkoutId, amount, publicKey, maxInstallments, customerEmail, environment, origin, brickKey, brickContainerId]);
 
   useEffect(() => {
     if (!pending?.paymentId) return;
@@ -218,10 +264,16 @@ export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallme
         if (result.rejected) {
           stopped = true;
           window.clearInterval(timer);
-          setPending(null);
-          setRejection({
-            message: "O Mercado Pago não autorizou esta transação. Você pode tentar outro cartão ou pagar via PIX. O que prefere?",
+          trackRejectedPayment({
+            key: `poll:${pending.paymentId}:${String(result.statusDetail || "rejected")}`,
+            statusDetail: result.statusDetail,
+            message: result.message,
+            paymentId: pending.paymentId,
           });
+          setPending(null);
+          setReady(false);
+          setBrickKey((k) => k + 1);
+          toast.error(result.message || "O pagamento não foi aprovado. Escolha Pix ou cartão e tente novamente.");
           return;
         }
         setPending((current) => current ? {
@@ -268,116 +320,20 @@ export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallme
       const result: any = await checkMercadoPagoPayment({ data: { checkoutId, paymentId: pending.paymentId } });
       if (result?.approved) return onPaid(result.order_id || null);
       if (result?.rejected) {
-        setPending(null);
-        setRejection({
-          message: "O Mercado Pago não autorizou esta transação. Você pode tentar outro cartão ou pagar via PIX. O que prefere?",
+        trackRejectedPayment({
+          key: `manual:${pending.paymentId}:${String(result.statusDetail || "rejected")}`,
+          statusDetail: result.statusDetail,
+          message: result.message,
+          paymentId: pending.paymentId,
         });
+        setPending(null);
+        setReady(false);
+        setBrickKey((k) => k + 1);
+        toast.error(result.message || "Pagamento não aprovado. Tente novamente ou escolha outro meio.");
       } else toast.message(result?.message || "Ainda estamos aguardando a confirmação do pagamento.");
     } finally {
       setChecking(false);
     }
-  }
-
-  function retryWithAnotherCard() {
-    setRejection(null);
-    setPending(null);
-    setFatalError("");
-    setPaymentMode("card");
-    setReady(false);
-    setBrickKey((k) => k + 1);
-  }
-
-  async function switchToPixNow() {
-    if (switchingToPix) return;
-    setSwitchingToPix(true);
-    setFatalError("");
-    try {
-      const payerEmail = String(lastPayerEmailRef.current || customerEmail || "").trim();
-      if (!payerEmail) {
-        setRejection(null);
-        setPaymentMode("pix");
-        setReady(false);
-        setBrickKey((k) => k + 1);
-        toast.message("Escolha o Pix e confirme os dados para gerar o QR Code.");
-        return;
-      }
-
-      const attemptId = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
-      const result: any = await createMercadoPagoPayment({
-        data: {
-          checkoutId,
-          origin,
-          formData: {
-            payment_method_id: "pix",
-            payer: { email: payerEmail },
-          },
-          deviceId: window.MP_DEVICE_SESSION_ID || null,
-          attemptId,
-        },
-      });
-
-      if (!result?.ok) {
-        setFatalError("Não foi possível gerar o PIX agora. Tente novamente ou fale com a Hotbox pelo WhatsApp.");
-        return;
-      }
-      if (result.approved) {
-        onPaid(result.order_id || null);
-        return;
-      }
-      setRejection(null);
-      setPending({
-        paymentId: String(result.paymentId || ""),
-        status: String(result.status || "pending"),
-        statusDetail: String(result.statusDetail || ""),
-        message: result.message || null,
-        qrCode: result.qrCode || null,
-        qrCodeBase64: result.qrCodeBase64 || null,
-        challengeUrl: result.challengeUrl || null,
-        challengeCreq: result.challengeCreq || null,
-      });
-    } finally {
-      setSwitchingToPix(false);
-    }
-  }
-
-  if (rejection) {
-    return (
-      <div className="w-full max-w-full overflow-hidden rounded-3xl border border-amber-200 bg-amber-50 p-4 sm:p-5">
-        <div>
-          <p className="text-base font-black text-amber-950">Pagamento não autorizado</p>
-          <p className="mt-1 text-sm leading-relaxed text-amber-900">{rejection.message}</p>
-        </div>
-
-        <div className="mt-4 grid w-full min-w-0 grid-cols-1 gap-2">
-          <Button className="h-auto min-h-12 w-full min-w-0 whitespace-normal rounded-xl px-3 py-3 text-center" onClick={retryWithAnotherCard}>
-            <RefreshCw className="mr-2 size-4 shrink-0" /> <span className="min-w-0">Tentar outro cartão</span>
-          </Button>
-
-          <Button className="h-auto min-h-12 w-full min-w-0 whitespace-normal rounded-xl bg-emerald-600 px-3 py-3 text-center hover:bg-emerald-700" onClick={switchToPixNow} disabled={switchingToPix}>
-            {switchingToPix ? <Loader2 className="mr-2 size-4 shrink-0 animate-spin" /> : <QrCode className="mr-2 size-4 shrink-0" />}
-            <span className="min-w-0">Pagar com PIX</span>
-          </Button>
-
-          <Button
-            type="button"
-            variant="outline"
-            className="h-auto min-h-12 w-full min-w-0 whitespace-normal rounded-xl border-emerald-500 bg-white px-3 py-3 text-center text-emerald-800 hover:bg-emerald-50"
-            onClick={() => {
-              const fallback = "https://wa.me/5521984296288?text=" + encodeURIComponent("Olá! Vim pelo cardápio digital da Hotbox e preciso de ajuda para concluir o pagamento.");
-              const url = supportWhatsappUrl || fallback;
-              window.location.assign(url);
-            }}
-          >
-            <MessageCircle className="mr-2 size-4 shrink-0" />
-            <span className="min-w-0 break-words">Pedir link de pagamento à Hotbox (WhatsApp)</span>
-          </Button>
-        </div>
-
-        <p className="mt-3 text-[11px] leading-relaxed text-amber-800">
-          Seu pedido continua salvo. Você só precisa escolher outra forma para concluir o pagamento.
-        </p>
-      </div>
-    );
   }
 
   if (fatalError) {
