@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Plus, Trash2, Pencil, Pizza, GlassWater, Upload, AlertTriangle, Star, Tag, Ticket, GripVertical, Loader2 } from "lucide-react";
 import { getEffectivePrice, isPromotionActive, PROMOTION_DAY_LABELS } from "@/lib/promotions";
+import { MenuSalesTools } from "@/components/menu-sales-tools";
 
 export const Route = createFileRoute("/_authenticated/loja/produtos")({
   component: ProductsPage,
@@ -121,7 +122,7 @@ function PriceWithPromo({ product }: { product: any }) {
 }
 
 function ProductsPage() {
-  const [tab, setTab] = useState<"recipe" | "beverage" | "ingredients">("recipe");
+  const [tab, setTab] = useState<"recipe" | "beverage" | "sales" | "ingredients">("recipe");
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold">Cardápio & Insumos</h1>
@@ -139,13 +140,19 @@ function ProductsPage() {
           <GlassWater className="mr-1 inline size-4" /> Bebidas
         </button>
         <button
+          className={`px-3 py-2 text-sm font-medium ${tab === "sales" ? "border-b-2 border-primary text-primary" : "text-muted-foreground"}`}
+          onClick={() => setTab("sales")}
+        >
+          ✨ Adicionais & Vendas
+        </button>
+        <button
           className={`px-3 py-2 text-sm font-medium ${tab === "ingredients" ? "border-b-2 border-primary text-primary" : "text-muted-foreground"}`}
           onClick={() => setTab("ingredients")}
         >
           🥫 Insumos
         </button>
       </div>
-      {tab !== "ingredients" ? <ProductList kind={tab} /> : <IngredientList />}
+      {tab === "sales" ? <MenuSalesTools /> : tab !== "ingredients" ? <ProductList kind={tab as "recipe" | "beverage"} /> : <IngredientList />}
     </div>
   );
 }
