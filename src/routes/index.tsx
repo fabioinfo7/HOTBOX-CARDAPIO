@@ -1655,6 +1655,7 @@ function CustomerHome() {
           scheduled: isDelivery && outsideDeliveryHours && schedulingEnabled && scheduleAccepted,
           store_reservation: !storeOpenNow && publicStoreStatus?.closed_reservations_enabled === true && closedStoreReservationMode,
           reservation_date: !storeOpenNow && closedStoreReservationMode ? reservationDate : null,
+          reservation_acknowledged: !storeOpenNow && closedStoreReservationMode ? reservationConfirmedNow === true : false,
           coupon_code: appliedCoupon?.code || null,
           access_token: customerSession?.access_token || null,
           items: cart.map((i) => ({
@@ -2845,7 +2846,6 @@ function CustomerHome() {
                         return;
                       }
                       setReservationDate(value);
-                      setReservationAccepted(false);
                     }}
                     className="mt-1 h-11 rounded-xl bg-white text-base"
                   />
@@ -2854,7 +2854,6 @@ function CustomerHome() {
                   type="button"
                   onClick={() => {
                     setReservationDate(nextReservationDate(publicStoreStatus));
-                    setReservationAccepted(false);
                   }}
                   className="self-end rounded-xl border border-amber-300 bg-white px-4 py-3 text-xs font-black text-amber-900"
                 >
@@ -2867,26 +2866,13 @@ function CustomerHome() {
                   Data selecionada: {formatReservationDate(reservationDate)}
                 </p>
               )}
-
-              <label className={`mt-4 flex cursor-pointer items-start gap-3 rounded-2xl border p-3 ${
-                reservationAccepted ? "border-emerald-400 bg-emerald-50" : "border-amber-300 bg-white"
-              }`}>
-                <input
-                  type="checkbox"
-                  checked={reservationAccepted}
-                  onChange={(e) => setReservationAccepted(e.target.checked)}
-                  className="mt-0.5 size-5 accent-emerald-600"
-                />
-                <span>
-                  <span className="block text-sm font-black text-zinc-950">
-                    Sim, quero reservar este pedido
-                  </span>
-                  <span className="mt-0.5 block text-[11px] leading-relaxed text-zinc-600">
-                    Estou ciente de que o pagamento será feito agora, mas a entrega será realizada posteriormente,
-                    dentro do horário de funcionamento. A HotBox fará contato antes da entrega.
-                  </span>
-                </span>
-              </label>
+              <div className="mt-4 rounded-2xl border border-amber-300 bg-white/80 p-3">
+                <p className="text-xs font-black uppercase tracking-wide text-amber-900">Reserva confirmada no próximo passo</p>
+                <p className="mt-1 text-xs leading-relaxed text-zinc-700">
+                  Antes do pagamento, você receberá uma última confirmação obrigatória informando novamente que
+                  este pedido é <strong>AGENDADO / RESERVADO</strong> e que a HotBox fará contato antes da entrega.
+                </p>
+              </div>
             </div>
           )}
 
