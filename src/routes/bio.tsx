@@ -402,20 +402,6 @@ function BioPage() {
 
             <div className="order-grid">
               <a
-                href={WHATSAPP_URL} data-analytics="bio_whatsapp"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="order-link order-link--whatsapp"
-              >
-                <div className="brand-icon"><WhatsAppIcon /></div>
-                <div className="order-copy">
-                  <div className="order-name">Peça direto pelo WhatsApp</div>
-                  <div className="order-desc">Atendimento direto e fácil para os bairros atendidos</div>
-                </div>
-                <div className="order-arrow"><ArrowIcon /></div>
-              </a>
-
-              <a
                 href={DIGITAL_MENU_URL} data-analytics="bio_cardapio_digital"
                 target="_blank"
                 rel="noopener noreferrer"
@@ -431,6 +417,20 @@ function BioPage() {
                 <div className="order-copy">
                   <div className="order-name">Cardápio Digital</div>
                   <div className="order-desc">Veja os sabores, monte seu pedido e finalize direto pelo cardápio</div>
+                </div>
+                <div className="order-arrow"><ArrowIcon /></div>
+              </a>
+
+              <a
+                href={WHATSAPP_URL} data-analytics="bio_whatsapp"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="order-link order-link--whatsapp"
+              >
+                <div className="brand-icon"><WhatsAppIcon /></div>
+                <div className="order-copy">
+                  <div className="order-name">Peça direto pelo WhatsApp</div>
+                  <div className="order-desc">Atendimento direto e fácil para os bairros atendidos</div>
                 </div>
                 <div className="order-arrow"><ArrowIcon /></div>
               </a>
