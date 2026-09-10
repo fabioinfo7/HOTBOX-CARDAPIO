@@ -29,6 +29,8 @@ type CheckoutInput = {
   address_cep?: string | null;
   payment_kind: SitePaymentKind;
   scheduled?: boolean | null;
+  store_reservation?: boolean | null;
+  reservation_date?: string | null;
   coupon_code?: string | null;
   access_token?: string | null;
   items: CheckoutItemInput[];
@@ -106,6 +108,50 @@ function storeIsOpenNow(cfg: any) {
     return (days.includes(now.day) && now.minutes >= open) ||
       (days.includes(previousDay) && now.minutes < close);
   });
+}
+
+
+function brasiliaTodayYmd() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const year = parts.find((p) => p.type === "year")?.value || "1970";
+  const month = parts.find((p) => p.type === "month")?.value || "01";
+  const day = parts.find((p) => p.type === "day")?.value || "01";
+  return `${year}-${month}-${day}`;
+}
+
+function validateReservationDate(cfg: any, value: unknown) {
+  const ymd = String(value || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return { ok: false, error: "Escolha uma data válida para a reserva." };
+
+  const [year, month, day] = ymd.split("-").map(Number);
+  const candidate = new Date(Date.UTC(year, month - 1, day));
+  if (
+    candidate.getUTCFullYear() !== year ||
+    candidate.getUTCMonth() !== month - 1 ||
+    candidate.getUTCDate() !== day
+  ) return { ok: false, error: "Escolha uma data válida para a reserva." };
+
+  const [ty, tm, td] = brasiliaTodayYmd().split("-").map(Number);
+  const today = new Date(Date.UTC(ty, tm - 1, td));
+  const diffDays = Math.floor((candidate.getTime() - today.getTime()) / 86400000);
+  if (diffDays < 0) return { ok: false, error: "A data da reserva não pode estar no passado." };
+  if (diffDays > 30) return { ok: false, error: "A reserva pode ser feita com até 30 dias de antecedência." };
+
+  if (cfg?.business_hours_enabled === true) {
+    const weekday = candidate.getUTCDay();
+    const ranges = Array.isArray(cfg?.business_hours) ? cfg.business_hours : [];
+    const allowed = ranges.some((range: any) =>
+      Array.isArray(range?.days) && range.days.map(Number).includes(weekday) && range.open && range.close
+    );
+    if (!allowed) return { ok: false, error: "A HotBox não possui horário de funcionamento cadastrado para a data escolhida." };
+  }
+
+  return { ok: true, ymd };
 }
 
 function formatBusinessHoursForCustomer(cfg: any) {
@@ -266,19 +312,37 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
 
     const { data: cfg } = await supabaseAdmin
       .from("store_config")
-      .select("digital_payment_provider,infinitepay_enabled,infinitepay_handle,mercadopago_enabled,mercadopago_public_key,mercadopago_access_token,appmax_enabled,appmax_merchant_client_id,appmax_merchant_client_secret,appmax_external_id,digital_menu_card_enabled,digital_menu_pix_enabled,digital_menu_pay_on_delivery_enabled,digital_menu_pay_on_delivery_card_enabled,digital_menu_pay_on_delivery_pix_enabled,digital_menu_scheduling_enabled,manual_store_status,business_hours_enabled,business_hours,business_hours_closed_message,delivery_pricing_mode,store_lat,store_lng,google_maps_api_key,delivery_fee_tiers,default_delivery_fee,fixed_delivery_city")
+      .select("digital_payment_provider,infinitepay_enabled,infinitepay_handle,mercadopago_enabled,mercadopago_public_key,mercadopago_access_token,appmax_enabled,appmax_merchant_client_id,appmax_merchant_client_secret,appmax_external_id,digital_menu_card_enabled,digital_menu_pix_enabled,digital_menu_pay_on_delivery_enabled,digital_menu_pay_on_delivery_card_enabled,digital_menu_pay_on_delivery_pix_enabled,digital_menu_scheduling_enabled,manual_store_status,business_hours_enabled,business_hours,business_hours_closed_message,digital_menu_closed_reservations_enabled,delivery_pricing_mode,store_lat,store_lng,google_maps_api_key,delivery_fee_tiers,default_delivery_fee,fixed_delivery_city")
       .eq("id", 1)
       .maybeSingle();
 
-    if (!storeIsOpenNow(cfg)) {
+    const storeOpenNow = storeIsOpenNow(cfg);
+    let isStoreReservation = false;
+    let reservationDate: string | null = null;
+
+    if (!storeOpenNow) {
       const hours = formatBusinessHoursForCustomer(cfg);
       const custom = String(cfg?.business_hours_closed_message || "").trim();
-      return {
-        error: custom
-          ? `${custom} Horário de funcionamento: ${hours}.`
-          : `Loja fechada no momento. Horário de funcionamento: ${hours}.`,
-        storeClosed: true,
-      };
+      const reservationsEnabled = cfg?.digital_menu_closed_reservations_enabled === true;
+
+      if (reservationsEnabled && data.store_reservation === true) {
+        const validation = validateReservationDate(cfg, data.reservation_date);
+        if (!validation.ok) {
+          return { error: validation.error, storeClosed: true, canReserve: true };
+        }
+        isStoreReservation = true;
+        reservationDate = validation.ymd!;
+      } else {
+        return {
+          error: reservationsEnabled
+            ? "A loja está fechada no momento. Para continuar, confirme a reserva e escolha a data desejada."
+            : (custom
+                ? `${custom} Horário de funcionamento: ${hours}.`
+                : `Loja fechada no momento. Horário de funcionamento: ${hours}.`),
+          storeClosed: true,
+          canReserve: reservationsEnabled,
+        };
+      }
     }
 
     const requestedPayment = String(data.payment_kind || "");
@@ -369,10 +433,12 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
       }
     }
 
-    let isScheduled = false;
-    let scheduledDeliveryNote: string | null = null;
+    let isScheduled = isStoreReservation;
+    let scheduledDeliveryNote: string | null = isStoreReservation
+      ? `PEDIDO AGENDADO: reserva paga realizada com a loja fechada para ${reservationDate}. NÃO iniciar preparo automaticamente. Fazer contato com o cliente antes da entrega para confirmar o horário.`
+      : null;
     let scheduledDeliveryCutoff: string | null = null;
-    if (data.delivery_mode === "delivery" && normalizedNeighborhood) {
+    if (!isStoreReservation && data.delivery_mode === "delivery" && normalizedNeighborhood) {
       const currentWindow = await getNeighborhoodDeliveryWindow(supabaseAdmin, normalizedNeighborhood);
       isScheduled = currentWindow.outsideDeliveryHours && data.scheduled === true && currentWindow.schedulingEnabled;
       scheduledDeliveryCutoff = currentWindow.deliveryCutoffTime;
@@ -654,6 +720,9 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
       is_scheduled: isScheduled,
       scheduled_delivery_note: scheduledDeliveryNote,
       delivery_cutoff_time: scheduledDeliveryCutoff,
+      store_reservation: isStoreReservation,
+      reservation_date: reservationDate,
+      reservation_requires_contact: isStoreReservation,
     };
 
     if (customerUser) {
@@ -724,10 +793,18 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
         payment_method: method,
         scheduled: isScheduled,
         scheduled_delivery_note: scheduledDeliveryNote,
+        store_reservation: isStoreReservation,
+        reservation_date: reservationDate,
       };
     }
 
-    return { checkout, scheduled: isScheduled, scheduled_delivery_note: scheduledDeliveryNote };
+    return {
+      checkout,
+      scheduled: isScheduled,
+      scheduled_delivery_note: scheduledDeliveryNote,
+      store_reservation: isStoreReservation,
+      reservation_date: reservationDate,
+    };
   });
 
 export const getSiteCheckoutStatus = createServerFn({ method: "GET" })
