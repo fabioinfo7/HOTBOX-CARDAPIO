@@ -3020,29 +3020,6 @@ function CustomerHome() {
             />
           </div>
         )}
-        {deliveryCutoffTime && (
-          <div className={`mb-3 rounded-2xl border px-4 py-3 ${
-            outsideDeliveryHours
-              ? schedulingEnabled
-                ? "border-violet-200 bg-violet-50"
-                : "border-red-200 bg-red-50"
-              : "border-sky-200 bg-sky-50"
-          }`}>
-            <p className="text-sm font-black">
-              {outsideDeliveryHours
-                ? `⏰ Entregas para ${validatedNeighborhood || form.neighborhood} encerradas às ${deliveryCutoffTime}`
-                : `🕒 Entregas para ${validatedNeighborhood || form.neighborhood} até ${deliveryCutoffTime}`}
-            </p>
-            {outsideDeliveryHours && (
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                {schedulingEnabled
-                  ? "Você pode montar seu pedido normalmente e, ao finalizar, escolher AGENDAR para o próximo horário disponível."
-                  : "No momento não é possível finalizar um pedido para este bairro."}
-              </p>
-            )}
-          </div>
-        )}
-
         {!query && (activeCategory === "Tudo" || activeCategory === "Batata") && publicReviews.length > 0 && (
           <button
             type="button"
