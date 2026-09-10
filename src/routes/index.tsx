@@ -66,6 +66,7 @@ type Product = {
   promotion_time_end?: string | null;
   promotion_label?: string | null;
   is_combo?: boolean | null;
+  sort_order?: number | null;
 };
 
 type AddonOption = {
@@ -581,9 +582,9 @@ function CustomerHome() {
     supabase
       .from("products")
       .select(
-        "id,name,description,category,sale_price,image_url,kind,featured,active,promotion_active,promotion_price,promotion_type,promotion_start_at,promotion_end_at,promotion_days_of_week,promotion_time_start,promotion_time_end,promotion_label,is_combo",
+        "id,name,description,category,sale_price,image_url,kind,featured,active,promotion_active,promotion_price,promotion_type,promotion_start_at,promotion_end_at,promotion_days_of_week,promotion_time_start,promotion_time_end,promotion_label,is_combo,sort_order",
       )
-      .order("category")
+      .order("sort_order", { ascending: true, nullsFirst: false })
       .order("name")
       .then(({ data }) => setProducts((data as Product[]) ?? []));
     Promise.all([
@@ -886,7 +887,17 @@ function CustomerHome() {
     () => ["Tudo", ...Array.from(new Set(products.map((p) => p.category || "Outros")))],
     [products],
   );
-  const featured = useMemo(() => products.filter((p) => p.featured && p.active), [products]);
+  const featured = useMemo(
+    () =>
+      products
+        .filter((p) => p.featured && p.active)
+        .sort((a, b) => {
+          const aOrder = Number.isFinite(Number(a.sort_order)) ? Number(a.sort_order) : 999999;
+          const bOrder = Number.isFinite(Number(b.sort_order)) ? Number(b.sort_order) : 999999;
+          return aOrder - bOrder;
+        }),
+    [products],
+  );
 
   const reviewsWithComments = useMemo(
     () => publicReviews.filter((review) => !!review.comment),
@@ -905,7 +916,13 @@ function CustomerHome() {
           activeFilter === "todos" || (activeFilter === "ativos" && p.active) || (activeFilter === "inativos" && !p.active);
         return matchesCategory && matchesQuery && matchesStatus;
       })
-      .sort((a, b) => Number(b.active) - Number(a.active));
+      .sort((a, b) => {
+        const activeDiff = Number(b.active) - Number(a.active);
+        if (activeDiff !== 0) return activeDiff;
+        const aOrder = Number.isFinite(Number(a.sort_order)) ? Number(a.sort_order) : 999999;
+        const bOrder = Number.isFinite(Number(b.sort_order)) ? Number(b.sort_order) : 999999;
+        return aOrder - bOrder || String(a.name || "").localeCompare(String(b.name || ""), "pt-BR");
+      });
   }, [products, activeCategory, query, activeFilter]);
 
   function basePriceForCartItem(item: CartItem) {
