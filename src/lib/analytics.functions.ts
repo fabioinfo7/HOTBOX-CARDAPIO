@@ -280,6 +280,9 @@ export const trackAnalyticsEvent = createServerFn({ method: "POST" })
         id: sessionId,
         visitor_id: visitorId,
         last_seen_at: now,
+        presence_last_seen_at: now,
+        current_page_path: trim(data.page_path, 500),
+        current_page_title: trim(data.page_title, 500),
         entry_path: trim(data.page_path, 500),
         landing_referrer: trim(data.referrer, 1200),
         source: trim(data.source, 120),
@@ -404,5 +407,81 @@ export const trackAnalyticsEvent = createServerFn({ method: "POST" })
       });
       // Analytics must never break checkout/customer experience.
       return { ok: false, stage: "exception", error: error?.message || String(error) } as const;
+    }
+  });
+
+
+export const trackAnalyticsPresence = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      session_id: string;
+      visitor_id: string;
+      page_path?: string | null;
+      page_title?: string | null;
+    }) => data,
+  )
+  .handler(async ({ data }) => {
+    try {
+      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+      const sessionId = trim(data.session_id, 100);
+      const visitorId = trim(data.visitor_id, 100);
+      if (!sessionId || !visitorId) return { ok: false } as const;
+
+      const now = new Date().toISOString();
+      const currentPage = trim(data.page_path, 500) || "/";
+
+      // Primeiro tenta atualizar uma sessão já existente.
+      const { data: updated, error: updateError } = await (supabaseAdmin as any)
+        .from("analytics_sessions")
+        .update({
+          last_seen_at: now,
+          presence_last_seen_at: now,
+          current_page_path: currentPage,
+          current_page_title: trim(data.page_title, 500),
+        })
+        .eq("id", sessionId)
+        .select("id")
+        .maybeSingle();
+
+      if (updateError) {
+        return {
+          ok: false,
+          stage: "presence_update",
+          error: updateError.message,
+        } as const;
+      }
+
+      // Se o primeiro sinal da sessão for a presença, cria a sessão mínima.
+      if (!updated) {
+        const { error: insertError } = await (supabaseAdmin as any)
+          .from("analytics_sessions")
+          .insert({
+            id: sessionId,
+            visitor_id: visitorId,
+            first_seen_at: now,
+            last_seen_at: now,
+            presence_last_seen_at: now,
+            entry_path: currentPage,
+            current_page_path: currentPage,
+            current_page_title: trim(data.page_title, 500),
+          });
+
+        if (insertError && String(insertError.code) !== "23505") {
+          return {
+            ok: false,
+            stage: "presence_insert",
+            error: insertError.message,
+          } as const;
+        }
+      }
+
+      return { ok: true } as const;
+    } catch (error: any) {
+      return {
+        ok: false,
+        stage: "presence_exception",
+        error: error?.message || String(error),
+      } as const;
     }
   });
