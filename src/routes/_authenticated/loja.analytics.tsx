@@ -284,6 +284,30 @@ function AnalyticsPage() {
   const [journeyPage, setJourneyPage] = useState(1);
   const JOURNEY_PAGE_SIZE = 20;
   const [health, setHealth] = useState<any>(null);
+  const [liveSessions, setLiveSessions] = useState<SessionRow[]>([]);
+  const [liveLoading, setLiveLoading] = useState(true);
+  const [liveError, setLiveError] = useState("");
+
+  async function loadLive() {
+    const cutoff = new Date(Date.now() - 45 * 1000).toISOString();
+
+    const { data, error } = await (supabase as any)
+      .from("analytics_sessions")
+      .select("*")
+      .gte("presence_last_seen_at", cutoff)
+      .order("presence_last_seen_at", { ascending: false })
+      .limit(500);
+
+    if (error) {
+      setLiveError(error.message || "Não foi possível carregar quem está ao vivo.");
+      setLiveSessions([]);
+    } else {
+      setLiveError("");
+      setLiveSessions(data || []);
+    }
+
+    setLiveLoading(false);
+  }
 
   async function load() {
     setLoading(true);
@@ -322,6 +346,16 @@ function AnalyticsPage() {
   useEffect(() => {
     void load();
   }, [days]);
+
+  useEffect(() => {
+    void loadLive();
+
+    const timer = window.setInterval(() => {
+      void loadLive();
+    }, 10000);
+
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     setJourneyPage(1);
@@ -398,6 +432,24 @@ function AnalyticsPage() {
   );
 
   const avgTicket = converted ? revenue / converted : 0;
+
+
+  const liveByPage = useMemo(() => {
+    const grouped = new Map<string, number>();
+
+    for (const session of liveSessions) {
+      const key = canonicalPageKey(
+        session.current_page_path || session.entry_path || "/",
+      );
+      grouped.set(key, (grouped.get(key) || 0) + 1);
+    }
+
+    return [...grouped.entries()].sort((a, b) => b[1] - a[1]);
+  }, [liveSessions]);
+
+  const liveIdentified = liveSessions.filter(
+    (session) => session.customer_name || session.customer_phone,
+  ).length;
 
   function groupSessions(field: string) {
     const m = new Map<
@@ -730,6 +782,144 @@ function AnalyticsPage() {
               campanhas, produtos, aparelhos e formas de pagamento trouxeram
               mais resultado.
             </p>
+          </div>
+        </div>
+      </Card>
+
+      <Card className="overflow-hidden border-emerald-500/30">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b bg-emerald-500/5 p-5">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="relative flex size-3">
+                <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-500 opacity-60" />
+                <span className="relative inline-flex size-3 rounded-full bg-emerald-500" />
+              </span>
+              <h2 className="text-lg font-black">Pessoas no cardápio agora</h2>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Atualiza automaticamente a cada 10 segundos. Uma pessoa é considerada ao vivo
+              quando o cardápio dela enviou sinal nos últimos 45 segundos.
+            </p>
+          </div>
+
+          <div className="flex gap-2">
+            <div className="rounded-xl border bg-background px-4 py-2 text-center">
+              <p className="text-[10px] font-bold uppercase text-muted-foreground">
+                Ao vivo agora
+              </p>
+              <p className="text-2xl font-black">{liveSessions.length}</p>
+            </div>
+            <div className="rounded-xl border bg-background px-4 py-2 text-center">
+              <p className="text-[10px] font-bold uppercase text-muted-foreground">
+                Identificados
+              </p>
+              <p className="text-2xl font-black">{liveIdentified}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-5 p-5 xl:grid-cols-[0.9fr_1.6fr]">
+          <div>
+            <h3 className="font-black">Em quais páginas estão agora</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Mostra a página que está aberta neste exato momento em cada navegador ativo.
+            </p>
+
+            <div className="mt-3 space-y-2">
+              {liveLoading ? (
+                <EmptyMessage text="Carregando pessoas ao vivo..." />
+              ) : liveError ? (
+                <EmptyMessage text="O acompanhamento ao vivo ainda não está disponível. Execute a atualização do banco enviada junto com estes arquivos." />
+              ) : liveByPage.length === 0 ? (
+                <EmptyMessage text="Não há ninguém navegando no cardápio neste momento." />
+              ) : (
+                liveByPage.map(([path, count]) => (
+                  <div
+                    key={path}
+                    className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2"
+                  >
+                    <span className="font-bold">{friendlyPagePath(path)}</span>
+                    <span className="shrink-0 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-black text-emerald-800">
+                      {count} {count === 1 ? "pessoa" : "pessoas"}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div>
+            <h3 className="font-black">Quem está ao vivo</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Nome e telefone aparecem quando a pessoa já se identificou durante a compra.
+            </p>
+
+            <div className="mt-3 overflow-auto">
+              {liveSessions.length === 0 ? (
+                <EmptyMessage text="Nenhum visitante ativo agora." />
+              ) : (
+                <table className="w-full min-w-[720px] text-xs">
+                  <thead>
+                    <tr className="border-b text-left">
+                      <th className="py-2">Quem está navegando</th>
+                      <th>Origem</th>
+                      <th>Página aberta agora</th>
+                      <th>Aparelho</th>
+                      <th>Último sinal</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {liveSessions.map((session) => {
+                      const secondsAgo = Math.max(
+                        0,
+                        Math.floor(
+                          (Date.now() -
+                            new Date(
+                              session.presence_last_seen_at ||
+                                session.last_seen_at,
+                            ).getTime()) /
+                            1000,
+                        ),
+                      );
+
+                      return (
+                        <tr key={session.id} className="border-b align-top">
+                          <td className="py-2">
+                            <b>{visitorIdentityLabel(session)}</b>
+                            <br />
+                            <span className="text-muted-foreground">
+                              {session.customer_phone ||
+                                "Ainda não informou telefone"}
+                            </span>
+                          </td>
+                          <td>
+                            <b>{niceSource(session.source)}</b>
+                            <br />
+                            <span className="text-muted-foreground">
+                              {niceMedium(session.medium) ||
+                                "Forma de chegada não informada"}
+                            </span>
+                          </td>
+                          <td className="font-bold">
+                            {friendlyPagePath(
+                              session.current_page_path ||
+                                session.entry_path ||
+                                "/",
+                            )}
+                          </td>
+                          <td>{niceDevice(session.device_type)}</td>
+                          <td>
+                            {secondsAgo <= 5
+                              ? "Agora"
+                              : `Há ${secondsAgo} segundos`}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
         </div>
       </Card>
