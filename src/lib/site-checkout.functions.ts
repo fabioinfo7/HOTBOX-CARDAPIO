@@ -31,6 +31,7 @@ type CheckoutInput = {
   scheduled?: boolean | null;
   store_reservation?: boolean | null;
   reservation_date?: string | null;
+  reservation_acknowledged?: boolean | null;
   coupon_code?: string | null;
   access_token?: string | null;
   items: CheckoutItemInput[];
@@ -326,6 +327,14 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
       const reservationsEnabled = cfg?.digital_menu_closed_reservations_enabled === true;
 
       if (reservationsEnabled && data.store_reservation === true) {
+        if (data.reservation_acknowledged !== true) {
+          return {
+            error: "Confirme que você está ciente de que este pedido é AGENDADO / RESERVADO e será entregue posteriormente.",
+            storeClosed: true,
+            canReserve: true,
+            requiresReservationAcknowledgement: true,
+          };
+        }
         const validation = validateReservationDate(cfg, data.reservation_date);
         if (!validation.ok) {
           return { error: validation.error, storeClosed: true, canReserve: true };
@@ -390,7 +399,7 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
       normalizedNeighborhood = String(area?.neighborhood || data.address_neighborhood);
 
       const deliveryWindow = await getNeighborhoodDeliveryWindow(supabaseAdmin, normalizedNeighborhood);
-      if (deliveryWindow.outsideDeliveryHours) {
+      if (!isStoreReservation && deliveryWindow.outsideDeliveryHours) {
         if (data.scheduled === true && deliveryWindow.schedulingEnabled) {
           // O pedido pode continuar, mas será marcado como AGENDAMENTO.
         } else if (deliveryWindow.schedulingEnabled) {
