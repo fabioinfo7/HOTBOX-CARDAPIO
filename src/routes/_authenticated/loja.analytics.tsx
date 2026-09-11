@@ -22,7 +22,7 @@ import {
   Tablet,
   Search,
   PackageOpen,
-  Route,
+  Route as RouteIcon,
   CircleDollarSign,
   UserRound,
   Megaphone,
@@ -752,7 +752,7 @@ function AnalyticsPage() {
           <div className="grid gap-5 xl:grid-cols-2">
             <Card className="p-5">
               <div className="flex items-start gap-3">
-                <Route className="mt-0.5 size-5" />
+                <RouteIcon className="mt-0.5 size-5" />
                 <div>
                   <h2 className="font-black">
                     Caminho até a compra
