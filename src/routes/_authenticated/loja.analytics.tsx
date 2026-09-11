@@ -53,17 +53,28 @@ const dt = (v: string) =>
   });
 
 const SOURCE_LABEL: Record<string, string> = {
-  direct: "Acessou diretamente",
-  instagram: "Instagram",
+  direct: "Acesso direto ao site",
+  none: "Acesso direto ao site",
+  referral: "Veio de outro site",
+  organic: "Busca orgânica",
+  paid_social: "Anúncio em rede social",
   facebook: "Facebook",
+  fb: "Facebook",
+  facebook_ads: "Anúncio do Facebook",
+  instagram: "Instagram",
+  ig: "Instagram",
+  instagram_ads: "Anúncio do Instagram",
+  meta: "Anúncio da Meta",
   meta_ads: "Anúncio da Meta (Facebook ou Instagram)",
+  metaads: "Anúncio da Meta (Facebook ou Instagram)",
   google: "Google",
+  google_ads: "Anúncio do Google",
+  gads: "Anúncio do Google",
   whatsapp: "WhatsApp",
+  wa: "WhatsApp",
   bio: "Página da Bio",
   ifood: "iFood",
   "99food": "99Food",
-  referral: "Veio de outro site",
-  none: "Não identificado",
 };
 
 const DEVICE_LABEL: Record<string, string> = {
@@ -108,7 +119,57 @@ const EVENT_LABEL: Record<string, string> = {
 
 function niceSource(value: unknown) {
   const raw = String(value || "").trim();
-  return SOURCE_LABEL[raw] || raw || "Não identificado";
+  if (!raw) return "Origem não identificada";
+
+  const normalized = raw
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+
+  if (SOURCE_LABEL[normalized]) return SOURCE_LABEL[normalized];
+
+  if (/instagram|\big\b/i.test(raw)) return "Instagram";
+  if (/facebook|\bfb\b/i.test(raw)) return "Facebook";
+  if (/meta/i.test(raw)) return "Anúncio da Meta";
+  if (/whatsapp|\bwa\b/i.test(raw)) return "WhatsApp";
+  if (/google/i.test(raw)) return "Google";
+  if (/ifood/i.test(raw)) return "iFood";
+  if (/99.?food/i.test(raw)) return "99Food";
+
+  return raw
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+
+function niceMedium(value: unknown) {
+  const raw = String(value || "").trim().toLowerCase();
+  const labels: Record<string, string> = {
+    social: "Rede social",
+    paid_social: "Anúncio em rede social",
+    organic: "Busca orgânica",
+    referral: "Link de outro site",
+    none: "Acesso direto",
+    cpc: "Anúncio pago",
+    paid: "Anúncio pago",
+    email: "E-mail",
+  };
+  return labels[raw] || (raw ? raw.replace(/[_-]+/g, " ") : "");
+}
+
+function niceCampaign(value: unknown) {
+  const raw = String(value || "").trim();
+  if (!raw) return "Sem campanha identificada";
+  return raw
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function visitorIdentityLabel(session: SessionRow) {
+  if (session.customer_name) return String(session.customer_name);
+  if (session.customer_phone) return `Cliente ${String(session.customer_phone)}`;
+  return "Visitante ainda não identificado";
 }
 
 function niceDevice(value: unknown) {
@@ -220,6 +281,8 @@ function AnalyticsPage() {
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [events, setEvents] = useState<EventRow[]>([]);
   const [search, setSearch] = useState("");
+  const [journeyPage, setJourneyPage] = useState(1);
+  const JOURNEY_PAGE_SIZE = 20;
   const [health, setHealth] = useState<any>(null);
 
   async function load() {
@@ -259,6 +322,10 @@ function AnalyticsPage() {
   useEffect(() => {
     void load();
   }, [days]);
+
+  useEffect(() => {
+    setJourneyPage(1);
+  }, [search, days]);
 
   const eventSet = useMemo(() => {
     const by = new Map<string, Set<string>>();
@@ -407,26 +474,37 @@ function AnalyticsPage() {
       .slice(0, 12);
   }
 
-  const journey = sessions
-    .filter((s) => {
-      const q = search.trim().toLowerCase();
-      if (!q) return true;
+  const filteredJourney = sessions.filter((s) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
 
-      return [
-        s.customer_name,
-        s.customer_phone,
-        s.source,
-        s.campaign,
-        s.order_id,
-        s.checkout_id,
-        s.visitor_id,
-      ].some((v) =>
-        String(v || "")
-          .toLowerCase()
-          .includes(q),
-      );
-    })
-    .slice(0, 120);
+    return [
+      s.customer_name,
+      s.customer_phone,
+      s.source,
+      s.medium,
+      s.campaign,
+      s.order_id,
+      s.checkout_id,
+      s.visitor_id,
+    ].some((v) =>
+      String(v || "")
+        .toLowerCase()
+        .includes(q),
+    );
+  });
+
+  const journeyTotalPages = Math.max(
+    1,
+    Math.ceil(filteredJourney.length / JOURNEY_PAGE_SIZE),
+  );
+
+  const currentJourneyPage = Math.min(journeyPage, journeyTotalPages);
+
+  const journey = filteredJourney.slice(
+    (currentJourneyPage - 1) * JOURNEY_PAGE_SIZE,
+    currentJourneyPage * JOURNEY_PAGE_SIZE,
+  );
 
   const funnel = [
     {
@@ -534,11 +612,10 @@ function AnalyticsPage() {
       <div className="flex flex-wrap items-center gap-3 print:hidden">
         <div>
           <h1 className="text-2xl font-black">
-            Entenda seus clientes
+            Clientes, origem e comportamento
           </h1>
           <p className="text-sm text-muted-foreground">
-            Veja de onde as pessoas chegam, o que fazem no cardápio
-            e em que ponto compram ou desistem.
+            Veja quem foi identificado, de onde cada visita veio, o que a pessoa fez no cardápio e se terminou comprando.
           </p>
         </div>
 
@@ -676,6 +753,13 @@ function AnalyticsPage() {
               </p>
             </Card>
           )}
+
+          <div>
+            <h2 className="text-lg font-black">Resumo do período</h2>
+            <p className="text-xs text-muted-foreground">
+              Principais números para entender rapidamente o movimento do cardápio.
+            </p>
+          </div>
 
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {cards.map(({ title, value, icon: Icon, help }) => (
@@ -1247,12 +1331,11 @@ function AnalyticsPage() {
                 <div className="flex items-center gap-2">
                   <UserRound className="size-4" />
                   <h2 className="font-black">
-                    O caminho de cada visitante
+                    Histórico de cada visitante
                   </h2>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Veja, pessoa por pessoa, quando entrou, de onde veio,
-                  o que fez no cardápio e se terminou comprando.
+                  Veja, pessoa por pessoa, quando entrou, de onde veio, quais páginas abriu, o que fez e se terminou comprando.
                 </p>
               </div>
 
@@ -1276,13 +1359,13 @@ function AnalyticsPage() {
                 <table className="w-full min-w-[1100px] text-xs">
                   <thead>
                     <tr className="border-b text-left">
-                      <th className="py-2">Quando entrou</th>
-                      <th>Quem era</th>
-                      <th>De onde veio</th>
+                      <th className="py-2">Data e hora</th>
+                      <th>Quem entrou</th>
+                      <th>Origem da visita</th>
                       <th>Campanha</th>
                       <th>Aparelho</th>
                       <th>Tempo no site</th>
-                      <th>O que fez</th>
+                      <th>Ações realizadas</th>
                       <th>Pagamento</th>
                       <th>Pedido</th>
                       <th>Resultado</th>
@@ -1324,30 +1407,24 @@ function AnalyticsPage() {
                           </td>
 
                           <td>
-                            <b>
-                              {s.customer_name ||
-                                "Visitante sem identificação"}
-                            </b>
+                            <b>{visitorIdentityLabel(s)}</b>
                             <br />
                             <span className="text-muted-foreground">
-                              {s.customer_phone ||
-                                "Ainda não informou telefone"}
+                              {s.customer_phone
+                                ? String(s.customer_phone)
+                                : "Ainda não informou telefone"}
                             </span>
                           </td>
 
                           <td>
                             <b>{niceSource(s.source)}</b>
-                            {s.medium ? (
-                              <>
-                                <br />
-                                <span className="text-muted-foreground">
-                                  {String(s.medium)}
-                                </span>
-                              </>
-                            ) : null}
+                            <br />
+                            <span className="text-muted-foreground">
+                              {niceMedium(s.medium) || "Forma de chegada não informada"}
+                            </span>
                           </td>
 
-                          <td>{s.campaign || "Sem campanha identificada"}</td>
+                          <td>{niceCampaign(s.campaign)}</td>
 
                           <td>
                             {niceDevice(s.device_type)}
@@ -1452,6 +1529,53 @@ function AnalyticsPage() {
                     })}
                   </tbody>
                 </table>
+              </div>
+            )}
+
+            {filteredJourney.length > 0 && (
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4 print:hidden">
+                <p className="text-xs text-muted-foreground">
+                  Mostrando{" "}
+                  <b>
+                    {(currentJourneyPage - 1) * JOURNEY_PAGE_SIZE + 1}
+                    {"–"}
+                    {Math.min(
+                      currentJourneyPage * JOURNEY_PAGE_SIZE,
+                      filteredJourney.length,
+                    )}
+                  </b>{" "}
+                  de <b>{filteredJourney.length}</b> visitante(s)
+                </p>
+
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={currentJourneyPage <= 1}
+                    onClick={() =>
+                      setJourneyPage((page) => Math.max(1, page - 1))
+                    }
+                  >
+                    Anterior
+                  </Button>
+
+                  <span className="rounded-lg border bg-muted/40 px-3 py-1.5 text-xs font-bold">
+                    Página {currentJourneyPage} de {journeyTotalPages}
+                  </span>
+
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={currentJourneyPage >= journeyTotalPages}
+                    onClick={() =>
+                      setJourneyPage((page) =>
+                        Math.min(journeyTotalPages, page + 1),
+                      )
+                    }
+                  >
+                    Próxima
+                  </Button>
+                </div>
               </div>
             )}
           </Card>
