@@ -425,7 +425,7 @@ export function trackAnalytics(
     ...enrichedExtra,
   } as AnalyticsEventInput;
 
-  // Mesmo event_id segue para Browser Pixel e CAPI; a Meta pode deduplicar.
+  // Mesmo event_id segue para Browser Pixel e CAPI; a Meta pode deduplicar..
   trackMetaPixel(event_name, enrichedExtra);
 
   void trackAnalyticsEvent({ data: payload })
