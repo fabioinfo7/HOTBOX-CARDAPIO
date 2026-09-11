@@ -1,4 +1,4 @@
-import { trackAnalyticsEvent, type AnalyticsEventInput } from "@/lib/analytics.functions";
+import { trackAnalyticsEvent, trackAnalyticsPresence, type AnalyticsEventInput } from "@/lib/analytics.functions";
 
 const VISITOR_KEY = "hb_analytics_visitor";
 const SESSION_KEY = "hb_analytics_session";
@@ -386,6 +386,49 @@ function trackMetaPixel(
   );
 }
 
+
+function startLivePresenceTracking() {
+  if (typeof window === "undefined") return;
+  if (/^\/(loja|admin|entregador)(\/|$)/.test(window.location.pathname)) return;
+
+  const w = window as any;
+  if (w.__hotboxLivePresenceStarted) return;
+  w.__hotboxLivePresenceStarted = true;
+
+  const sendPresence = () => {
+    if (document.visibilityState !== "visible") return;
+
+    const ids = analyticsIdentity();
+    void trackAnalyticsPresence({
+      data: {
+        ...ids,
+        page_path: `${window.location.pathname}${window.location.search}`,
+        page_title: document.title,
+      },
+    }).catch(() => {
+      // Presença ao vivo nunca pode atrapalhar a navegação ou o checkout.
+    });
+  };
+
+  sendPresence();
+  const timer = window.setInterval(sendPresence, 15000);
+
+  const onVisibility = () => {
+    if (document.visibilityState === "visible") sendPresence();
+  };
+  const onPageShow = () => sendPresence();
+
+  document.addEventListener("visibilitychange", onVisibility);
+  window.addEventListener("pageshow", onPageShow);
+
+  w.__hotboxLivePresenceCleanup = () => {
+    window.clearInterval(timer);
+    document.removeEventListener("visibilitychange", onVisibility);
+    window.removeEventListener("pageshow", onPageShow);
+    w.__hotboxLivePresenceStarted = false;
+  };
+}
+
 export function trackAnalytics(
   event_name: string,
   extra: Partial<AnalyticsEventInput> = {},
@@ -394,6 +437,8 @@ export function trackAnalytics(
   if (/^\/(loja|admin|entregador)(\/|$)/.test(window.location.pathname)) {
     return;
   }
+
+  startLivePresenceTracking();
 
   const ids = analyticsIdentity();
   const eventId = metaEventId(event_name, extra);
@@ -425,7 +470,7 @@ export function trackAnalytics(
     ...enrichedExtra,
   } as AnalyticsEventInput;
 
-  // Mesmo event_id segue para Browser Pixel e CAPI; a Meta pode deduplicar..
+  // Mesmo event_id segue para Browser Pixel e CAPI; a Meta pode deduplicar.
   trackMetaPixel(event_name, enrichedExtra);
 
   void trackAnalyticsEvent({ data: payload })
