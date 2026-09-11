@@ -830,6 +830,41 @@ function CustomerHome() {
     });
   }, [products, cartHydrated]);
 
+  // Se um adicional (ou o produto vinculado a ele, como uma bebida) for desativado
+  // depois de já estar na sacola, ele é removido automaticamente antes da compra.
+  useEffect(() => {
+    if (!cartHydrated || !configLoaded) return;
+
+    setCart((current) => {
+      let changed = false;
+
+      const next = current.map((item) => {
+        const groups = addonGroupsByProduct[String(item.product.id)] || [];
+        const options = groups.flatMap((group) => group.options);
+
+        const validAddons = item.addons.filter((addon) => {
+          const option = options.find((candidate) => String(candidate.id) === String(addon.option_id));
+          if (!option) {
+            changed = true;
+            return false;
+          }
+          const group = groups.find((candidate) => String(candidate.id) === String(option.group_id));
+          const available = addonOptionAvailability(option, group).available;
+          if (!available) changed = true;
+          return available;
+        });
+
+        if (validAddons.length !== item.addons.length) {
+          return { ...item, addons: validAddons };
+        }
+
+        return item;
+      });
+
+      return changed ? next : current;
+    });
+  }, [products, addonGroupsByProduct, configLoaded, cartHydrated]);
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setCustomerSession(data.session));
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setCustomerSession(session));
@@ -948,8 +983,8 @@ function CustomerHome() {
         .maybeSingle(),
       (supabase as any).rpc("get_public_payment_config"),
       (supabase as any).rpc("get_public_store_status"),
-      (supabase as any).from("menu_addon_groups").select("id,name,display_title,description,display_subtitle,required,min_select,max_select,active,sort_order").eq("active", true).order("sort_order"),
-      (supabase as any).from("menu_addon_options").select("id,group_id,name,display_name,description,display_description,image_url,price,linked_product_id,use_linked_product_price,active,sort_order").eq("active", true).order("sort_order"),
+      (supabase as any).from("menu_addon_groups").select("id,name,display_title,description,display_subtitle,required,min_select,max_select,active,sort_order").order("sort_order"),
+      (supabase as any).from("menu_addon_options").select("id,group_id,name,display_name,description,display_description,image_url,price,linked_product_id,use_linked_product_price,active,sort_order").order("sort_order"),
       (supabase as any).from("product_addon_groups").select("product_id,group_id,sort_order").order("sort_order"),
       (supabase as any).from("menu_order_bumps").select("id,product_id,title,subtitle,placement,price_override,active,sort_order").eq("active", true).order("sort_order"),
     ]).then(([storeResult, paymentResult, storeStatusResult, groupResult, optionResult, linkResult, bumpResult]: any[]) => {
@@ -1607,6 +1642,24 @@ function CustomerHome() {
     }, 0);
   }
 
+  function addonOptionAvailability(option: AddonOption, group?: AddonGroup) {
+    if (group && group.active !== true) {
+      return { available: false, reason: "Grupo indisponível" };
+    }
+    if (option.active !== true) {
+      return { available: false, reason: "Esgotado por hoje" };
+    }
+    if (option.linked_product_id) {
+      const linkedProduct = products.find(
+        (product) => String(product.id) === String(option.linked_product_id),
+      );
+      if (!linkedProduct || linkedProduct.active !== true) {
+        return { available: false, reason: "Esgotado por hoje" };
+      }
+    }
+    return { available: true, reason: "" };
+  }
+
   function addonQty(optionId: string) {
     return Math.max(0, Number(detailAddonQty[optionId] || (detailAddonIds.includes(optionId) ? 1 : 0)));
   }
@@ -1616,6 +1669,12 @@ function CustomerHome() {
   }
 
   function setDetailAddonQuantity(group: AddonGroup, option: AddonOption, nextQty: number) {
+    const availability = addonOptionAvailability(option, group);
+    if (!availability.available) {
+      toast.error(`${option.display_name || option.name} está indisponível no momento.`);
+      return;
+    }
+
     const optionId = String(option.id);
     const currentQty = addonQty(optionId);
     const currentGroupTotal = groupSelectedUnits(group);
@@ -1636,6 +1695,12 @@ function CustomerHome() {
   }
 
   function toggleDetailAddon(group: AddonGroup, option: AddonOption) {
+    const availability = addonOptionAvailability(option, group);
+    if (!availability.available) {
+      toast.error(`${option.display_name || option.name} está indisponível no momento.`);
+      return;
+    }
+
     const optionId = String(option.id);
     const currentQty = addonQty(optionId);
 
@@ -1670,7 +1735,11 @@ function CustomerHome() {
     const options = groups.flatMap((g) => g.options);
     return detailAddonIds
       .map((id) => options.find((o) => String(o.id) === id))
-      .filter(Boolean)
+      .filter((o): o is AddonOption => Boolean(o))
+      .filter((o) => {
+        const group = groups.find((g) => String(g.id) === String(o.group_id));
+        return addonOptionAvailability(o, group).available;
+      })
       .map((o: AddonOption) => ({
         option_id: String(o.id),
         group_id: String(o.group_id),
@@ -1682,7 +1751,13 @@ function CustomerHome() {
 
   function validateDetailAddons(productId: string) {
     for (const group of addonGroupsByProduct[productId] || []) {
-      const selected = groupSelectedUnits(group);
+      if (group.active !== true) continue;
+
+      const selected = group.options.reduce((sum, option) => {
+        return addonOptionAvailability(option, group).available
+          ? sum + addonQty(String(option.id))
+          : sum;
+      }, 0);
       const min = Math.max(0, Number(group.min_select || 0), group.required ? 1 : 0);
       const max = Math.max(1, Number(group.max_select || 1));
       if (selected < min) {
@@ -2392,7 +2467,7 @@ function CustomerHome() {
                 const min = Math.max(0, Number(group.min_select || 0), group.required ? 1 : 0);
                 const max = Math.max(1, Number(group.max_select || 1));
                 return (
-                  <div key={group.id} className="overflow-hidden rounded-[22px] border border-black/5 bg-white shadow-sm">
+                  <div key={group.id} className={`overflow-hidden rounded-[22px] border border-black/5 bg-white shadow-sm ${group.active !== true ? "grayscale opacity-55" : ""}`}>
                     <div className="flex items-start justify-between gap-3 border-b bg-zinc-50/80 px-4 py-3">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
@@ -2404,6 +2479,11 @@ function CustomerHome() {
                           }`}>
                             {group.required ? "Obrigatório" : "Opcional"}
                           </span>
+                          {group.active !== true && (
+                            <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-zinc-600">
+                              Indisponível
+                            </span>
+                          )}
                         </div>
                         {(group.display_subtitle || group.description) && <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{group.display_subtitle || group.description}</p>}
                         <p className="mt-1 text-[10px] font-semibold text-zinc-400">
@@ -2420,25 +2500,40 @@ function CustomerHome() {
                     <div className="divide-y">
                       {group.options.map((option) => {
                         const optionId = String(option.id);
-                        const quantity = addonQty(optionId);
+                        const availability = addonOptionAvailability(option, group);
+                        const unavailable = !availability.available;
+                        const quantity = unavailable ? 0 : addonQty(optionId);
                         const selected = quantity > 0;
                         const unitPrice = effectiveAddonOptionPrice(option);
                         return (
                           <div
                             key={option.id}
-                            className={`flex items-center gap-3 px-4 py-3 transition ${selected ? "bg-amber-50/60" : "bg-white"}`}
+                            className={`flex items-center gap-3 px-4 py-3 transition ${
+                              unavailable
+                                ? "bg-zinc-50 grayscale opacity-55"
+                                : selected
+                                  ? "bg-amber-50/60"
+                                  : "bg-white"
+                            }`}
                           >
                             <button
                               type="button"
                               onClick={() => toggleDetailAddon(group, option)}
-                              className={`grid size-6 shrink-0 place-items-center border-2 ${
+                              disabled={unavailable}
+                              className={`grid size-6 shrink-0 place-items-center border-2 disabled:cursor-not-allowed ${
                                 group.max_select === 1 ? "rounded-full" : "rounded-lg"
                               } ${
                                 selected
                                   ? "border-primary bg-primary text-primary-foreground"
                                   : "border-zinc-300 bg-white"
                               }`}
-                              aria-label={selected ? `Remover ${option.display_name || option.name}` : `Adicionar ${option.display_name || option.name}`}
+                              aria-label={
+                                unavailable
+                                  ? `${option.display_name || option.name} indisponível`
+                                  : selected
+                                    ? `Remover ${option.display_name || option.name}`
+                                    : `Adicionar ${option.display_name || option.name}`
+                              }
                             >
                               {selected && <CheckCircle2 className="size-4" />}
                             </button>
@@ -2462,10 +2557,16 @@ function CustomerHome() {
                             <button
                               type="button"
                               onClick={() => toggleDetailAddon(group, option)}
-                              className="min-w-0 flex-1 text-left"
+                              disabled={unavailable}
+                              className="min-w-0 flex-1 text-left disabled:cursor-not-allowed"
                             >
                               <div className="flex flex-wrap items-center gap-1.5">
                                 <p className="text-sm font-bold text-zinc-900">{option.display_name || option.name}</p>
+                                {unavailable && (
+                                  <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-zinc-600">
+                                    Esgotado
+                                  </span>
+                                )}
                               </div>
                               {(option.display_description || option.description) && <p className="mt-0.5 text-[11px] text-muted-foreground">{option.display_description || option.description}</p>}
                               <p className="mt-0.5 text-xs font-black text-primary">
@@ -2478,8 +2579,8 @@ function CustomerHome() {
                                 <button
                                   type="button"
                                   onClick={() => setDetailAddonQuantity(group, option, quantity - 1)}
-                                  disabled={quantity <= 0}
-                                  className="grid size-7 place-items-center rounded-full text-zinc-700 disabled:opacity-30"
+                                  disabled={unavailable || quantity <= 0}
+                                  className="grid size-7 place-items-center rounded-full text-zinc-700 disabled:cursor-not-allowed disabled:opacity-30"
                                   aria-label={`Diminuir ${option.display_name || option.name}`}
                                 >
                                   <Minus className="size-3.5" />
