@@ -396,7 +396,7 @@ export function MercadoPagoPayment({ checkoutId, amount, publicKey, maxInstallme
       </div>
     );
   }
-
+//
   if (pending) {
     return (
       <div className="rounded-3xl border bg-muted/30 p-6 text-center">
