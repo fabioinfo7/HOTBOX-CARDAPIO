@@ -188,6 +188,24 @@ function friendlyPagePath(value: unknown) {
   return readable ? `Página — ${readable}` : "Página não identificada";
 }
 
+
+function canonicalPageKey(value: unknown) {
+  const raw = String(value || "").trim();
+  if (!raw) return "/";
+
+  try {
+    if (/^https?:\/\//i.test(raw)) {
+      const url = new URL(raw);
+      return (url.pathname || "/").replace(/\/+$/, "") || "/";
+    }
+  } catch {
+    // segue para limpeza simples
+  }
+
+  const path = raw.split("?")[0].split("#")[0];
+  return (path || "/").replace(/\/+$/, "") || "/";
+}
+
 function EmptyMessage({ text }: { text: string }) {
   return (
     <div className="rounded-xl border border-dashed p-5 text-center text-sm text-muted-foreground">
@@ -356,6 +374,32 @@ function AnalyticsPage() {
         x.count += Number(e.quantity || 1);
         x.value += Number(e.value || 0);
         m.set(k, x);
+      });
+
+    return [...m.entries()]
+      .sort((a, b) => b[1].count - a[1].count)
+      .slice(0, 12);
+  }
+
+  function groupPageViews() {
+    const m = new Map<
+      string,
+      { count: number; value: number }
+    >();
+
+    events
+      .filter((e) => e.event_name === "page_view")
+      .forEach((e) => {
+        const raw =
+          e.page_path ||
+          e.properties?.page_path ||
+          e.properties?.event_source_url ||
+          "/";
+        const key = canonicalPageKey(raw);
+        const x = m.get(key) || { count: 0, value: 0 };
+        x.count += 1;
+        x.value += Number(e.value || 0);
+        m.set(key, x);
       });
 
     return [...m.entries()]
@@ -819,31 +863,31 @@ function AnalyticsPage() {
           <div className="grid gap-5 xl:grid-cols-3">
             <Card className="p-5">
               <h2 className="font-black">
-                Páginas mais abertas
+                Onde as pessoas mais entram
               </h2>
               <p className="mt-1 text-xs text-muted-foreground">
-                Mostra os nomes das páginas em linguagem simples, sem endereços técnicos.
+                Os endereços com códigos de anúncio são agrupados automaticamente. Você verá apenas o nome real da página.
               </p>
 
               <div className="mt-3 space-y-2">
-                {groupEvents("page_view", "page_path").length === 0 ? (
+                {groupPageViews().length === 0 ? (
                   <EmptyMessage text="Ainda não há páginas registradas." />
                 ) : (
-                  groupEvents("page_view", "page_path").map(
-                    ([k, x], i) => (
-                      <div
-                        key={k}
-                        className="flex justify-between gap-3 border-b pb-2 text-sm"
-                      >
-                        <span className="max-w-[68%] truncate">
-                          <b>
-                            {i + 1}. {friendlyPagePath(k)}
-                          </b>
-                        </span>
-                        <span>{x.count} abertura(s)</span>
-                      </div>
-                    ),
-                  )
+                  groupPageViews().map(([k, x], i) => (
+                    <div
+                      key={k}
+                      className="flex justify-between gap-3 border-b pb-2 text-sm"
+                    >
+                      <span className="max-w-[72%]">
+                        <b>
+                          {i + 1}. {friendlyPagePath(k)}
+                        </b>
+                      </span>
+                      <span className="shrink-0">
+                        {x.count} {x.count === 1 ? "visita" : "visitas"}
+                      </span>
+                    </div>
+                  ))
                 )}
               </div>
             </Card>
