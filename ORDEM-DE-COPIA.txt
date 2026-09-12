@@ -1,0 +1,25 @@
+HOTBOX — ÚLTIMOS ARQUIVOS INDIVIDUAIS
+
+CORREÇÃO DE AGORA
+1. src/routes/_authenticated/loja.chat.tsx
+   - Corrige o erro "CheckCircle2 is not defined" ao abrir a aba Pedidos.
+2. supabase/migrations/20260903020000_garantir_status_whatsapp_cardapio_digital.sql
+   - Execute no Supabase SQL Editor.
+   - Recria o gatilho de atualização de status no WhatsApp e garante app_public_url.
+   - Vale também para pedidos do cardápio digital (source=site).
+
+ARQUIVOS MAIS RECENTES DAS ALTERAÇÕES ANTERIORES
+3. src/routes/index.tsx
+4. src/routes/api/public/webhooks.evolution.ts
+5. src/lib/digital-menu-finance.functions.ts
+6. src/lib/infinitepay.functions.ts
+7. src/routes/api/public/webhooks.infinitepay.ts
+8. src/routes/_authenticated/loja.financeiro-cardapio.tsx
+9. src/routes/_authenticated/loja.tsx
+10. src/routes/obrigado.tsx
+11. supabase/migrations/20260903001000_financeiro_cardapio_infinitepay.sql
+
+IMPORTANTE
+- Se a migration 20260903001000_financeiro_cardapio_infinitepay.sql já foi executada com sucesso, NÃO precisa executar novamente.
+- A migration 20260903020000_garantir_status_whatsapp_cardapio_digital.sql é a nova correção e deve ser executada.
+- Não substitua outros arquivos do WhatsApp/IA que não aparecem nesta lista.
