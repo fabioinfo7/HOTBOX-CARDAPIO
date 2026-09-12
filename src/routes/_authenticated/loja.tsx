@@ -1,5 +1,5 @@
 import { createFileRoute, Link, Outlet, useNavigate, useLocation } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -41,6 +41,8 @@ import {
   WalletCards,
   Trophy,
   BarChart3,
+  ShoppingCart,
+  X,
 } from "lucide-react";
 import { FreightApprovalPopup } from "@/components/freight-approval-popup";
 import { HumanHandoffAlert } from "@/components/human-handoff-alert";
@@ -110,11 +112,175 @@ function playIncomingBeep() {
   }
 }
 
+
+type LiveAdminBubble = {
+  id: string;
+  kind: "visitors" | "cart";
+  title: string;
+  message: string;
+};
+
+function pluralPeople(count: number) {
+  return count === 1 ? "1 pessoa" : `${count} pessoas`;
+}
+
 function AdminLayout() {
   const nav = useNavigate();
   const loc = useLocation();
   const [checking, setChecking] = useState(true);
   const [unreadChats, setUnreadChats] = useState(0);
+  const [liveBubble, setLiveBubble] = useState<LiveAdminBubble | null>(null);
+  const liveBubbleTimerRef = useRef<number | null>(null);
+  const previousLiveVisitorsRef = useRef<number | null>(null);
+  const seenCartEventsRef = useRef<Set<string>>(new Set());
+  const cartWatchStartedAtRef = useRef<string>(new Date().toISOString());
+
+  function showLiveAdminBubble(next: Omit<LiveAdminBubble, "id">) {
+    if (liveBubbleTimerRef.current) {
+      window.clearTimeout(liveBubbleTimerRef.current);
+    }
+
+    setLiveBubble({
+      ...next,
+      id: `${next.kind}_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+    });
+
+    liveBubbleTimerRef.current = window.setTimeout(() => {
+      setLiveBubble(null);
+      liveBubbleTimerRef.current = null;
+    }, 5000);
+  }
+
+  // Alertas globais do cardápio — aparecem em qualquer tela do sistema.
+  useEffect(() => {
+    let disposed = false;
+
+    async function checkLiveVisitors() {
+      const cutoff = new Date(Date.now() - 45_000).toISOString();
+
+      const { data, error } = await (supabase as any)
+        .from("analytics_sessions")
+        .select("id,visitor_id,presence_last_seen_at")
+        .gte("presence_last_seen_at", cutoff)
+        .limit(500);
+
+      if (disposed || error) return;
+
+      const uniqueVisitors = new Set(
+        (data || [])
+          .map((row: any) => String(row?.visitor_id || row?.id || "").trim())
+          .filter(Boolean),
+      );
+      const currentCount = uniqueVisitors.size;
+      const previousCount = previousLiveVisitorsRef.current;
+
+      if (previousCount === null) {
+        previousLiveVisitorsRef.current = currentCount;
+
+        if (currentCount > 0) {
+          showLiveAdminBubble({
+            kind: "visitors",
+            title: "Tem gente no cardápio agora",
+            message: `${pluralPeople(currentCount)} navegando neste momento.`,
+          });
+        }
+        return;
+      }
+
+      if (currentCount > previousCount) {
+        const entered = currentCount - previousCount;
+        showLiveAdminBubble({
+          kind: "visitors",
+          title: entered === 1 ? "Uma pessoa entrou no cardápio" : `${entered} pessoas entraram no cardápio`,
+          message: `Agora há ${pluralPeople(currentCount)} navegando.`,
+        });
+      }
+
+      previousLiveVisitorsRef.current = currentCount;
+    }
+
+    function announceCartEvent(row: any) {
+      const eventId = String(row?.id || "").trim();
+      if (eventId && seenCartEventsRef.current.has(eventId)) return;
+      if (eventId) seenCartEventsRef.current.add(eventId);
+
+      const productName = String(
+        row?.product_name ||
+          row?.properties?.product_name ||
+          row?.properties?.content_name ||
+          "",
+      ).trim();
+      const quantity = Math.max(1, Number(row?.quantity || row?.properties?.quantity || 1) || 1);
+
+      showLiveAdminBubble({
+        kind: "cart",
+        title: "Produto adicionado à sacola",
+        message: productName
+          ? `${quantity > 1 ? `${quantity}x ` : ""}${productName} acabou de ser adicionado.`
+          : "Uma pessoa acabou de adicionar um produto à sacola.",
+      });
+    }
+
+    async function pollCartEvents() {
+      const since = cartWatchStartedAtRef.current;
+
+      const { data, error } = await (supabase as any)
+        .from("analytics_events")
+        .select("id,event_name,created_at,product_name,quantity,properties")
+        .eq("event_name", "add_to_cart")
+        .gt("created_at", since)
+        .order("created_at", { ascending: true })
+        .limit(50);
+
+      if (disposed || error || !data?.length) return;
+
+      for (const row of data) {
+        announceCartEvent(row);
+      }
+
+      const newest = data[data.length - 1]?.created_at;
+      if (newest) cartWatchStartedAtRef.current = String(newest);
+    }
+
+    void checkLiveVisitors();
+
+    const liveInterval = window.setInterval(() => {
+      void checkLiveVisitors();
+    }, 10_000);
+
+    const cartInterval = window.setInterval(() => {
+      void pollCartEvents();
+    }, 5_000);
+
+    const channel = supabase
+      .channel("layout-cardapio-live-alerts")
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "analytics_events",
+          filter: "event_name=eq.add_to_cart",
+        },
+        (payload: any) => {
+          if (disposed) return;
+          announceCartEvent(payload?.new || {});
+        },
+      )
+      .subscribe();
+
+    return () => {
+      disposed = true;
+      window.clearInterval(liveInterval);
+      window.clearInterval(cartInterval);
+      supabase.removeChannel(channel);
+
+      if (liveBubbleTimerRef.current) {
+        window.clearTimeout(liveBubbleTimerRef.current);
+        liveBubbleTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // badge de conversas ativas — atualiza em tempo real e a cada minuto
   useEffect(() => {
@@ -655,6 +821,73 @@ function AdminLayout() {
             <Outlet />
           </main>
         </>
+      )}
+
+      {liveBubble && (
+        <div
+          className="fixed bottom-24 right-4 z-[100] w-[min(360px,calc(100vw-2rem))] overflow-hidden rounded-2xl border bg-background shadow-2xl lg:bottom-5 lg:right-5"
+          role="status"
+          aria-live="polite"
+        >
+          <div
+            className={`h-1 w-full ${
+              liveBubble.kind === "cart" ? "bg-amber-500" : "bg-emerald-500"
+            }`}
+          />
+
+          <div className="flex items-start gap-3 p-4">
+            <span
+              className={`grid size-10 shrink-0 place-items-center rounded-xl ${
+                liveBubble.kind === "cart"
+                  ? "bg-amber-100 text-amber-800"
+                  : "bg-emerald-100 text-emerald-800"
+              }`}
+            >
+              {liveBubble.kind === "cart" ? (
+                <ShoppingCart className="size-5" />
+              ) : (
+                <Users className="size-5" />
+              )}
+            </span>
+
+            <div className="min-w-0 flex-1">
+              <p className="font-black leading-tight">{liveBubble.title}</p>
+              <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                {liveBubble.message}
+              </p>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setLiveBubble(null);
+                  if (liveBubbleTimerRef.current) {
+                    window.clearTimeout(liveBubbleTimerRef.current);
+                    liveBubbleTimerRef.current = null;
+                  }
+                  nav({ to: "/loja/analytics" });
+                }}
+                className="mt-2 text-xs font-bold text-primary hover:underline"
+              >
+                Ver no Analytics
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setLiveBubble(null);
+                if (liveBubbleTimerRef.current) {
+                  window.clearTimeout(liveBubbleTimerRef.current);
+                  liveBubbleTimerRef.current = null;
+                }
+              }}
+              className="grid size-8 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Fechar aviso"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
