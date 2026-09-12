@@ -1096,9 +1096,21 @@ function CustomerHome() {
     }
     window.location.replace(WHATSAPP_URL);
   }
-  async function checkDeliveryArea(neighborhood: string, street?: string, number?: string, city?: string) {
+  async function checkDeliveryArea(
+    neighborhood: string,
+    street?: string,
+    number?: string,
+    city?: string,
+    cep?: string,
+  ) {
     const result = await quoteSiteDelivery({
-      data: { neighborhood, street: street || null, number: number || null, city: city || null },
+      data: {
+        neighborhood,
+        street: street || null,
+        number: number || null,
+        city: city || null,
+        cep: onlyDigits(cep || "") || null,
+      },
     });
     return result as any;
   }
@@ -1136,10 +1148,20 @@ function CustomerHome() {
       if (!response.ok) throw new Error("Falha ao consultar CEP");
       const address = await response.json();
       if (address?.erro) throw new Error("CEP não encontrado");
-      if (!address?.bairro) {
+      const quote = await checkDeliveryArea(
+        address?.bairro || "",
+        address?.logradouro || undefined,
+        accessNumber || undefined,
+        address?.localidade || undefined,
+        cep,
+      );
+
+      if (!quote?.supported && !address?.bairro) {
         setManualAreaMode(true);
         setAreaStatus("error");
-        setAreaMessage("Encontramos o CEP, mas ele não informou o bairro. Digite seu bairro abaixo para continuar.");
+        setAreaMessage(
+          "Encontramos o CEP, mas ele não informou o bairro e esse CEP não está na sua lista manual. Digite o bairro para continuar.",
+        );
         setForm((current) => ({
           ...current,
           cep,
@@ -1148,10 +1170,9 @@ function CustomerHome() {
         }));
         return;
       }
-      const quote = await checkDeliveryArea(address.bairro, address.logradouro || undefined, accessNumber || undefined, address.localidade || undefined);
       applyDeliveryWindowFromQuote(quote);
       if (quote?.supported && quote?.needsNumber) {
-        const supportedNeighborhood = String(quote.neighborhood || address.bairro);
+        const supportedNeighborhood = String(quote.neighborhood || address.bairro || "");
         setDeliveryPricingMode("distance");
         setValidatedNeighborhood(supportedNeighborhood);
         setForm((current) => ({
@@ -1167,7 +1188,7 @@ function CustomerHome() {
         return;
       }
       if (!quote?.supported) {
-        setValidatedNeighborhood(address.bairro);
+        setValidatedNeighborhood(String(quote?.neighborhood || address?.bairro || ""));
         redirectOutsideArea();
         return;
       }
@@ -1181,7 +1202,7 @@ function CustomerHome() {
       const fee = Number(quote.fee ?? deliveryFee ?? 0);
       setDeliveryFee(Number.isFinite(fee) ? fee : 0);
       setValidatedNeighborhood(String(quote.neighborhood || address.bairro));
-      const supportedNeighborhood = String(quote.neighborhood || address.bairro);
+      const supportedNeighborhood = String(quote.neighborhood || address.bairro || "");
       setForm((current) => ({
         ...current,
         deliveryMode: "delivery",
@@ -1208,6 +1229,40 @@ function CustomerHome() {
       toast.success("Entrega disponível para o seu endereço!");
     } catch (error) {
       console.error(error);
+
+      try {
+        const manualCepQuote = await checkDeliveryArea("", undefined, accessNumber || undefined, undefined, cep);
+        if (manualCepQuote?.supported) {
+          applyDeliveryWindowFromQuote(manualCepQuote);
+          const supportedNeighborhood = String(manualCepQuote.neighborhood || "");
+          const fee = Number(manualCepQuote.fee ?? deliveryFee ?? 0);
+
+          setValidatedNeighborhood(supportedNeighborhood);
+          setDeliveryPricingMode(
+            manualCepQuote?.pricingMode === "distance" ? "distance" : "neighborhood",
+          );
+          setDeliveryFee(Number.isFinite(fee) ? fee : 0);
+          setForm((current) => ({
+            ...current,
+            deliveryMode: "delivery",
+            cep,
+            neighborhood: supportedNeighborhood || current.neighborhood,
+          }));
+          setAreaStatus(
+            manualCepQuote?.needsNumber ? "needs_number" : "supported",
+          );
+          setAreaMessage(
+            manualCepQuote?.needsNumber
+              ? "CEP liberado manualmente. Informe também o número do endereço para calcular a taxa."
+              : "",
+          );
+          toast.success("CEP liberado manualmente para entrega!");
+          return;
+        }
+      } catch {
+        // Continua para o preenchimento manual de bairro.
+      }
+
       setAreaStatus("error");
       setManualAreaMode(true);
       setAreaMessage("Não conseguimos consultar esse CEP agora. Você pode informar seu bairro manualmente.");
@@ -1223,7 +1278,7 @@ function CustomerHome() {
     }
     setAreaStatus("checking");
     try {
-      const quote = await checkDeliveryArea(neighborhood);
+      const quote = await checkDeliveryArea(neighborhood, undefined, undefined, undefined, accessCep || form.cep);
       applyDeliveryWindowFromQuote(quote);
       if (!quote?.supported) {
         setValidatedNeighborhood(neighborhood);
@@ -1269,7 +1324,7 @@ function CustomerHome() {
     const number = String(nextNumber ?? form.number ?? "").trim();
     if (!number) return;
     try {
-      const quote = await checkDeliveryArea(form.neighborhood, form.street, number, form.city);
+      const quote = await checkDeliveryArea(form.neighborhood, form.street, number, form.city, form.cep || accessCep);
       applyDeliveryWindowFromQuote(quote);
       if (quote?.supported && quote?.fee != null && !quote?.quoteUnavailable) {
         const fee = Number(quote.fee);
@@ -1642,6 +1697,39 @@ function CustomerHome() {
     }, 0);
   }
 
+  function inventoryNameKey(value: unknown) {
+    return String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/\b\d+\s*(ml|l|litro|litros|g|kg)\b/g, " ")
+      .replace(/\b(lata|latinha|unidade|un|garrafa|pet)\b/g, " ")
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function inventoryProductForAddon(option: AddonOption) {
+    if (option.linked_product_id) {
+      const linked = products.find(
+        (product) => String(product.id) === String(option.linked_product_id),
+      );
+      if (linked) return linked;
+    }
+
+    // Corrige adicionais antigos que foram cadastrados separados do produto.
+    // Ex.: "Guaraná Antarctica Lata 350 ml" no cardápio e o mesmo refrigerante
+    // dentro de BEBIDAS. O produto principal passa a controlar ambos.
+    const optionKey = inventoryNameKey(option.display_name || option.name);
+    if (!optionKey) return null;
+
+    return (
+      products.find(
+        (product) => inventoryNameKey(product.name) === optionKey,
+      ) || null
+    );
+  }
+
   function addonOptionAvailability(option: AddonOption, group?: AddonGroup) {
     if (group && group.active !== true) {
       return { available: false, reason: "Grupo indisponível" };
@@ -1649,14 +1737,17 @@ function CustomerHome() {
     if (option.active !== true) {
       return { available: false, reason: "Esgotado por hoje" };
     }
-    if (option.linked_product_id) {
-      const linkedProduct = products.find(
-        (product) => String(product.id) === String(option.linked_product_id),
-      );
-      if (!linkedProduct || linkedProduct.active !== true) {
-        return { available: false, reason: "Esgotado por hoje" };
-      }
+
+    const inventoryProduct = inventoryProductForAddon(option);
+
+    if (option.linked_product_id && !inventoryProduct) {
+      return { available: false, reason: "Esgotado por hoje" };
     }
+
+    if (inventoryProduct && inventoryProduct.active !== true) {
+      return { available: false, reason: "Esgotado por hoje" };
+    }
+
     return { available: true, reason: "" };
   }
 
