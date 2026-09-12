@@ -280,48 +280,17 @@ function ConfigPage() {
 
 
   async function save() {
-    const provider = c.digital_payment_provider === "mercadopago" ? "mercadopago" : c.digital_payment_provider === "appmax" ? "appmax" : "infinitepay";
-    const onlinePaymentEnabled = c.digital_menu_pix_enabled !== false || c.digital_menu_card_enabled !== false;
-    const payOnDeliveryEnabled = c.digital_menu_pay_on_delivery_enabled === true;
-
-    if (onlinePaymentEnabled && provider === "mercadopago") {
-      if (c.mercadopago_enabled !== true) return toast.error("Ative o Mercado Pago antes de defini-lo como provedor principal.");
-      if (!String(c.mercadopago_public_key || "").trim()) return toast.error("Informe a Public Key do Mercado Pago.");
-      if (!String(c.mercadopago_access_token || "").trim()) return toast.error("Informe o Access Token do Mercado Pago.");
-    } else if (onlinePaymentEnabled && provider === "appmax") {
-      if (c.appmax_enabled !== true) return toast.error("Ative a Appmax antes de defini-la como provedor principal.");
-      if (!String(c.appmax_merchant_client_id || "").trim()) return toast.error("Informe o Merchant Client ID da Appmax.");
-      if (!String(c.appmax_merchant_client_secret || "").trim()) return toast.error("Informe o Merchant Client Secret da Appmax.");
-      if (!String(c.appmax_external_id || "").trim()) return toast.error("Informe o External ID da instalação Appmax.");
-    } else if (onlinePaymentEnabled) {
-      if (c.infinitepay_enabled !== true) return toast.error("Ative a InfinitePay antes de defini-la como provedor principal.");
-      if (!String(c.infinitepay_handle || "").trim()) return toast.error("Informe a InfiniteTag / Handle da InfinitePay.");
-    }
-
-    if (payOnDeliveryEnabled && c.digital_menu_pay_on_delivery_card_enabled !== true && c.digital_menu_pay_on_delivery_pix_enabled !== true) {
-      return toast.error("Habilite pelo menos uma forma de pagamento na entrega: cartão ou Pix.");
-    }
-    if (!onlinePaymentEnabled && !payOnDeliveryEnabled) {
-      return toast.error("Habilite pelo menos uma forma de pagamento no cardápio digital.");
-    }
-
     setSaving(true);
     const payload = stripCardOwnedFields({
       ...c,
       id: 1,
-      digital_payment_provider: provider,
-      mercadopago_environment: c.mercadopago_environment === "production" ? "production" : "test",
-      mercadopago_max_installments: Math.min(12, Math.max(1, Number(c.mercadopago_max_installments || 1))),
-      appmax_environment: c.appmax_environment === "production" ? "production" : "sandbox",
-      appmax_max_installments: Math.min(12, Math.max(1, Number(c.appmax_max_installments || 1))),
-      appmax_soft_descriptor: String(c.appmax_soft_descriptor || "HOTBOX").replace(/[^A-Za-z0-9 ]/g, "").slice(0, 13) || "HOTBOX",
       default_delivery_fee: Number(c.default_delivery_fee || 0),
       delivery_cost_per_km: Number(c.delivery_cost_per_km ?? 0.9),
     });
     const { error } = await supabase.from("store_config").upsert(payload);
     setSaving(false);
     if (error) toast.error(error.message);
-    else toast.success(`Configurações salvas. ${provider === "mercadopago" ? "Mercado Pago" : provider === "appmax" ? "Appmax" : "InfinitePay"} está ativo para novos checkouts.`);
+    else toast.success("Configurações salvas");
   }
 
 
@@ -404,14 +373,13 @@ function ConfigPage() {
             />
           </div>
           <div>
-            <Label>Taxa padrão de segurança / fallback (R$)</Label>
+            <Label>Taxa de entrega padrão (R$)</Label>
             <Input
               type="number"
               step="0.01"
               value={c.default_delivery_fee ?? 0}
               onChange={(e) => setC({ ...c, default_delivery_fee: e.target.value })}
             />
-            <p className="mt-1 text-[11px] text-muted-foreground">Usada apenas como reserva em situações antigas/compatibilidade. A regra principal é escolhida na aba Entrega.</p>
           </div>
           <div>
             <Label>Tempo estimado de entrega (minutos)</Label>
@@ -491,39 +459,24 @@ function ConfigPage() {
         </div>
       </Card>
 
-      <Card className="space-y-4 p-5" style={tabStyle("entrega")}>
-        <div>
-          <h2 className="font-semibold">Como calcular a taxa de entrega?</h2>
-          <p className="mt-1 text-xs text-muted-foreground">Escolha uma única regra ativa. O cardápio digital usa exatamente esta configuração ao validar o CEP e recalcula no backend antes de cobrar.</p>
+      <Card className="space-y-3 p-5" style={tabStyle("entrega")}>
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold">Frete por distância (km)</h2>
+          <div className="flex items-center gap-2">
+            <Switch
+              checked={c.delivery_pricing_mode === "distance"}
+              onCheckedChange={(v) => setC({ ...c, delivery_pricing_mode: v ? "distance" : "flat" })}
+            />
+            <span className="text-xs text-muted-foreground">
+              {c.delivery_pricing_mode === "distance" ? "Ativo" : "Desativado"}
+            </span>
+          </div>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <button
-            type="button"
-            onClick={() => setC({ ...c, delivery_pricing_mode: "flat" })}
-            className={`rounded-2xl border-2 p-4 text-left transition ${c.delivery_pricing_mode !== "distance" ? "border-primary bg-primary/5 shadow-sm" : "border-border hover:bg-muted/40"}`}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-bold">📍 Por bairro</span>
-              <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${c.delivery_pricing_mode !== "distance" ? "bg-emerald-100 text-emerald-700" : "bg-muted text-muted-foreground"}`}>{c.delivery_pricing_mode !== "distance" ? "ATIVO" : "INATIVO"}</span>
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">Cada bairro atendido recebe sua própria taxa. Ao consultar o CEP, o cardápio identifica o bairro e mostra o valor configurado.</p>
-          </button>
-          <button
-            type="button"
-            onClick={() => setC({ ...c, delivery_pricing_mode: "distance" })}
-            className={`rounded-2xl border-2 p-4 text-left transition ${c.delivery_pricing_mode === "distance" ? "border-primary bg-primary/5 shadow-sm" : "border-border hover:bg-muted/40"}`}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-bold">🛵 Por quilometragem</span>
-              <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${c.delivery_pricing_mode === "distance" ? "bg-emerald-100 text-emerald-700" : "bg-muted text-muted-foreground"}`}>{c.delivery_pricing_mode === "distance" ? "ATIVO" : "INATIVO"}</span>
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">O CEP identifica a região e o cliente informa o número. O sistema mede a rota e aplica a faixa de km cadastrada em Zonas de entrega.</p>
-          </button>
-        </div>
-        <div className="rounded-xl border bg-muted/30 p-3 text-xs text-muted-foreground">
-          <strong className="text-foreground">Regra de segurança:</strong> o navegador nunca define a taxa final. Antes de criar o pagamento, o backend valida novamente bairro/endereço e recalcula a taxa pelo modo ativo.
-        </div>
-        <div className={c.delivery_pricing_mode === "distance" ? "space-y-3" : "hidden"}>
+        <p className="text-xs text-muted-foreground">
+          Quando ativado, a IA calcula sozinha a distância até o cliente assim que ele passa o endereço, e cobra a faixa
+          de km correspondente — em vez da taxa fixa acima. Se o endereço não puder ser localizado, ou estiver fora de
+          todas as faixas, a taxa fixa é usada como reserva.
+        </p>
 
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
@@ -660,7 +613,6 @@ function ConfigPage() {
           <Button asChild type="button" size="sm" variant="outline" className="mt-2">
             <Link to="/loja/zonas-entrega">Ir para Zonas de entrega</Link>
           </Button>
-        </div>
         </div>
       </Card>
 
@@ -800,8 +752,7 @@ function ConfigPage() {
       </Card>
 
       <Card className="space-y-3 p-5" style={tabStyle("pagamentos")}>
-        <h2 className="font-semibold">Pix da loja</h2>
-        <p className="text-xs text-muted-foreground">Esta chave continua disponível para os fluxos atuais do WhatsApp/manual. No cardápio digital, Pix e cartão usam o provedor online selecionado abaixo e são confirmados automaticamente antes de o pedido entrar na operação.</p>
+        <h2 className="font-semibold">Pix</h2>
         <div>
           <Label>Modo</Label>
           <Select value={c.pix_mode || "static"} onValueChange={(v) => setC({ ...c, pix_mode: v })}>
@@ -828,185 +779,6 @@ function ConfigPage() {
         </div>
       </Card>
 
-      <Card className="space-y-4 border-2 border-primary/20 p-5" style={tabStyle("pagamentos")}>
-        <div>
-          <p className="text-[11px] font-black uppercase tracking-[0.18em] text-primary">Continuidade da operação</p>
-          <h2 className="mt-1 text-lg font-black">Provedor ativo do cardápio digital</h2>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">O cliente nunca escolhe a empresa de pagamento: ele vê apenas Pix ou cartão. A troca abaixo afeta somente novos checkouts. Pagamentos já iniciados continuam vinculados ao provedor original.</p>
-        </div>
-        <div className="grid gap-3 sm:grid-cols-3">
-          {[
-            { key: "mercadopago", name: "Mercado Pago", ready: c.mercadopago_enabled === true && !!String(c.mercadopago_public_key || "").trim() && !!String(c.mercadopago_access_token || "").trim(), detail: "Checkout transparente: Pix e cartão dentro da HotBox." },
-            { key: "appmax", name: "Appmax", ready: c.appmax_enabled === true && !!String(c.appmax_merchant_client_id || "").trim() && !!String(c.appmax_merchant_client_secret || "").trim() && !!String(c.appmax_external_id || "").trim(), detail: "Checkout transparente: Appmax JS, Pix e cartão dentro da HotBox." },
-            { key: "infinitepay", name: "InfinitePay", ready: c.infinitepay_enabled === true && !!String(c.infinitepay_handle || "").trim(), detail: "Checkout externo mantido como contingência." },
-          ].map((item) => {
-            const active = (c.digital_payment_provider || "infinitepay") === item.key;
-            return (
-              <button
-                type="button"
-                key={item.key}
-                onClick={() => setC({ ...c, digital_payment_provider: item.key })}
-                className={`rounded-2xl border-2 p-4 text-left transition ${active ? "border-primary bg-primary/5 shadow-sm" : "border-border hover:border-primary/40"}`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-black">{item.name}</span>
-                  <span className={`rounded-full px-2 py-1 text-[10px] font-black ${item.ready ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-900"}`}>{item.ready ? "CONFIGURADO" : "CONFIGURAR"}</span>
-                </div>
-                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{item.detail}</p>
-                {active && <p className="mt-3 text-xs font-black text-primary">● Ativo para novos pagamentos</p>}
-              </button>
-            );
-          })}
-        </div>
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold leading-relaxed text-amber-950">
-          Troca manual é intencional. O sistema não muda automaticamente de empresa após timeout ou recusa, evitando duas cobranças para o mesmo checkout.
-        </div>
-      </Card>
-
-      <Card className="space-y-4 p-5" style={tabStyle("pagamentos")}>
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h2 className="font-semibold">Mercado Pago — checkout transparente</h2>
-            <p className="mt-1 text-xs text-muted-foreground">Orders API: Pix com QR Code dentro da HotBox e cartão pelo Payment Brick. O Access Token fica restrito ao backend.</p>
-          </div>
-          <Switch checked={c.mercadopago_enabled === true} onCheckedChange={(v) => setC({ ...c, mercadopago_enabled: v })} />
-        </div>
-        <div className="space-y-2">
-          <Label>Ambiente do Mercado Pago</Label>
-          <Select
-            value={c.mercadopago_environment === "production" ? "production" : "test"}
-            onValueChange={(v) => setC({ ...c, mercadopago_environment: v })}
-          >
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="test">🧪 Teste — usar credenciais de teste</SelectItem>
-              <SelectItem value="production">🟢 Produção — cobranças reais</SelectItem>
-            </SelectContent>
-          </Select>
-          {c.mercadopago_environment === "production" ? (
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-950">
-              Produção ativa: use somente Public Key e Access Token de produção. As cobranças serão reais.
-            </div>
-          ) : (
-            <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs font-semibold text-amber-950">
-              Modo teste ativo: use Public Key e Access Token da tela “Credenciais de teste”. Para Pix e cartão, a HotBox aplica automaticamente os dados de comprador exigidos pelo Mercado Pago.
-            </div>
-          )}
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <Label>Public Key</Label>
-            <Input value={c.mercadopago_public_key || ""} onChange={(e) => setC({ ...c, mercadopago_public_key: e.target.value.trim() })} placeholder="APP_USR-..." autoComplete="off" />
-          </div>
-          <div>
-            <Label>Access Token</Label>
-            <Input type="password" value={c.mercadopago_access_token || ""} onChange={(e) => setC({ ...c, mercadopago_access_token: e.target.value.trim() })} placeholder="APP_USR-..." autoComplete="new-password" />
-          </div>
-        </div>
-        <div>
-          <Label>Máximo de parcelas no cartão</Label>
-          <Select value={String(c.mercadopago_max_installments || 1)} onValueChange={(v) => setC({ ...c, mercadopago_max_installments: Number(v) })}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="1">Somente 1x — recomendado para delivery</SelectItem>
-              <SelectItem value="2">Até 2x</SelectItem>
-              <SelectItem value="3">Até 3x</SelectItem>
-              <SelectItem value="6">Até 6x</SelectItem>
-              <SelectItem value="12">Até 12x</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="rounded-xl border bg-muted/30 p-3 text-xs leading-relaxed text-muted-foreground">
-          Webhook da Orders API em <code>{typeof window !== "undefined" ? `${window.location.origin}/api/public/webhooks/mercadopago` : "/api/public/webhooks/mercadopago"}</code>. A HotBox consulta a Order diretamente no Mercado Pago e confere status, valor, moeda e referência antes de criar o pedido.
-        </div>
-      </Card>
-
-      <Card className="space-y-4 p-5" style={tabStyle("pagamentos")}>
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h2 className="font-semibold">Appmax — checkout transparente</h2>
-            <p className="mt-1 text-xs text-muted-foreground">Appmax JS tokeniza o cartão no navegador; Pix e cartão ficam dentro da HotBox. As credenciais do merchant permanecem no backend.</p>
-          </div>
-          <Switch checked={c.appmax_enabled === true} onCheckedChange={(v) => setC({ ...c, appmax_enabled: v })} />
-        </div>
-
-        <div className="space-y-2">
-          <Label>Ambiente Appmax</Label>
-          <Select value={c.appmax_environment === "production" ? "production" : "sandbox"} onValueChange={(v) => setC({ ...c, appmax_environment: v })}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="sandbox">🧪 Sandbox — testes</SelectItem>
-              <SelectItem value="production">🟢 Produção — cobranças reais</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <Label>Merchant Client ID</Label>
-            <Input value={c.appmax_merchant_client_id || ""} onChange={(e) => setC({ ...c, appmax_merchant_client_id: e.target.value.trim() })} placeholder="Credencial do merchant" autoComplete="off" />
-          </div>
-          <div>
-            <Label>Merchant Client Secret</Label>
-            <Input type="password" value={c.appmax_merchant_client_secret || ""} onChange={(e) => setC({ ...c, appmax_merchant_client_secret: e.target.value.trim() })} placeholder="Secret do merchant" autoComplete="new-password" />
-          </div>
-          <div>
-            <Label>External ID</Label>
-            <Input value={c.appmax_external_id || ""} onChange={(e) => setC({ ...c, appmax_external_id: e.target.value.trim() })} placeholder="UUID da instalação" autoComplete="off" />
-            <p className="mt-1 text-[11px] text-muted-foreground">É o identificador usado pelo Appmax JS; não é uma senha.</p>
-          </div>
-          <div>
-            <Label>App Numerical ID</Label>
-            <Input inputMode="numeric" value={c.appmax_app_numerical_id || ""} onChange={(e) => setC({ ...c, appmax_app_numerical_id: e.target.value ? Number(e.target.value) : null })} placeholder="ID numérico do aplicativo" />
-            <p className="mt-1 text-[11px] text-muted-foreground">Cadastre antes de executar o health check/instalação.</p>
-          </div>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <Label>Máximo de parcelas</Label>
-            <Select value={String(c.appmax_max_installments || 1)} onValueChange={(v) => setC({ ...c, appmax_max_installments: Number(v) })}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="1">Somente 1x — pronto</SelectItem>
-                <SelectItem value="2">Até 2x — preparar taxas</SelectItem>
-                <SelectItem value="3">Até 3x — preparar taxas</SelectItem>
-                <SelectItem value="6">Até 6x — preparar taxas</SelectItem>
-                <SelectItem value="12">Até 12x — preparar taxas</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label>Soft descriptor</Label>
-            <Input value={c.appmax_soft_descriptor || "HOTBOX"} onChange={(e) => setC({ ...c, appmax_soft_descriptor: e.target.value.toUpperCase().slice(0, 13) })} maxLength={13} placeholder="HOTBOX" />
-          </div>
-        </div>
-
-        <div className="space-y-2 rounded-xl border bg-muted/30 p-3 text-xs leading-relaxed text-muted-foreground">
-          <p><b>URL de validação:</b> <code>{typeof window !== "undefined" ? `${window.location.origin}/api/public/appmax/validation` : "/api/public/appmax/validation"}</code></p>
-          <p><b>Webhook:</b> <code>{typeof window !== "undefined" ? `${window.location.origin}/api/public/webhooks/appmax` : "/api/public/webhooks/appmax"}</code></p>
-          <p>Use as credenciais do <b>merchant</b> para operações de cliente, pedido e pagamento. O External ID é usado somente no front pelo Appmax JS.</p>
-        </div>
-      </Card>
-
-      <Card className="space-y-4 p-5" style={tabStyle("pagamentos")}>
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h2 className="font-semibold">InfinitePay — contingência do cardápio digital</h2>
-            <p className="mt-1 text-xs text-muted-foreground">O cliente paga no checkout seguro da InfinitePay. O pedido só é criado depois da confirmação real do pagamento.</p>
-          </div>
-          <Switch checked={c.infinitepay_enabled === true} onCheckedChange={(v) => setC({ ...c, infinitepay_enabled: v })} />
-        </div>
-        <div>
-          <Label>InfiniteTag / Handle</Label>
-          <Input value={c.infinitepay_handle || ""} onChange={(e) => setC({ ...c, infinitepay_handle: e.target.value.replace(/^\$/, "") })} placeholder="Ex.: hotboxdelivery" />
-          <p className="mt-1 text-[11px] text-muted-foreground">Use sua InfiniteTag sem o símbolo $. A integração oficial do Checkout Integrado usa a InfiniteTag para identificar sua conta.</p>
-        </div>
-        <div className="rounded-xl border bg-muted/30 p-3 text-xs leading-relaxed text-muted-foreground">
-          Webhook configurado automaticamente em <code>{typeof window !== "undefined" ? `${window.location.origin}/api/public/webhooks/infinitepay` : "/api/public/webhooks/infinitepay"}</code>. O sistema também consulta a InfinitePay para confirmar valor e status antes de criar o pedido.
-        </div>
-      </Card>
-
       <Card className="space-y-3 p-5" style={tabStyle("geral")}>
         <div className="flex items-center justify-between">
           <h2 className="font-semibold">Cardápio digital (site do cliente)</h2>
@@ -1024,73 +796,17 @@ function ConfigPage() {
           Quando ativo, o cliente monta o pedido sozinho pela página pública e o pedido cai no sistema marcado como{" "}
           <b>cardápio digital</b>. Quando desativado, a página mostra um aviso pedindo pra chamar no WhatsApp.
         </p>
-
-        <div className={`rounded-2xl border p-4 ${
-          c.digital_menu_closed_reservations_enabled === true ? "border-amber-300 bg-amber-50" : "bg-muted/30"
-        }`}>
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="font-black">🗓️ Reservas quando a loja estiver fechada</p>
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                Quando ativado, o cliente pode montar o pedido, escolher uma data e pagar normalmente mesmo com a loja fechada.
-                O pedido entra no sistema como <strong>PEDIDO AGENDADO</strong> e exige contato com o cliente antes da entrega.
-              </p>
-            </div>
-            <Switch
-              checked={c.digital_menu_closed_reservations_enabled === true}
-              onCheckedChange={(v) => setC({ ...c, digital_menu_closed_reservations_enabled: v })}
-            />
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          <div>
-            <Label>Pagamento online</Label>
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              {[
-                ["digital_menu_pix_enabled", "Pix online"],
-                ["digital_menu_card_enabled", "Cartão de crédito online"],
-              ].map(([field, label]) => (
-                <label key={field} className="flex items-center justify-between gap-3 rounded-xl border p-3 text-sm font-medium">
-                  {label}
-                  <Switch checked={c[field] !== false} onCheckedChange={(v) => setC({ ...c, [field]: v })} />
-                </label>
-              ))}
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">Pix e cartão online são processados pelo gateway ativo acima. O pedido só entra na operação depois da confirmação real do pagamento.</p>
-          </div>
-
-          <div className="rounded-2xl border-2 border-amber-300 bg-amber-50/70 p-4">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-sm font-black text-amber-950">Pagamento na entrega</p>
-                <p className="mt-1 text-xs leading-relaxed text-amber-900/80">Quando habilitado, o cliente pode concluir o pedido sem pagamento online. O pedido entra imediatamente no sistema com um aviso destacado de <b>PAGAMENTO NA ENTREGA</b> e fica pendente de recebimento.</p>
-              </div>
-              <Switch
-                checked={c.digital_menu_pay_on_delivery_enabled === true}
-                onCheckedChange={(v) => setC({ ...c, digital_menu_pay_on_delivery_enabled: v })}
-              />
-            </div>
-            {c.digital_menu_pay_on_delivery_enabled === true && (
-              <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                <label className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-white p-3 text-sm font-bold">
-                  Cartão na entrega
-                  <Switch
-                    checked={c.digital_menu_pay_on_delivery_card_enabled !== false}
-                    onCheckedChange={(v) => setC({ ...c, digital_menu_pay_on_delivery_card_enabled: v })}
-                  />
-                </label>
-                <label className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-white p-3 text-sm font-bold">
-                  Pix na entrega
-                  <Switch
-                    checked={c.digital_menu_pay_on_delivery_pix_enabled !== false}
-                    onCheckedChange={(v) => setC({ ...c, digital_menu_pay_on_delivery_pix_enabled: v })}
-                  />
-                </label>
-              </div>
-            )}
-            <p className="mt-3 text-[11px] font-semibold text-amber-900/75">Dinheiro em espécie não é oferecido pelo cardápio. Pix na entrega pode ser recebido pelo QR Code da loja e cartão pela maquininha.</p>
-          </div>
+        <div>
+          <Label>Link de pagamento (opcional)</Label>
+          <Input
+            value={c.payment_link_url || ""}
+            onChange={(e) => setC({ ...c, payment_link_url: e.target.value })}
+            placeholder="https://... (link de pagamento do seu banco/gateway)"
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            Se preenchido, aparece a opção "Link de pagamento" no checkout do cardápio digital. O cliente finaliza o
+            pedido e é levado pra esse link. Deixe em branco pra esconder essa opção.
+          </p>
         </div>
       </Card>
 
@@ -1335,98 +1051,6 @@ function ConfigPage() {
               </p>
             </div>
           </div>
-        </div>
-      </Card>
-
-      <Card className="space-y-4 p-5" style={tabStyle("integracoes")}>
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="font-semibold">Meta Pixel — Cardápio Digital e Página da Bio</h2>
-            <p className="mt-1 max-w-3xl text-xs text-muted-foreground">
-              Cole aqui o código padrão do Meta Pixel fornecido pelo Gerenciador de Eventos.
-              Ao salvar, a HotBox identifica o Pixel ID e passa a carregar o Pixel automaticamente
-              nas páginas selecionadas.
-            </p>
-          </div>
-          <div className="flex items-center gap-2 rounded-xl border px-3 py-2">
-            <Label htmlFor="meta-pixel-enabled" className="cursor-pointer text-xs font-bold">
-              Pixel ativo
-            </Label>
-            <Switch
-              id="meta-pixel-enabled"
-              checked={(c as any).meta_pixel_enabled === true}
-              onCheckedChange={(checked) => setC({ ...c, meta_pixel_enabled: checked } as any)}
-            />
-          </div>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border bg-muted/20 p-3">
-            <div>
-              <p className="text-sm font-semibold">Cardápio Digital</p>
-              <p className="text-[11px] text-muted-foreground">Rastreia acessos e ações de compra no cardápio.</p>
-            </div>
-            <Switch
-              checked={(c as any).meta_pixel_on_menu !== false}
-              onCheckedChange={(checked) => setC({ ...c, meta_pixel_on_menu: checked } as any)}
-            />
-          </label>
-
-          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border bg-muted/20 p-3">
-            <div>
-              <p className="text-sm font-semibold">Página da Bio</p>
-              <p className="text-[11px] text-muted-foreground">Rastreia quem acessa a página de links da HotBox.</p>
-            </div>
-            <Switch
-              checked={(c as any).meta_pixel_on_bio !== false}
-              onCheckedChange={(checked) => setC({ ...c, meta_pixel_on_bio: checked } as any)}
-            />
-          </label>
-        </div>
-
-        <div>
-          <Label htmlFor="meta-pixel-script">Script do Meta Pixel</Label>
-          <Textarea
-            id="meta-pixel-script"
-            value={(c as any).meta_pixel_script || ""}
-            onChange={(e) => setC({ ...c, meta_pixel_script: e.target.value } as any)}
-            placeholder={`<!-- Meta Pixel Code -->
-<script>
-  !function(f,b,e,v,n,t,s){...}
-  fbq('init', 'SEU_PIXEL_ID');
-  fbq('track', 'PageView');
-</script>
-<!-- End Meta Pixel Code -->`}
-            className="mt-1 min-h-48 font-mono text-xs"
-            spellCheck={false}
-          />
-          <div className="mt-2 rounded-xl border bg-muted/20 p-3 text-[11px] leading-relaxed text-muted-foreground">
-            <b>Como funciona:</b> você cola o script completo uma única vez. O sistema extrai o Pixel ID,
-            carrega o Pixel somente nas páginas habilitadas e envia automaticamente eventos do funil.
-            Não é necessário editar arquivos do código a cada troca de Pixel.
-          </div>
-        </div>
-
-        <div className="grid gap-2 rounded-xl border p-3 text-xs sm:grid-cols-2">
-          <div>
-            <p className="font-bold">Eventos do cardápio enviados ao Meta</p>
-            <p className="mt-1 text-muted-foreground">
-              PageView, ViewContent, AddToCart, InitiateCheckout, AddPaymentInfo e Purchase.
-            </p>
-          </div>
-          <div>
-            <p className="font-bold">Página da Bio</p>
-            <p className="mt-1 text-muted-foreground">
-              O acesso à Bio envia PageView e continua compatível com os eventos internos do Analytics 360.
-            </p>
-          </div>
-        </div>
-
-        <div className="flex justify-end">
-          <Button onClick={save} disabled={saving} className="min-w-40">
-            <Save className="size-4" />
-            {saving ? "Salvando..." : "Salvar Meta Pixel"}
-          </Button>
         </div>
       </Card>
 
@@ -1956,11 +1580,7 @@ function ConfigPage() {
       </div>
 
       <div style={tabStyle("entrega")}>
-        <BairrosAtendidosCard
-          pricingMode={c.delivery_pricing_mode === "distance" ? "distance" : "neighborhood"}
-          schedulingEnabled={c.digital_menu_scheduling_enabled === true}
-          onSchedulingChange={(enabled) => setC((current: any) => ({ ...current, digital_menu_scheduling_enabled: enabled }))}
-        />
+        <BairrosAtendidosCard />
       </div>
 
       <div style={tabStyle("entrega")}>
@@ -2267,31 +1887,42 @@ function AiInstructionsCard() {
   );
 }
 
+function normalizeManualCep(value: unknown) {
+  const digits = String(value || "").replace(/\D/g, "");
+  return digits.length === 8 ? digits : "";
+}
+
+function parseManualCepList(value: unknown) {
+  const seen = new Set<string>();
+  return String(value || "")
+    .split(/[\n,;|]+/)
+    .map((item) => normalizeManualCep(item))
+    .filter((cep) => {
+      if (!cep || seen.has(cep)) return false;
+      seen.add(cep);
+      return true;
+    });
+}
+
+function formatManualCep(cep: unknown) {
+  const digits = normalizeManualCep(cep);
+  return digits ? `${digits.slice(0, 5)}-${digits.slice(5)}` : String(cep || "");
+}
+
 // ============================================================
 // Card de bairros atendidos (lista oficial, usada pelo sistema pra decidir
 // área de entrega — tem prioridade sobre o cálculo por distância/km)
 // ============================================================
-function BairrosAtendidosCard({
-  pricingMode,
-  schedulingEnabled,
-  onSchedulingChange,
-}: {
-  pricingMode: "neighborhood" | "distance";
-  schedulingEnabled: boolean;
-  onSchedulingChange: (enabled: boolean) => void;
-}) {
+function BairrosAtendidosCard() {
   const [bairros, setBairros] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [newNome, setNewNome] = useState("");
-  const [newFee, setNewFee] = useState("");
-  const [newCutoff, setNewCutoff] = useState("");
+  const [newCeps, setNewCeps] = useState("");
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingNome, setEditingNome] = useState("");
-  const [editingFee, setEditingFee] = useState("");
-  const [editingCutoff, setEditingCutoff] = useState("");
+  const [editingCeps, setEditingCeps] = useState("");
   const [saving, setSaving] = useState(false);
-  const [savingScheduling, setSavingScheduling] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -2307,23 +1938,32 @@ function BairrosAtendidosCard({
   async function add() {
     const nome = newNome.trim();
     if (!nome) return;
+
+    const ceps = parseManualCepList(newCeps);
+    const typedCepFragments = String(newCeps || "")
+      .split(/[\n,;|]+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    if (typedCepFragments.length > ceps.length) {
+      toast.error("Revise os CEPs. Cada CEP precisa ter 8 números.");
+      return;
+    }
+
     setAdding(true);
-    const fee = newFee === "" ? null : Math.max(0, Number(newFee));
-    const { error } = await (supabase as any).from("bairros_atendidos").insert({
-      nome,
-      ativo: true,
-      delivery_fee: Number.isFinite(fee as number) ? fee : null,
-      delivery_cutoff_time: newCutoff || null,
-    });
+    const { error } = await (supabase as any)
+      .from("bairros_atendidos")
+      .insert({ nome, ativo: true, ceps });
+
     if (error) {
       toast.error(error.message.includes("duplicate") ? "Esse bairro já está cadastrado." : error.message);
       setAdding(false);
       return;
     }
+
     setNewNome("");
-    setNewFee("");
-    setNewCutoff("");
-    toast.success("Bairro adicionado!");
+    setNewCeps("");
+    toast.success(ceps.length ? `Bairro adicionado com ${ceps.length} CEP(s) liberado(s)!` : "Bairro adicionado!");
     setAdding(false);
     load();
   }
@@ -2336,52 +1976,50 @@ function BairrosAtendidosCard({
   function startEdit(b: any) {
     setEditingId(b.id);
     setEditingNome(b.nome);
-    setEditingFee(b.delivery_fee == null ? "" : String(b.delivery_fee));
-    setEditingCutoff(b.delivery_cutoff_time ? String(b.delivery_cutoff_time).slice(0, 5) : "");
+    setEditingCeps(
+      Array.isArray(b.ceps)
+        ? b.ceps.map((cep: string) => formatManualCep(cep)).join(", ")
+        : "",
+    );
   }
 
   function cancelEdit() {
     setEditingId(null);
     setEditingNome("");
-    setEditingFee("");
-    setEditingCutoff("");
+    setEditingCeps("");
   }
 
   async function saveEdit(id: string) {
     const nome = editingNome.trim();
     if (!nome) return;
+
+    const ceps = parseManualCepList(editingCeps);
+    const typedCepFragments = String(editingCeps || "")
+      .split(/[\n,;|]+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    if (typedCepFragments.length > ceps.length) {
+      toast.error("Revise os CEPs. Cada CEP precisa ter 8 números.");
+      return;
+    }
+
     setSaving(true);
-    const fee = editingFee === "" ? null : Math.max(0, Number(editingFee));
-    const { error } = await (supabase as any).from("bairros_atendidos").update({
-      nome,
-      delivery_fee: Number.isFinite(fee as number) ? fee : null,
-      delivery_cutoff_time: editingCutoff || null,
-    }).eq("id", id);
+    const { error } = await (supabase as any)
+      .from("bairros_atendidos")
+      .update({ nome, ceps })
+      .eq("id", id);
+
     if (error) {
       toast.error(error.message.includes("duplicate") ? "Esse bairro já está cadastrado." : error.message);
       setSaving(false);
       return;
     }
+
     setSaving(false);
     cancelEdit();
-    toast.success("Bairro atualizado!");
+    toast.success("Bairro e CEPs atualizados!");
     load();
-  }
-
-  async function toggleScheduling(enabled: boolean) {
-    setSavingScheduling(true);
-    onSchedulingChange(enabled);
-    const { error } = await (supabase as any)
-      .from("store_config")
-      .update({ digital_menu_scheduling_enabled: enabled })
-      .eq("id", 1);
-    setSavingScheduling(false);
-    if (error) {
-      onSchedulingChange(!enabled);
-      toast.error("Não foi possível alterar o agendamento: " + error.message);
-      return;
-    }
-    toast.success(enabled ? "Agendamento fora do horário habilitado!" : "Agendamento fora do horário desabilitado.");
   }
 
   async function remove(id: string) {
@@ -2395,60 +2033,55 @@ function BairrosAtendidosCard({
       <div>
         <h2 className="flex items-center gap-2 font-semibold">📍 Bairros atendidos</h2>
         <p className="mt-1 text-xs text-muted-foreground">
-          Esta continua sendo a lista oficial de bairros com entrega própria. {pricingMode === "neighborhood" ? (<>Como o modo <strong>Por bairro</strong> está ativo, a taxa cadastrada em cada linha é a taxa que o cardápio mostra ao validar o CEP.</>) : (<>Como o modo <strong>Por quilometragem</strong> está ativo, estes bairros definem a área permitida, mas o valor é calculado pelas faixas de km.</>)}
-        </p>
-      </div>
-
-      <div className={`rounded-2xl border p-4 ${schedulingEnabled ? "border-violet-200 bg-violet-50" : "bg-muted/30"}`}>
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="font-black">📅 Agendamento após o horário limite</p>
-            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              Quando ativado, se o cliente tentar pedir depois do horário máximo do bairro, ele poderá concluir como
-              <strong> AGENDAMENTO</strong>. A loja entra em contato para confirmar a entrega no próximo horário disponível.
-            </p>
-          </div>
-          <Switch
-            checked={schedulingEnabled}
-            onCheckedChange={(enabled) => void toggleScheduling(enabled)}
-            disabled={savingScheduling}
-          />
-        </div>
-        <p className="mt-2 text-[11px] font-semibold text-violet-700">
-          Todos os horários abaixo usam o horário de Brasília (America/Sao_Paulo).
+          Cadastre os bairros que recebem entrega própria. Você também pode cadastrar <strong>CEPs manualmente</strong>{" "}
+          dentro de cada bairro. Um CEP manual ativo funciona como uma liberação direta: mesmo que o serviço de CEP informe
+          outro nome de bairro ou não consiga identificar o bairro corretamente, esse CEP terá acesso ao cardápio e será
+          tratado como pertencente ao bairro em que você o cadastrou. Bairro e CEP funcionam de forma <strong>aditiva</strong>:
+          cadastrar CEPs não limita os outros endereços do bairro.
         </p>
       </div>
 
       {/* form para adicionar */}
-      <div className="grid gap-2 sm:grid-cols-[1fr_140px_150px_auto]">
-        <Input
-          placeholder="Nome do bairro (ex: Vila São Luís)"
-          value={newNome}
-          onChange={(e) => setNewNome(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && add()}
-          className="rounded-xl text-sm"
-        />
-        <div className="relative">
-          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground">R$</span>
-          <Input type="number" min="0" step="0.01" placeholder="Taxa" value={newFee} onChange={(e) => setNewFee(e.target.value)} className="rounded-xl pl-9 text-sm" />
+      <div className="rounded-xl border bg-muted/20 p-3">
+        <div className="grid gap-3 md:grid-cols-[1fr_1.35fr_auto] md:items-end">
+          <div>
+            <Label className="text-xs">Bairro atendido</Label>
+            <Input
+              placeholder="Ex.: Vila São Luís"
+              value={newNome}
+              onChange={(e) => setNewNome(e.target.value)}
+              className="mt-1 rounded-xl text-sm"
+            />
+          </div>
+
+          <div>
+            <Label className="text-xs">
+              CEPs liberados manualmente <span className="font-normal text-muted-foreground">(opcional)</span>
+            </Label>
+            <Input
+              placeholder="Ex.: 25050-123, 25051-240"
+              value={newCeps}
+              onChange={(e) => setNewCeps(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && add()}
+              className="mt-1 rounded-xl text-sm"
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Separe vários CEPs por vírgula. Você pode adicionar ou remover CEPs depois.
+            </p>
+          </div>
+
+          <Button size="sm" onClick={add} disabled={adding || !newNome.trim()} className="md:mb-[18px]">
+            <Plus className="size-4" /> Adicionar
+          </Button>
         </div>
-        <Input
-          type="time"
-          value={newCutoff}
-          onChange={(e) => setNewCutoff(e.target.value)}
-          className="rounded-xl text-sm"
-          title="Horário máximo de entrega — Brasília"
-        />
-        <Button size="sm" onClick={add} disabled={adding || !newNome.trim()}>
-          <Plus className="size-4" /> Adicionar
-        </Button>
       </div>
 
       {loading ? (
         <p className="text-xs text-muted-foreground">Carregando...</p>
       ) : bairros.length === 0 ? (
         <p className="text-xs text-muted-foreground">
-          Nenhum bairro cadastrado ainda. Cadastre os bairros onde a HotBox faz entrega própria antes de liberar o cardápio digital.
+          Nenhum bairro cadastrado ainda — enquanto a lista estiver vazia, a área de entrega continua decidida só pelo
+          cálculo de distância.
         </p>
       ) : (
         <div className="space-y-2">
@@ -2459,52 +2092,66 @@ function BairrosAtendidosCard({
             >
               <Switch checked={b.ativo} onCheckedChange={() => toggle(b.id, b.ativo)} className="shrink-0" />
               {editingId === b.id ? (
-                <>
+                <div className="min-w-0 flex-1 space-y-2">
                   <Input
                     value={editingNome}
                     onChange={(e) => setEditingNome(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && saveEdit(b.id)}
-                    className="h-8 flex-1 rounded-lg text-sm"
+                    className="h-8 rounded-lg text-sm"
                     autoFocus
                   />
-                  <div className="relative w-28 shrink-0">
-                    <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-muted-foreground">R$</span>
-                    <Input type="number" min="0" step="0.01" value={editingFee} onChange={(e) => setEditingFee(e.target.value)} className="h-8 rounded-lg pl-7 text-sm" />
+
+                  <div>
+                    <Label className="text-[11px] text-muted-foreground">CEPs liberados manualmente</Label>
+                    <Input
+                      value={editingCeps}
+                      onChange={(e) => setEditingCeps(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && saveEdit(b.id)}
+                      placeholder="25050-123, 25051-240"
+                      className="mt-1 h-8 rounded-lg text-sm"
+                    />
                   </div>
-                  <Input
-                    type="time"
-                    value={editingCutoff}
-                    onChange={(e) => setEditingCutoff(e.target.value)}
-                    className="h-8 w-28 shrink-0 rounded-lg text-xs"
-                    title="Horário máximo — Brasília"
-                  />
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="size-7 shrink-0 text-emerald-600"
-                    onClick={() => saveEdit(b.id)}
-                    disabled={saving || !editingNome.trim()}
-                  >
-                    <Check className="size-3.5" />
-                  </Button>
-                  <Button size="icon" variant="ghost" className="size-7 shrink-0" onClick={cancelEdit}>
-                    <X className="size-3.5" />
-                  </Button>
-                </>
+
+                  <div className="flex justify-end gap-1">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8"
+                      onClick={cancelEdit}
+                    >
+                      <X className="size-3.5" /> Cancelar
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="h-8"
+                      onClick={() => saveEdit(b.id)}
+                      disabled={saving || !editingNome.trim()}
+                    >
+                      <Check className="size-3.5" /> Salvar
+                    </Button>
+                  </div>
+                </div>
               ) : (
                 <>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-semibold leading-snug">{b.nome}</p>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">
-                      Taxa: <strong className="text-foreground">{b.delivery_fee == null ? "padrão" : `R$ ${Number(b.delivery_fee).toFixed(2).replace(".", ",")}`}</strong>
-                      {pricingMode === "distance" ? " • ignorada enquanto km estiver ativo" : ""}
-                    </p>
-                    <p className="mt-0.5 text-[11px] font-semibold text-violet-700">
-                      {b.delivery_cutoff_time
-                        ? `Entrega até ${String(b.delivery_cutoff_time).slice(0, 5)} • horário de Brasília`
-                        : "Sem horário máximo específico"}
-                    </p>
+                    {Array.isArray(b.ceps) && b.ceps.length > 0 ? (
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {b.ceps.map((cep: string) => (
+                          <span
+                            key={cep}
+                            className="rounded-full border bg-background px-2 py-0.5 text-[10px] font-semibold"
+                          >
+                            CEP {formatManualCep(cep)}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        Sem CEP manual — acesso liberado pelo nome do bairro.
+                      </p>
+                    )}
                   </div>
+
                   <Button size="icon" variant="ghost" className="size-7 shrink-0" onClick={() => startEdit(b)}>
                     <Pencil className="size-3.5" />
                   </Button>
@@ -2900,7 +2547,7 @@ function formatRangeDays(days: number[]): string {
 
 /** Botão de abrir/fechar a loja manualmente — sobrepõe o horário automático
  *  abaixo. Enquanto estiver em "Aberta manualmente" ou "Fechada
- *  manualmente", o horário configurado no card abaixo é ignorado pela IA e pelo cardápio digital. */
+ *  manualmente", o horário configurado no card abaixo é ignorado pela IA. */
 function ManualStoreStatusCard() {
   const [status, setStatus] = useState<"auto" | "open" | "closed">("auto");
   const [loading, setLoading] = useState(true);
@@ -2936,25 +2583,25 @@ function ManualStoreStatusCard() {
       next === "auto"
         ? "Voltou a seguir o horário automático."
         : next === "open"
-          ? "Loja aberta manualmente — IA e cardápio aceitam pedidos, mesmo fora do horário configurado."
-          : "Loja fechada manualmente — a IA informa que está fechada e o cardápio bloqueia novas compras.",
+          ? "Loja aberta manualmente — a IA atende normalmente, mesmo fora do horário configurado."
+          : "Loja fechada manualmente — a IA vai avisar que está fechada, mesmo dentro do horário configurado.",
     );
   }
 
   const OPTIONS: { value: "auto" | "open" | "closed"; label: string; desc: string }[] = [
     { value: "auto", label: "Automático", desc: "Segue o horário configurado abaixo" },
-    { value: "open", label: "Forçar aberta", desc: "IA e cardápio aceitam pedidos" },
-    { value: "closed", label: "Forçar fechada", desc: "Cardápio visível, mas sem novas compras" },
+    { value: "open", label: "Forçar aberta", desc: "IA atende, mesmo fora do horário" },
+    { value: "closed", label: "Forçar fechada", desc: "IA informa que está fechada, mesmo no horário" },
   ];
 
   return (
     <Card className="space-y-3 p-5">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="font-semibold">Abrir/fechar loja agora — IA + cardápio</h2>
+          <h2 className="font-semibold">Abrir/fechar loja agora</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            Sobrepõe o horário configurado abaixo. Quando você fechar a loja por aqui, o cliente ainda pode navegar no
-            cardápio. Se a opção de reservas estiver ativada, ele poderá pagar normalmente e deixar o pedido agendado para entrega posterior.
+            Sobrepõe o horário de atendimento configurado abaixo — sempre que você abrir ou fechar a loja por aqui,
+            essa escolha manda na hora, e a IA acata ela.
           </p>
         </div>
         {!loading && status !== "auto" && (
@@ -2993,8 +2640,7 @@ function ManualStoreStatusCard() {
           </div>
           {status === "closed" && (
             <p className="rounded-lg bg-red-50 p-3 text-xs text-red-700">
-              Enquanto estiver em "Forçar fechada", a IA avisa que a loja está fechada e o cardápio continua visível,
-              mas bloqueia novas compras. A mensagem configurada abaixo informa o horário de funcionamento. <br />
+              Enquanto estiver em "Forçar fechada", a IA responde a qualquer contato com: <br />
               <span className="italic">
                 "Estamos fechados devido a problemas na nossa operação. Amanhã abriremos normalmente."
               </span>
@@ -3083,8 +2729,8 @@ function BusinessHoursCard() {
         <div>
           <h2 className="font-semibold">Horário de atendimento</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            Configure os dias e horários em que a loja atende. Fora desse horário, a IA avisa que a loja está fechada e
-            o cardápio digital continua totalmente visível, mas bloqueia adicionar produtos e finalizar compras.
+            Configure os dias e horários em que a loja atende. Fora desse horário, a IA avisa automaticamente que a loja
+            está fechada e informa quando volta a atender — sem processar pedido novo enquanto estiver fechada.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
