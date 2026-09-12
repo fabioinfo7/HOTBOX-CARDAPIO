@@ -898,7 +898,9 @@ function enforceNoRepeatedKnownQuestion(text: string, draft: Draft): string {
   const fallback = () => buildContinuityFallback(draft);
 
   if (draft.address_neighborhood && /(?:informe|informar|qual|diga|dizer|confirmar).{0,35}bairro|bairro.{0,25}(?:por favor|qual)/.test(t)) return fallback();
-  if ((draft.items ?? []).length > 0 && /(?:quais|qual).{0,25}(?:itens|produtos).{0,30}(?:pedir|pedido)|o que voce gostaria de pedir|quais itens voce gostaria de pedir/.test(t)) return fallback();
+  if ((draft.items ?? []).length > 0 && /(?:quais|qual).{0,25}(?:itens|produtos).{0,30}(?:pedir|pedido)|o que voce gostaria de pedir|quais itens voce gostaria de pedir|o que vai querer|o que deseja pedir/.test(t)) return fallback();
+  if ((draft.items ?? []).length > 0 && draft.items.every((item: any) => Number(item?.quantity || 0) > 0) && /(?:qual|quais|quantas|quantos|informe|informar).{0,30}(?:quantidade|unidades)|quantas unidades|quantos voce quer/.test(t)) return fallback();
+  if (draft.delivery_mode && /(?:entrega ou retirada|retirada ou entrega|vai retirar|sera para entrega|e para entrega|prefere entrega|prefere retirar)/.test(t)) return fallback();
   if (draft.customer_name && /(?:qual|informe|informar).{0,30}nome.{0,25}(?:pedido|receber|cliente)/.test(t)) return fallback();
   if (draft.payment_method && /(?:qual|informe|informar).{0,35}(?:forma|metodo).{0,20}pagamento/.test(t)) return fallback();
   const fullAddressKnown = Boolean(draft.address_street && draft.address_number && draft.address_neighborhood);
@@ -1308,6 +1310,392 @@ function assistantPromisesActionButDoesNothing(text: string): boolean {
  * nenhum item no rascunho. Isso evita casos como “já sei o que vou pedir”
  * virarem imediatamente uma pergunta de endereço.
  */
+
+function isDeliveryFeeQuestion(text: string): boolean {
+  const t = normalizeStreet(text);
+  if (!t) return false;
+  return (
+    /\b(?:taxa|frete)\b/.test(t) ||
+    /\b(?:valor|preco|quanto|quanto custa|qual o valor).{0,30}\bentrega\b/.test(t) ||
+    /\bentrega.{0,30}\b(?:valor|preco|quanto|taxa|frete)\b/.test(t)
+  );
+}
+
+function isDeliveryTimeQuestion(text: string): boolean {
+  const t = normalizeStreet(text);
+  return /\b(?:prazo|tempo de entrega|quanto tempo|demora|demorar|chega em quanto|entrega demora)\b/.test(t);
+}
+
+function isPaymentInfoQuestion(text: string): boolean {
+  const t = normalizeStreet(text);
+  return /\b(?:forma de pagamento|formas de pagamento|aceita pix|aceitam pix|aceita cartao|aceitam cartao|aceita dinheiro|aceitam dinheiro|como posso pagar|como paga|pagamento)\b/.test(t);
+}
+
+function isStoreLocationQuestion(text: string): boolean {
+  const t = normalizeStreet(text);
+  return /\b(?:onde fica|onde voces ficam|onde e a loja|endereco da loja|localizacao da loja|localizacao de voces)\b/.test(t);
+}
+
+function isBusinessHoursQuestion(text: string): boolean {
+  const t = normalizeStreet(text);
+  return /\b(?:horario|horarios|que horas abre|que horas fecha|estao abertos|esta aberto|funciona hoje|abrem hoje|fecha que horas)\b/.test(t);
+}
+
+function isGenericMenuOrPriceQuestion(text: string): boolean {
+  const t = normalizeStreet(text);
+  if (!t || isDeliveryFeeQuestion(text)) return false;
+  return (
+    /\b(?:cardapio|menu|quais os precos|quais precos|quanto custa|qual o valor de voces|precos de voces|o que voces tem|o que tem hoje)\b/.test(t) &&
+    !/\b(?:de|da|do)\s+[a-z0-9]/.test(t.replace(/\b(?:qual|quanto|preco|valor|custa|cardapio|menu|voces|tem|hoje)\b/g, " "))
+  );
+}
+
+function looksInformationalOnly(text: string): boolean {
+  return (
+    isDeliveryFeeQuestion(text) ||
+    isDeliveryTimeQuestion(text) ||
+    isPaymentInfoQuestion(text) ||
+    isStoreLocationQuestion(text) ||
+    isBusinessHoursQuestion(text)
+  );
+}
+
+function extractProductPriceNeedle(text: string): string {
+  return normalizeStreet(text)
+    .replace(/\b(?:quanto|qual|me diz|me fala|saber|queria saber|gostaria de saber)\b/g, " ")
+    .replace(/\b(?:custa|custam|valor|preco|precos|fica|esta|e|da|do|de|por favor|pfv|pf)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function findSpecificProductAskedForPrice(
+  supabaseAdmin: any,
+  text: string,
+): Promise<any | null> {
+  if (isDeliveryFeeQuestion(text)) return null;
+
+  const normalized = normalizeStreet(text);
+  const asksPrice =
+    /\b(?:preco|valor|quanto custa|quanto e|quanto fica|custa quanto)\b/.test(normalized);
+
+  if (!asksPrice) return null;
+
+  const { data: products, error } = await supabaseAdmin
+    .from("products")
+    .select(
+      "id,name,sale_price,active,promotion_active,promotion_price,promotion_type,promotion_start_at,promotion_end_at,promotion_days_of_week,promotion_time_start,promotion_time_end,promotion_label",
+    )
+    .eq("active", true);
+
+  if (error || !(products ?? []).length) return null;
+
+  const productList = products ?? [];
+  const directMatches = productList
+    .map((product: any) => ({
+      product,
+      key: normalizeStreet(String(product.name || "")),
+    }))
+    .filter((row: any) => row.key && normalized.includes(row.key))
+    .sort((a: any, b: any) => b.key.length - a.key.length);
+
+  if (directMatches.length) return directMatches[0].product;
+
+  const needle = extractProductPriceNeedle(text);
+  if (!needle) return null;
+
+  try {
+    const { findProductMatch } = await import("@/lib/product-match.server");
+    return findProductMatch(productList, needle);
+  } catch {
+    return null;
+  }
+}
+
+async function getNeighborhoodQuoteForInformation(
+  supabaseAdmin: any,
+  neighborhood: string,
+  street?: string | null,
+): Promise<{ supported: boolean; fee: number | null; pricingMode?: string; needsNumber?: boolean } | null> {
+  try {
+    const { data, error } = await (supabaseAdmin as any).rpc(
+      "check_delivery_area_public",
+      {
+        p_neighborhood: neighborhood,
+        p_street: street || null,
+      },
+    );
+
+    if (error || !data) return null;
+
+    return {
+      supported: data.supported !== false,
+      fee: data.fee == null ? null : Number(data.fee),
+      pricingMode: data.pricing_mode ? String(data.pricing_mode) : undefined,
+      needsNumber: data.needs_number === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Perguntas informativas NÃO podem iniciar coleta agressiva de pedido.
+ * Esse handler roda antes da IA e responde determinísticamente as intenções
+ * que mais geravam respostas ruins: taxa, prazo, pagamento, localização,
+ * horário e preço de produto específico.
+ */
+async function handleInformationalQuestionBeforeAi(opts: {
+  supabaseAdmin: any;
+  conversationId: string;
+  phone: string;
+  text: string;
+  draft: Draft;
+  cfgStore: any;
+  businessHoursText: string | null;
+  bairrosAtendidos: string[];
+  bairrosNaoAtendidos: string[];
+  bairrosAtendidosLoadOk: boolean;
+  firstContact?: boolean;
+}): Promise<Response | null> {
+  const {
+    supabaseAdmin,
+    conversationId,
+    phone,
+    text,
+    draft,
+    cfgStore,
+    businessHoursText,
+    bairrosAtendidos,
+    bairrosNaoAtendidos,
+    bairrosAtendidosLoadOk,
+  } = opts;
+
+  // 1) TAXA / VALOR DA ENTREGA — responde a intenção real, nunca pergunta produto.
+  if (isDeliveryFeeQuestion(text)) {
+    if (draft.delivery_mode === "pickup") {
+      await replyAndLog(
+        supabaseAdmin,
+        conversationId,
+        phone,
+        "Para retirada no local não há taxa de entrega.",
+      );
+      return Response.json({ ok: true, action: "info_delivery_fee_pickup" });
+    }
+
+    const servedNeighborhood = draft.address_neighborhood
+      ? findConfiguredBairroMatch(draft.address_neighborhood, bairrosAtendidos)
+      : null;
+
+    if (!servedNeighborhood) {
+      // Se existe um bairro salvo no rascunho, não repetimos a pergunta. Isso
+      // protege inclusive contra pequenas diferenças de grafia enquanto a lista
+      // autoritativa está temporariamente indisponível.
+      if (draft.address_neighborhood?.trim()) {
+        const authoritativeSaved = await findActiveNeighborhoodAuthoritatively(
+          supabaseAdmin,
+          draft.address_neighborhood,
+        );
+        if (authoritativeSaved) {
+          draft.address_neighborhood = authoritativeSaved;
+          draft.delivery_mode = "delivery";
+          draft.out_of_delivery_area = false;
+          await supabaseAdmin
+            .from("order_drafts")
+            .update({
+              address_neighborhood: authoritativeSaved,
+              delivery_mode: "delivery",
+              out_of_delivery_area: false,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("conversation_id", conversationId);
+
+          const recoveredQuote = await getNeighborhoodQuoteForInformation(
+            supabaseAdmin,
+            authoritativeSaved,
+            draft.address_street || null,
+          );
+          if (recoveredQuote?.fee != null) {
+            await replyAndLog(
+              supabaseAdmin,
+              conversationId,
+              phone,
+              `Para *${authoritativeSaved}*, a taxa de entrega é *${brl(Number(recoveredQuote.fee))}*.`,
+            );
+            return Response.json({ ok: true, action: "info_delivery_fee_recovered_neighborhood" });
+          }
+        }
+      }
+
+      await replyAndLog(
+        supabaseAdmin,
+        conversationId,
+        phone,
+        "Claro! A taxa de entrega varia conforme a região. Qual é o seu bairro, por favor? Aí eu te passo o valor certinho.",
+      );
+      return Response.json({ ok: true, action: "info_delivery_fee_neighborhood_needed" });
+    }
+
+    if (draft.estimated_delivery_fee != null) {
+      await replyAndLog(
+        supabaseAdmin,
+        conversationId,
+        phone,
+        `Para esse endereço, a taxa de entrega é *${brl(Number(draft.estimated_delivery_fee))}*.`,
+      );
+      return Response.json({ ok: true, action: "info_delivery_fee_known" });
+    }
+
+    if (cfgStore?.delivery_pricing_mode === "distance") {
+      if (!draft.address_street?.trim() || !draft.address_number?.trim()) {
+        await replyAndLog(
+          supabaseAdmin,
+          conversationId,
+          phone,
+          `Para *${servedNeighborhood}*, a taxa é calculada pela distância do endereço. Se quiser saber o valor exato, poderia me informar a rua e o número, por favor?`,
+        );
+        return Response.json({ ok: true, action: "info_delivery_fee_address_needed" });
+      }
+
+      // Com endereço completo, o fluxo já existente calcula e pede aprovação da loja.
+      return null;
+    }
+
+    const quote = await getNeighborhoodQuoteForInformation(
+      supabaseAdmin,
+      servedNeighborhood,
+      draft.address_street || null,
+    );
+
+    if (quote?.supported === false) {
+      await replyAndLog(
+        supabaseAdmin,
+        conversationId,
+        phone,
+        formatOutOfAreaDirectReply(
+          cfgStore?.ifood_store_link || null,
+          cfgStore?.nfood_store_link || null,
+        ),
+      );
+      return Response.json({ ok: true, action: "info_delivery_fee_external_area" });
+    }
+
+    const configuredFee =
+      quote?.fee != null
+        ? Number(quote.fee)
+        : Number(cfgStore?.default_delivery_fee ?? 0);
+
+    if (Number.isFinite(configuredFee) && configuredFee >= 0) {
+      await replyAndLog(
+        supabaseAdmin,
+        conversationId,
+        phone,
+        configuredFee === 0
+          ? `Para *${servedNeighborhood}*, a entrega está *grátis*.`
+          : `Para *${servedNeighborhood}*, a taxa de entrega é *${brl(configuredFee)}*.`,
+      );
+      return Response.json({ ok: true, action: "info_delivery_fee_by_neighborhood" });
+    }
+
+    await replyAndLog(
+      supabaseAdmin,
+      conversationId,
+      phone,
+      "Consigo confirmar a taxa certinha para você. Poderia me informar a rua e o número, por favor?",
+    );
+    return Response.json({ ok: true, action: "info_delivery_fee_fallback_address_needed" });
+  }
+
+  // 2) PRAZO — não pergunta item, endereço ou pagamento.
+  if (isDeliveryTimeQuestion(text)) {
+    await replyAndLog(
+      supabaseAdmin,
+      conversationId,
+      phone,
+      "Nosso prazo de entrega é de *até 40 minutos* e normalmente chega antes. Quando o pedido estiver em andamento, você recebe as atualizações pelo WhatsApp.",
+    );
+    return Response.json({ ok: true, action: "info_delivery_time" });
+  }
+
+  // 3) PAGAMENTO — resposta curta e útil.
+  if (isPaymentInfoQuestion(text)) {
+    await replyAndLog(
+      supabaseAdmin,
+      conversationId,
+      phone,
+      "Aceitamos *Pix* e *cartão de crédito ou débito*. Não trabalhamos com dinheiro em espécie.",
+    );
+    return Response.json({ ok: true, action: "info_payment_methods" });
+  }
+
+  // 4) LOCALIZAÇÃO.
+  if (isStoreLocationQuestion(text)) {
+    await replyAndLog(
+      supabaseAdmin,
+      conversationId,
+      phone,
+      "Ficamos na *Rua Carlos Chagas, em Jardim Gramacho*. Trabalhamos somente com delivery e retirada.",
+    );
+    return Response.json({ ok: true, action: "info_store_location" });
+  }
+
+  // 5) HORÁRIO — só responde determinísticamente quando a configuração existe.
+  if (isBusinessHoursQuestion(text) && businessHoursText) {
+    await replyAndLog(
+      supabaseAdmin,
+      conversationId,
+      phone,
+      `Nosso horário de atendimento é: *${businessHoursText}*.`,
+    );
+    return Response.json({ ok: true, action: "info_business_hours" });
+  }
+
+  // 6) PREÇO DE UM PRODUTO ESPECÍFICO.
+  const specificProduct = await findSpecificProductAskedForPrice(supabaseAdmin, text);
+  if (specificProduct) {
+    const servedNeighborhood = draft.address_neighborhood
+      ? findConfiguredBairroMatch(draft.address_neighborhood, bairrosAtendidos)
+      : null;
+
+    if (draft.delivery_mode !== "pickup" && bairrosAtendidosLoadOk && !servedNeighborhood) {
+      await replyAndLog(
+        supabaseAdmin,
+        conversationId,
+        phone,
+        `Claro! Para eu te passar o valor correto de *${specificProduct.name}* para o seu atendimento, qual é o seu bairro, por favor?`,
+      );
+      return Response.json({ ok: true, action: "info_specific_price_neighborhood_needed" });
+    }
+
+    const effective = getEffectivePrice(specificProduct);
+    await replyAndLog(
+      supabaseAdmin,
+      conversationId,
+      phone,
+      `${specificProduct.name}: *${brl(Number(effective.price || 0))}*.`,
+    );
+    return Response.json({ ok: true, action: "info_specific_product_price" });
+  }
+
+  // 7) CARDÁPIO / PREÇOS EM GERAL — antes do bairro, explica o motivo sem ser robótico.
+  if (isGenericMenuOrPriceQuestion(text) && draft.delivery_mode !== "pickup") {
+    const servedNeighborhood = draft.address_neighborhood
+      ? findConfiguredBairroMatch(draft.address_neighborhood, bairrosAtendidos)
+      : null;
+
+    if (bairrosAtendidosLoadOk && !servedNeighborhood) {
+      await replyAndLog(
+        supabaseAdmin,
+        conversationId,
+        phone,
+        "Claro! Para eu te mostrar o cardápio e os valores corretos para a sua região, qual é o seu bairro, por favor?",
+      );
+      return Response.json({ ok: true, action: "info_menu_neighborhood_needed" });
+    }
+  }
+
+  return null;
+}
+
 function customerIsReadyToOrderWithoutItems(userText: string, draft: Draft): boolean {
   if ((draft.items ?? []).length > 0) return false;
   const t = normalizeStreet(userText);
@@ -2051,15 +2439,17 @@ ${conversationStageText}
 
 🚫 ZERO LOOP DE DADOS JÁ INFORMADOS — REGRA INVIOLÁVEL: endereço, nome, pagamento, bairro, itens, quantidade, taxa e qualquer outro dado presente em "O QUE JÁ SEI DO PEDIDO" são fatos persistidos e NUNCA podem ser solicitados novamente, salvo se o próprio cliente disser que deseja corrigir/alterar aquele dado. Antes de fazer qualquer pergunta, confira os campos já preenchidos. Se uma resposta trouxer várias informações de uma vez, absorva todas na mesma rodada. Se faltar apenas UM campo, peça só esse campo. Se não faltar nenhum, avance imediatamente. Nunca reinicie uma sequência de perguntas porque o cliente respondeu em formato diferente do esperado.
 
+🧠 INTENÇÃO DA ÚLTIMA MENSAGEM VEM PRIMEIRO — REGRA CRÍTICA: antes de conduzir qualquer venda, classifique mentalmente a última mensagem como (a) pergunta informativa, (b) intenção de compra, (c) correção/alteração, ou (d) confirmação. Se for pergunta informativa, RESPONDA ESSA PERGUNTA e pare. Não peça produto, nome, endereço ou pagamento só porque existe um fluxo de venda disponível. Exemplos: "valor da entrega?" → fale apenas da taxa e peça somente o bairro/endereço mínimo necessário; "aceita cartão?" → responda pagamento; "quanto tempo demora?" → responda prazo. Nunca transforme curiosidade em coleta de pedido.
+
 🧠 CONDUÇÃO NATURAL DA VENDA — O ATENDIMENTO É UMA CONVERSA, NÃO UM FORMULÁRIO: interprete o SENTIDO da última mensagem junto com todo o histórico e com os dados já coletados. Quando o cliente demonstrar que quer comprar, que já escolheu, que já sabe o que deseja, que não precisa ver o cardápio ou qualquer intenção equivalente, confira primeiro o que AINDA FALTA para conseguir montar o pedido. Se ainda não existir nenhum item confirmado no rascunho, o passo natural é perguntar o que ele deseja pedir e as quantidades. NUNCA trate uma declaração como “já sei o que vou pedir” como se os produtos já tivessem sido informados. Não pule diretamente para endereço, nome, pagamento, bebida, resumo ou confirmação enquanto a conversa de compra ainda não revelou quais itens compõem o pedido. Ao mesmo tempo, se o cliente estiver apenas fazendo uma pergunta informativa, responda à pergunta normalmente sem forçá-lo a comprar. O objetivo é agir como um bom atendente humano: compreender intenção, obter naturalmente a informação necessária e conduzir a venda até a conclusão sem saltos ilógicos.
 
 🚫 CARDÁPIO EM TEXTO: nunca liste o cardápio inteiro em texto. Para ENTREGA, o cardápio do WhatsApp só pode ser enviado depois que o bairro estiver validado como atendido pelo entregador próprio. Se o bairro for externo, NÃO envie a imagem do cardápio do WhatsApp: redirecione para a plataforma, onde ficam os preços e o cardápio daquela região. Se ainda não souber o bairro, peça o bairro educadamente primeiro. Para RETIRADA, o cardápio do WhatsApp pode ser enviado quando solicitado. Pergunta sobre item específico também respeita a regra de bairro antes de revelar preço.
 
 🎯 RESPONDA SÓ O QUE FOI PERGUNTADO — REGRA MÁXIMA DE TODO O ATENDIMENTO: cada resposta sua trata SOMENTE do que o cliente pediu ou perguntou naquela mensagem, nunca um pacote de informações extras que ele não pediu. Isso vale pra CADA etapa da conversa, não só pra saudação inicial:
-- Cliente ainda não informou bairro e não declarou retirada → peça somente o bairro, com educação e "por favor", mesmo que tenha perguntado preço ou cardápio.
+- Cliente ainda não informou bairro e não declarou retirada → se a pergunta depender da região (taxa, cardápio ou preço do atendimento), explique em UMA frase por que precisa do bairro e peça somente o bairro. Se for uma pergunta que NÃO depende da região (pagamento, prazo, localização da loja, horário), responda diretamente sem exigir bairro e sem puxar compra.
 - 📸 IMAGEM DO CARDÁPIO — OBRIGATÓRIO SOMENTE DEPOIS DA VALIDAÇÃO: quando o cliente já estiver em bairro atendido pelo WhatsApp (ou tiver escolhido RETIRADA) e pedir o cardápio, o menu, a foto do cardápio, ou perguntar de forma genérica sobre preço/valor sem citar item específico (ex: "quanto custa?", "qual o valor de vocês?", "quais os preços?", "o que vocês têm?", "manda o cardápio", "tem cardápio?", "quero ver o menu"), você DEVE chamar a ferramenta send_menu_image — NUNCA responda em texto listando os itens nesses casos. A imagem do cardápio é a resposta oficial da loja e deve ser sempre enviada nessas situações. Se o cliente perguntar o preço de um item ESPECÍFICO já citado por nome (ex: "quanto custa o X-Burguer?"), aí sim responda só o preço em texto sem chamar send_menu_image. Se o histórico mostrar que a imagem já foi enviada antes, tudo bem chamar de novo se o cliente pedir — nunca ofereça reenviar por conta própria.
 - Cliente pediu cardápio/menu/preços de forma geral, COM bairro já validado → chame send_menu_image. Não liste o cardápio inteiro em texto.
-- Cliente perguntou sobre entrega (prazo, taxa, área) → responda só sobre entrega. Não repita o cardápio, não fale de pagamento.
+- Cliente perguntou sobre entrega (prazo, taxa, área) → responda só sobre entrega. Não repita o cardápio, não fale de pagamento e NÃO pergunte quais produtos ele quer. Para "valor da entrega/taxa/frete", peça apenas o mínimo necessário para descobrir o valor: primeiro o bairro; só peça rua+número se o sistema realmente calcular por distância.
 - Cliente perguntou o preço de algo → responda só o preço (e o nome exato do item). Não liste o resto do cardápio nem puxe outro assunto.
 - Cliente perguntou sobre pagamento → responda só sobre as formas de pagamento.
 Um atendente de verdade nunca despeja um monte de informação não pedida em cima do cliente — ele escuta a pergunta e responde exatamente aquilo, de forma organizada, e deixa o cliente guiar o ritmo da conversa. A única exceção são as sugestões de venda descritas mais abaixo (bebida, complemento, combo), que têm suas próprias regras de timing e moderação — fora isso, é proibido adicionar informação extra que ninguém pediu.
@@ -2130,6 +2520,8 @@ Regras importantes:
 - Você CONHECE PERFEITAMENTE tudo sobre a loja porque tudo está listado nas seções "CATEGORIAS DISPONÍVEIS" e "CARDÁPIO ATIVO AGORA" acima — não porque você já sabia de antemão. Nunca diga que "não tem acesso" a alguma informação ou que "não sabe" algo que estiver listado lá. Responda com confiança e naturalidade, como quem realmente trabalha na loja todos os dias — mas SEMPRE fiel ao que está escrito, nunca ao que você imagina que uma loja assim "provavelmente" teria.
 - NUNCA invente informação que não está listada acima (produto, categoria, ingrediente, preço, prazo, promoção). Se genuinamente não tiver a informação, diga que vai confirmar com a loja — mas isso deve ser raríssimo, porque quase tudo já está descrito acima.
 - Sempre que o cliente informar ou confirmar algo das categorias acima, chame update_order_draft com os campos atualizados — pode chamar várias vezes na mesma conversa.
+- MEMÓRIA DO PEDIDO ATUAL — REGRA ABSOLUTA: antes de fazer qualquer pergunta, leia o bloco "O QUE JÁ SEI" e o histórico do pedido atual. Se produto, quantidade, bairro, entrega/retirada, nome, rua, número, referência, pagamento, observação ou adicional já tiver sido informado e salvo, NÃO pergunte novamente. Pergunte somente o próximo dado realmente ausente. Se o cliente disser vários dados na mesma mensagem, absorva TODOS de uma vez e salve todos na mesma rodada.
+- Se já existem itens no rascunho, é proibido perguntar "o que você quer pedir?", "quais produtos?" ou equivalente. Se as quantidades já estão explícitas/salvas, é proibido perguntar quantidade novamente. Se entrega/retirada já está definido, não pergunte de novo.
 - Nunca repita uma pergunta sobre algo que já está em "o que já sei acima".
 - 🚨 REGRA ANTI-LOOP DO RESUMO: depois que o resumo oficial for enviado, NÃO repita o resumo em resposta a confirmação. Respostas afirmativas como "sim", "pode", "pode fechar", "pode finalizar", "confirmo", "está certo", "tudo certo", "perfeito", "fechado", "beleza" ou equivalentes significam CONFIRMAÇÃO FINAL e devem fechar o pedido imediatamente. O resumo só pode ser enviado novamente se o cliente realmente alterar item, quantidade, endereço, nome, forma de pagamento ou outro dado que mude o pedido.
 - 🚨 CONFIRMAÇÃO FINAL OBRIGATÓRIA: É PROIBIDO pedir confirmação enquanto faltar qualquer dado obrigatório. Primeiro complete itens + nome + endereço atual + taxa + forma de pagamento. NÃO existe pergunta adicional sobre crédito/débito nem sobre pagamento agora/na entrega. Se não houver bebida, o BACKEND oferece as bebidas ativas UMA VEZ e aguarda a resposta. Se o cliente adicionar bebida, atualize os itens; se recusar, apenas siga. IMEDIATAMENTE depois da resposta sobre bebida, o BACKEND deve enviar UMA ÚNICA VEZ o resumo oficial contendo SOMENTE Nome, Endereço completo quando for ENTREGA, Itens com quantidade e valor, Taxa de entrega e *TOTAL A PAGAR*, terminando com "Está tudo certo? Posso fechar o pedido?". É PROIBIDO pular o resumo e perguntar apenas "posso finalizar?". Na PRIMEIRA resposta afirmativa ao resumo, o backend informa o prazo de até 40 minutos e cria o pedido automaticamente NA MESMA RODADA, sem aguardar nova aprovação e sem ficar em silêncio.
@@ -5619,29 +6011,84 @@ async function handleIncomingMessageUnlocked(
   );
   if (digitalOrderSupportResponse) return digitalOrderSupportResponse;
 
-  // ============ PRIMEIRO CONTATO: BAIRRO SEMPRE PRIMEIRO ============
-  // Regra comercial autoritativa: no PRIMEIRO contato do cliente, não importa
-  // de onde ele veio (Meta/CTWA, Evolution, link direto etc.) nem o que escreveu
-  // na primeira mensagem. O sistema NÃO responde a pergunta inicial, NÃO mostra
-  // cardápio/preço e NÃO inicia coleta de pedido. A única ação automática é
-  // cumprimentar conforme o horário e pedir o bairro. Como esta trava roda em
-  // código antes da classificação de bairro e antes da IA, nenhum prompt ou
-  // origem da conversa consegue pular essa etapa.
-  //
-  // ⚠️ IMPORTANTE: a saudação de primeiro contato NÃO pode ser gravada com
-  // systemMessage:true. Mensagens com media_type="system" são FILTRADAS do
-  // histórico usado pelo código (linha ~4915 acima). Se for "system", no
-  // próximo webhook assistantTurnsBeforeThisContact volta a ser 0 e o sistema
-  // pede o bairro de novo em loop infinito — esse era o bug exato exibido na
-  // screenshot (3x Vila São Luís → 3x "informe seu bairro").
-  // A saudação deve entrar no histórico normalmente (sem flag system) para que
-  // o contador de turnos do assistente avance e o loop não se repita.
+  // ============ PRIMEIRO CONTATO: NATURAL, SEM IGNORAR A PERGUNTA ============
+  // Se o cliente abriu a conversa com uma pergunta simples (taxa, prazo,
+  // pagamento, localização, horário ou preço específico), responda primeiro
+  // à intenção real dele. Só peça bairro quando ele for necessário para
+  // responder corretamente (taxa/cardápio/preço por região). Isso evita o
+  // comportamento robótico de ignorar "qual o valor da entrega?" e começar
+  // a coletar produtos.
   const assistantTurnsBeforeThisContact = allHistory.filter((m) => m.role === "assistant").length;
   if (assistantTurnsBeforeThisContact === 0) {
-    const greetingText = `${greetingByTimeBR()}! Para que o atendente possa dar continuidade no seu atendimento, informe seu bairro por favor.`;
-    // SEM systemMessage:true — deve aparecer no histórico para o loop não se repetir
-    await replyAndLog(supabaseAdmin, conversation.id, phone, greetingText);
-    return Response.json({ ok: true, action: "first_contact_neighborhood_required" });
+    // O próprio PRIMEIRO texto do cliente pode já conter o bairro. Antes de
+    // pedir qualquer coisa novamente, tentamos reconhecer e persistir o bairro
+    // ativo. Assim "Vila São Luís" ou "sou de Vila São Luís, qual a taxa?"
+    // já deixa o atendimento validado nessa mesma rodada.
+    const firstTurnNeighborhood =
+      findConfiguredBairroMatch(text, bairrosAtendidos) ||
+      (await findActiveNeighborhoodAuthoritatively(supabaseAdmin, text));
+
+    if (firstTurnNeighborhood) {
+      draft.delivery_mode = "delivery";
+      draft.address_neighborhood = firstTurnNeighborhood;
+      draft.out_of_delivery_area = false;
+
+      const { error: firstNeighborhoodSaveError } = await supabaseAdmin
+        .from("order_drafts")
+        .update({
+          delivery_mode: "delivery",
+          address_neighborhood: firstTurnNeighborhood,
+          out_of_delivery_area: false,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("conversation_id", conversation.id);
+
+      if (firstNeighborhoodSaveError) {
+        console.error("[ORDER_MEMORY] Falha ao persistir bairro informado no primeiro turno:", firstNeighborhoodSaveError);
+      }
+
+      const normalizedFirstText = normalizeNeighborhoodKey(text);
+      const normalizedFirstNeighborhood = normalizeNeighborhoodKey(firstTurnNeighborhood);
+      const onlyNeighborhood =
+        normalizedFirstText === normalizedFirstNeighborhood ||
+        (similarity(normalizedFirstText, normalizedFirstNeighborhood) >= 0.92 &&
+          normalizedFirstText.length <= normalizedFirstNeighborhood.length + 6);
+
+      if (onlyNeighborhood) {
+        await replyAndLog(
+          supabaseAdmin,
+          conversation.id,
+          phone,
+          "Obrigado pela informação! Em que posso ajudar? Gostaria de ver nosso cardápio?",
+        );
+        return Response.json({ ok: true, action: "first_contact_neighborhood_accepted" });
+      }
+      // Se o cliente escreveu bairro + pergunta na mesma mensagem, NÃO retorna:
+      // o handler informativo abaixo usa o bairro já salvo e responde a pergunta
+      // sem pedi-lo novamente.
+    }
+
+    const firstContactInfo = await handleInformationalQuestionBeforeAi({
+      supabaseAdmin,
+      conversationId: conversation.id,
+      phone,
+      text,
+      draft,
+      cfgStore,
+      businessHoursText,
+      bairrosAtendidos,
+      bairrosNaoAtendidos,
+      bairrosAtendidosLoadOk,
+      firstContact: true,
+    });
+    if (firstContactInfo) return firstContactInfo;
+
+    // Só pede bairro se ele realmente ainda não foi identificado nesta rodada.
+    if (!draft.address_neighborhood) {
+      const greetingText = `${greetingByTimeBR()}! Para eu verificar o atendimento certinho para você, qual é o seu bairro, por favor?`;
+      await replyAndLog(supabaseAdmin, conversation.id, phone, greetingText);
+      return Response.json({ ok: true, action: "first_contact_neighborhood_required" });
+    }
   }
 
   // ============ RECONCILIAÇÃO DETERMINÍSTICA DO BAIRRO ============
@@ -5744,6 +6191,23 @@ async function handleIncomingMessageUnlocked(
       }
     }
   }
+
+  // ============ PERGUNTA INFORMATIVA TEM PRIORIDADE SOBRE COLETA DO PEDIDO ============
+  // Ex.: "Valor da entrega??" nunca pode virar "Quais produtos você quer?".
+  // Respondemos/solicitamos somente o dado mínimo necessário e encerramos a rodada.
+  const informationalResponse = await handleInformationalQuestionBeforeAi({
+    supabaseAdmin,
+    conversationId: conversation.id,
+    phone,
+    text,
+    draft,
+    cfgStore,
+    businessHoursText,
+    bairrosAtendidos,
+    bairrosNaoAtendidos,
+    bairrosAtendidosLoadOk,
+  });
+  if (informationalResponse) return informationalResponse;
 
   // ============ RECOMEÇO EXPLÍCITO DO PEDIDO ============
   // "Vamos recomeçar / esqueça tudo" limpa os dados comerciais do pedido, mas
