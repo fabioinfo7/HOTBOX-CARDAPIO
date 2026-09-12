@@ -30,6 +30,8 @@ import {
 import { toast } from "sonner";
 import {
   addExistingCustomerToLoyalty,
+  createLoyaltyUserAdmin,
+  deleteLoyaltyUserAdmin,
   adjustLoyaltyMarks,
   cancelLoyaltyRewardAdmin,
   getLoyaltyAdminData,
@@ -79,6 +81,17 @@ function LoyaltyAdminPage() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [addingCustomer, setAddingCustomer] = useState(false);
   const [addCustomerSearch, setAddCustomerSearch] = useState("");
+  const [addMode, setAddMode] = useState<"create" | "existing">("create");
+  const [creatingUser, setCreatingUser] = useState(false);
+  const [newUser, setNewUser] = useState({
+    fullName: "",
+    email: "",
+    phone: "",
+    password: "",
+    initialPoints: "0",
+    initialLifetimeOrders: "0",
+    adminNotes: "",
+  });
   const [manualReason, setManualReason] = useState<Record<string, string>>({});
 
   async function token() {
@@ -202,6 +215,7 @@ function LoyaltyAdminPage() {
       fullName: account.profile?.full_name || "",
       email: account.profile?.email || "",
       phone: account.profile?.phone || "",
+      newPassword: "",
       points: Number(account.points || 0),
       lifetimeOrders: Number(account.lifetime_qualifying_orders || 0),
       adminNotes: account.admin_notes || "",
@@ -221,6 +235,7 @@ function LoyaltyAdminPage() {
           fullName: editing.fullName,
           email: editing.email,
           phone: editing.phone,
+          newPassword: editing.newPassword || null,
           points: Number(editing.points),
           lifetimeOrders: Number(editing.lifetimeOrders),
           adminNotes: editing.adminNotes,
@@ -348,6 +363,65 @@ function LoyaltyAdminPage() {
       return toast.error((result as any).error || "Falha ao reativar participante");
 
     toast.success("Participante reativado.");
+    await load();
+  }
+
+  async function createCustomerManually() {
+    if (creatingUser) return;
+    if (!newUser.fullName.trim()) return toast.error("Informe o nome do cliente.");
+    if (!newUser.email.trim()) return toast.error("Informe o e-mail do cliente.");
+    if (newUser.password.length < 6) return toast.error("A senha precisa ter pelo menos 6 caracteres.");
+
+    setCreatingUser(true);
+    try {
+      const result = await createLoyaltyUserAdmin({
+        data: {
+          accessToken: await token(),
+          fullName: newUser.fullName,
+          email: newUser.email,
+          phone: newUser.phone || null,
+          password: newUser.password,
+          initialPoints: Number(newUser.initialPoints || 0),
+          initialLifetimeOrders: Number(newUser.initialLifetimeOrders || 0),
+          adminNotes: newUser.adminNotes || null,
+        },
+      });
+
+      if (!result.ok) throw new Error((result as any).error || "Falha ao criar usuário");
+
+      toast.success("Usuário criado e adicionado ao Clube HotBox.");
+      setNewUser({
+        fullName: "",
+        email: "",
+        phone: "",
+        password: "",
+        initialPoints: "0",
+        initialLifetimeOrders: "0",
+        adminNotes: "",
+      });
+      setAddingCustomer(false);
+      await load();
+    } catch (error: any) {
+      toast.error(error?.message || "Não foi possível criar o usuário");
+    } finally {
+      setCreatingUser(false);
+    }
+  }
+
+  async function deleteUserPermanently(account: any) {
+    const label = participantName(account);
+    const confirmation = window.prompt(
+      `EXCLUSÃO DEFINITIVA\n\nIsso apaga a conta de login e os dados do Clube de ${label}.\nPedidos antigos continuam preservados, mas ficam sem vínculo de login.\n\nDigite EXCLUIR para confirmar:`,
+    );
+    if (confirmation !== "EXCLUIR") return;
+
+    const result = await deleteLoyaltyUserAdmin({
+      data: { accessToken: await token(), userId: account.user_id },
+    });
+
+    if (!result.ok) return toast.error((result as any).error || "Falha ao excluir usuário");
+    toast.success("Usuário excluído definitivamente.");
+    setExpandedUser(null);
     await load();
   }
 
@@ -769,6 +843,16 @@ function LoyaltyAdminPage() {
                                   Remover do Clube
                                 </Button>
                               )}
+
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-red-300 text-red-700 hover:bg-red-50"
+                                onClick={() => deleteUserPermanently(account)}
+                              >
+                                <Trash2 className="mr-1 size-3.5" />
+                                Excluir usuário definitivamente
+                              </Button>
                             </div>
                           </div>
 
@@ -1026,6 +1110,25 @@ function LoyaltyAdminPage() {
                 />
               </div>
 
+              <div className="sm:col-span-2">
+                <label className="text-xs font-bold">Nova senha de acesso</label>
+                <Input
+                  className="mt-1"
+                  type="password"
+                  value={editing.newPassword || ""}
+                  onChange={(e) =>
+                    setEditing((current: any) => ({
+                      ...current,
+                      newPassword: e.target.value,
+                    }))
+                  }
+                  placeholder="Deixe em branco para manter a senha atual"
+                />
+                <p className="mt-1 text-[10px] text-muted-foreground">
+                  Você pode redefinir a senha do cliente diretamente por aqui.
+                </p>
+              </div>
+
               <div>
                 <label className="text-xs font-bold">
                   Marcações atuais
@@ -1114,66 +1217,113 @@ function LoyaltyAdminPage() {
       )}
 
       {addingCustomer && (
-        <div className="fixed inset-0 z-[100] grid place-items-center bg-black/50 p-4">
-          <Card className="max-h-[85vh] w-full max-w-xl overflow-auto p-5 shadow-2xl">
-            <div className="flex items-start justify-between gap-3">
+        <div className="fixed inset-0 z-[100] grid place-items-center bg-black/55 p-4">
+          <Card className="max-h-[92vh] w-full max-w-3xl overflow-auto p-0 shadow-2xl">
+            <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b bg-background p-5">
               <div>
-                <h2 className="text-lg font-black">
-                  Adicionar cliente ao Clube
-                </h2>
+                <h2 className="text-lg font-black">Adicionar usuário ao Clube HotBox</h2>
                 <p className="text-xs text-muted-foreground">
-                  Escolha um cliente que já tenha uma conta no cardápio digital.
+                  Crie a conta você mesmo ou adicione um cliente que já possui login.
                 </p>
               </div>
-
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={() => setAddingCustomer(false)}
-              >
+              <Button size="icon" variant="ghost" onClick={() => setAddingCustomer(false)}>
                 <X className="size-4" />
               </Button>
             </div>
 
-            <div className="relative mt-4">
-              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                className="pl-9"
-                placeholder="Buscar cliente por nome, telefone ou e-mail"
-                value={addCustomerSearch}
-                onChange={(e) => setAddCustomerSearch(e.target.value)}
-              />
-            </div>
+            <div className="p-5">
+              <div className="grid grid-cols-2 gap-2 rounded-xl bg-muted p-1">
+                <Button
+                  type="button"
+                  variant={addMode === "create" ? "default" : "ghost"}
+                  onClick={() => setAddMode("create")}
+                >
+                  <UserPlus className="mr-2 size-4" /> Criar novo usuário
+                </Button>
+                <Button
+                  type="button"
+                  variant={addMode === "existing" ? "default" : "ghost"}
+                  onClick={() => setAddMode("existing")}
+                >
+                  <Users className="mr-2 size-4" /> Usuário já existente
+                </Button>
+              </div>
 
-            <div className="mt-3 divide-y rounded-xl border">
-              {filteredProfiles.length === 0 ? (
-                <p className="p-5 text-center text-sm text-muted-foreground">
-                  Não há clientes disponíveis para adicionar.
-                </p>
-              ) : (
-                filteredProfiles.map((profile: any) => (
-                  <div
-                    key={profile.user_id}
-                    className="flex items-center justify-between gap-3 p-3"
-                  >
+              {addMode === "create" ? (
+                <div className="mt-5 space-y-4">
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                    <p className="font-black text-amber-950">Controle total do cadastro</p>
+                    <p className="mt-1 text-xs text-amber-900/80">
+                      Você cria o login do cliente, define a senha inicial, quantidade de selos, compras válidas e observações.
+                    </p>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
                     <div>
-                      <p className="font-bold">
-                        {profile.full_name || profile.email || "Cliente"}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {profile.phone || "Sem telefone"} ·{" "}
-                        {profile.email || "Sem e-mail"}
-                      </p>
+                      <label className="text-xs font-bold">Nome completo</label>
+                      <Input className="mt-1" value={newUser.fullName} onChange={(e) => setNewUser((v) => ({ ...v, fullName: e.target.value }))} placeholder="Nome do cliente" />
                     </div>
+                    <div>
+                      <label className="text-xs font-bold">Telefone</label>
+                      <Input className="mt-1" value={newUser.phone} onChange={(e) => setNewUser((v) => ({ ...v, phone: e.target.value }))} placeholder="(21) 99999-9999" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold">E-mail de acesso</label>
+                      <Input className="mt-1" type="email" value={newUser.email} onChange={(e) => setNewUser((v) => ({ ...v, email: e.target.value }))} placeholder="cliente@email.com" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold">Senha inicial</label>
+                      <Input className="mt-1" type="password" value={newUser.password} onChange={(e) => setNewUser((v) => ({ ...v, password: e.target.value }))} placeholder="Mínimo 6 caracteres" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold">Selos / marcações iniciais</label>
+                      <Input className="mt-1" type="number" min={0} value={newUser.initialPoints} onChange={(e) => setNewUser((v) => ({ ...v, initialPoints: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold">Compras válidas acumuladas</label>
+                      <Input className="mt-1" type="number" min={0} value={newUser.initialLifetimeOrders} onChange={(e) => setNewUser((v) => ({ ...v, initialLifetimeOrders: e.target.value }))} />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="text-xs font-bold">Anotação interna</label>
+                      <textarea className="mt-1 min-h-20 w-full rounded-xl border bg-background px-3 py-2 text-sm" value={newUser.adminNotes} onChange={(e) => setNewUser((v) => ({ ...v, adminNotes: e.target.value }))} placeholder="Ex.: cliente antigo, 4 compras anteriores lançadas manualmente..." />
+                    </div>
+                  </div>
 
-                    <Button
-                      size="sm"
-                      onClick={() => addExistingCustomer(profile)}
-                    >
-                      Adicionar
+                  <div className="flex justify-end">
+                    <Button onClick={createCustomerManually} disabled={creatingUser}>
+                      <UserPlus className="mr-2 size-4" />
+                      {creatingUser ? "Criando usuário..." : "Criar usuário e adicionar ao Clube"}
                     </Button>
                   </div>
-                ))
+                </div>
+              ) : (
+                <div className="mt-5">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      className="pl-9"
+                      placeholder="Buscar cliente por nome, telefone ou e-mail"
+                      value={addCustomerSearch}
+                      onChange={(e) => setAddCustomerSearch(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="mt-3 divide-y rounded-xl border">
+                    {filteredProfiles.length === 0 ? (
+                      <p className="p-5 text-center text-sm text-muted-foreground">Nenhum usuário disponível para adicionar.</p>
+                    ) : (
+                      filteredProfiles.map((profile: any) => (
+                        <div key={profile.user_id} className="flex items-center justify-between gap-3 p-3">
+                          <div>
+                            <p className="font-bold">{profile.full_name || profile.email || "Cliente"}</p>
+                            <p className="text-xs text-muted-foreground">{profile.phone || "Sem telefone"} · {profile.email || "Sem e-mail"}</p>
+                          </div>
+                          <Button size="sm" onClick={() => addExistingCustomer(profile)}>Adicionar</Button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
               )}
             </div>
           </Card>
