@@ -37,6 +37,18 @@ type CheckoutInput = {
   items: CheckoutItemInput[];
 };
 
+function inventoryNameKey(value: unknown) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\b\d+\s*(ml|l|litro|litros|g|kg)\b/g, " ")
+    .replace(/\b(lata|latinha|unidade|un|garrafa|pet)\b/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function digits(v: unknown) {
   return String(v ?? "").replace(/\D/g, "");
 }
@@ -205,6 +217,7 @@ export const quoteSiteDelivery = createServerFn({ method: "POST" })
     street?: string | null;
     number?: string | null;
     city?: string | null;
+    cep?: string | null;
   }) => data)
   .handler(async ({ data }) => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -212,11 +225,13 @@ export const quoteSiteDelivery = createServerFn({ method: "POST" })
     const street = String(data.street || "").trim();
     const number = String(data.number || "").trim();
     const city = String(data.city || "").trim();
-    if (!neighborhood) return { supported: false, reason: "missing_neighborhood" } as const;
+    const cep = digits(data.cep);
+    if (!neighborhood && !cep) return { supported: false, reason: "missing_neighborhood" } as const;
 
     const { data: area, error: areaError } = await (supabaseAdmin as any).rpc("check_delivery_area_public", {
       p_neighborhood: neighborhood,
       p_street: street || null,
+      p_cep: cep || null,
     });
     if (areaError) return { supported: false, reason: "area_check_failed", error: areaError.message } as const;
     if (!area?.supported) return { supported: false, reason: area?.reason || "outside_area", neighborhood: area?.neighborhood || neighborhood } as const;
@@ -393,6 +408,7 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
       const { data: area, error: areaError } = await (supabaseAdmin as any).rpc("check_delivery_area_public", {
         p_neighborhood: data.address_neighborhood,
         p_street: data.address_street || null,
+        p_cep: digits(data.address_cep) || null,
       });
       if (areaError) return { error: "Não foi possível validar a área de entrega." };
       if (!area?.supported) return { error: "Esse endereço está fora da área de entrega própria." };
@@ -513,6 +529,25 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
       (linkedAddonProducts ?? []).map((product: any) => [String(product.id), product]),
     );
 
+    // Também carregamos nome + status dos produtos para sincronizar adicionais
+    // antigos que não possuem linked_product_id.
+    const { data: allInventoryProducts, error: allInventoryProductsError } =
+      await (supabaseAdmin as any)
+        .from("products")
+        .select("id,name,active");
+
+    if (allInventoryProductsError) {
+      return { error: "Não foi possível validar a disponibilidade dos adicionais." };
+    }
+
+    const inventoryProductByName = new Map<string, any>();
+    for (const product of allInventoryProducts ?? []) {
+      const key = inventoryNameKey((product as any).name);
+      if (key && !inventoryProductByName.has(key)) {
+        inventoryProductByName.set(key, product);
+      }
+    }
+
     const addonById = new Map((addonOptions ?? []).map((a: any) => [String(a.id), a]));
     const groupById = new Map((addonGroups ?? []).map((g: any) => [String(g.id), g]));
     const groupsByProduct = new Map<string, Set<string>>();
@@ -554,6 +589,23 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
         }
         const group: any = groupById.get(String(option.group_id));
         if (!group || group.active !== true) return { error: `Um grupo de adicionais de ${p.name} está indisponível.` };
+
+        // Regra global: se existir um produto do cardápio com o mesmo nome comercial,
+        // o estado ativo/inativo desse produto vale também para o adicional.
+        // Isso cobre cadastros antigos em que a bebida foi criada como adicional
+        // separado, sem linked_product_id.
+        if (!option.linked_product_id) {
+          const matchingInventoryProduct: any = inventoryProductByName.get(
+            inventoryNameKey(option.display_name || option.name),
+          );
+
+          if (matchingInventoryProduct && matchingInventoryProduct.active !== true) {
+            return {
+              error: `O adicional "${option.display_name || option.name}" está esgotado no momento.`,
+            };
+          }
+        }
+
         const addonQty = Math.max(1, Math.min(20, Math.floor(Number(rawAddon.qty || 1))));
         selectedCountByGroup.set(
           String(option.group_id),
