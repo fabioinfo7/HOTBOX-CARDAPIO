@@ -1,0 +1,25 @@
+HOTBOX — CONSOLIDAÇÃO FINAL 2026-09-04
+
+Esta versão parte do pacote completo HOTBOX-COMPLETO-ATUALIZADO-FINAL-20260904
+e incorpora a correção de build do módulo de avaliações:
+- src/lib/satisfaction.functions.ts
+- src/lib/satisfaction.server.ts (novo)
+- src/routes/api/public/hooks/satisfaction-auto.ts
+
+Motivo:
+TanStack Start import-protection impedia satisfaction.functions.ts, importado pelo frontend,
+de importar diretamente whatsapp-send.server.ts. A lógica de envio de WhatsApp foi isolada
+em satisfaction.server.ts, mantendo o módulo usado pelo frontend sem import server-only.
+
+Também permanecem nesta consolidação as correções anteriores, incluindo:
+- Mercado Pago + InfinitePay com troca manual
+- Recebimentos do Cardápio Digital
+- Clube HotBox / fidelidade
+- login Google preservando região/CEP
+- rotas/menu atualizados
+- logo empacotada
+- meta-capi.server.ts sem .insert(...).catch
+- ifood-api.server.ts com tratamento equivalente
+
+PRE-FLIGHT LOCAL: OK.
+Observação: npm install não concluiu dentro do limite do ambiente de geração, portanto o build Vite completo deve ser confirmado no Railway.
