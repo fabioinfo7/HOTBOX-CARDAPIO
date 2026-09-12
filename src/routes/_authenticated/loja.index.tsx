@@ -166,20 +166,20 @@ function OrderCard({
 
   return (
     <Card
-      className={`group overflow-hidden rounded-2xl border bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg ${
+      className={`group overflow-hidden rounded-xl border bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg ${
         unread ? "ring-2 ring-emerald-400 ring-offset-2" : ""
       } ${cancellation ? "border-red-300 bg-red-50/40" : ""}`}
     >
       <button type="button" onClick={onOpen} className="w-full text-left">
-        <div className="border-b bg-gradient-to-r from-zinc-950 to-zinc-900 px-4 py-3 text-white">
+        <div className="border-b bg-gradient-to-r from-zinc-950 to-zinc-900 px-3 py-2 text-white">
           <div className="flex items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#ffcf00] font-black text-zinc-950">
+            <div className="flex min-w-0 items-center gap-2">
+              <div className="grid size-8 shrink-0 place-items-center rounded-lg text-xs bg-[#ffcf00] font-black text-zinc-950">
                 {initials(order.customer_name)}
               </div>
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-black">{orderDisplayRef(order as any)}</span>
+                  <span className="text-sm font-black">{orderDisplayRef(order as any)}</span>
                   {isNew && (
                     <span className="rounded-full bg-red-500 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide">
                       Novo
@@ -191,37 +191,37 @@ function OrderCard({
                     </span>
                   )}
                 </div>
-                <p className="truncate text-sm font-semibold text-white/90">{order.customer_name}</p>
+                <p className="truncate text-xs font-semibold text-white/90">{order.customer_name}</p>
               </div>
             </div>
-            <ChevronRight className="size-5 shrink-0 text-white/60 transition group-hover:translate-x-0.5" />
+            <ChevronRight className="size-4 shrink-0 text-white/60 transition group-hover:translate-x-0.5" />
           </div>
         </div>
 
-        <div className="space-y-3 p-4">
+        <div className="space-y-2 p-2.5">
           <div className="flex items-center justify-between gap-3">
-            <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-[10px] font-bold text-zinc-700">
+            <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[9px] font-bold text-zinc-700">
               {sourceLabel(order.source)}
             </span>
             <span className={`flex items-center gap-1 text-xs font-bold ${mins >= 40 ? "text-red-600" : mins >= 25 ? "text-amber-600" : "text-zinc-500"}`}>
-              <Clock3 className="size-3.5" /> {mins} min
+              <Clock3 className="size-3" /> {mins} min
             </span>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <div className="rounded-xl bg-zinc-50 p-2.5">
+          <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+            <div className="rounded-lg bg-zinc-50 px-2 py-1.5">
               <p className="text-[9px] font-bold uppercase tracking-wide text-zinc-400">Total</p>
-              <p className="mt-0.5 text-sm font-black text-zinc-900">{brl(Number(order.total || 0))}</p>
+              <p className="mt-0.5 text-xs font-black text-zinc-900">{brl(Number(order.total || 0))}</p>
             </div>
-            <div className="rounded-xl bg-zinc-50 p-2.5">
+            <div className="rounded-lg bg-zinc-50 px-2 py-1.5">
               <p className="text-[9px] font-bold uppercase tracking-wide text-zinc-400">Pagamento</p>
-              <p className="mt-0.5 truncate text-sm font-bold text-zinc-900">{paymentLabel(order)}</p>
+              <p className="mt-0.5 truncate text-xs font-bold text-zinc-900">{paymentLabel(order)}</p>
             </div>
           </div>
 
-          <div className="flex items-start gap-2 text-xs text-zinc-600">
-            <MapPin className="mt-0.5 size-3.5 shrink-0 text-red-500" />
-            <span className="line-clamp-2">
+          <div className="flex items-start gap-1.5 text-[11px] text-zinc-600">
+            <MapPin className="mt-0.5 size-3 shrink-0 text-red-500" />
+            <span className="line-clamp-1">
               {isPickup
                 ? "Retirada na loja"
                 : [order.address_street, order.address_number, order.address_neighborhood]
@@ -231,56 +231,56 @@ function OrderCard({
           </div>
 
           {cancellation && (
-            <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700">
+            <div className="rounded-lg border border-red-200 bg-red-50 px-2 py-1.5 text-[11px] font-bold text-red-700">
               <AlertTriangle className="mr-1 inline size-3.5" /> Cliente solicitou cancelamento
             </div>
           )}
         </div>
       </button>
 
-      <div className="border-t bg-zinc-50/80 p-3">
+      <div className="border-t bg-zinc-50/80 p-2">
         {order.status === "out_for_delivery" && !isPickup && (
           <Button
             type="button"
             variant="outline"
             size="sm"
-            className="mb-2 w-full rounded-xl border-amber-300 bg-amber-50 font-bold text-amber-800 hover:bg-amber-100"
+            className="mb-1.5 h-8 w-full rounded-lg text-xs border-amber-300 bg-amber-50 font-bold text-amber-800 hover:bg-amber-100"
             onClick={(event) => {
               event.stopPropagation();
               onArrival();
             }}
             disabled={arrivalLoading}
           >
-            <MessageCircle className="mr-2 size-4" />
+            <MessageCircle className="mr-1.5 size-3.5" />
             {arrivalLoading ? "Avisando..." : "Avisar no WhatsApp que chegou"}
           </Button>
         )}
 
-        <div className="grid grid-cols-[1fr_auto] gap-2">
+        <div className="grid grid-cols-[1fr_auto] gap-1.5">
           <Button
             type="button"
-            className="h-10 rounded-xl bg-[#ffcf00] font-black text-zinc-950 hover:bg-[#f2c300]"
+            className="h-8 rounded-lg bg-[#ffcf00] text-xs font-black text-zinc-950 hover:bg-[#f2c300]"
             onClick={(event) => {
               event.stopPropagation();
               onAdvance();
             }}
             disabled={advancing || cancellation}
           >
-            <ActionIcon className="mr-2 size-4" />
+            <ActionIcon className="mr-1.5 size-3.5" />
             {advancing ? "Atualizando..." : action}
           </Button>
           <Button
             type="button"
             size="icon"
             variant="ghost"
-            className="size-10 rounded-xl text-zinc-400 hover:bg-red-50 hover:text-red-600"
+            className="size-8 rounded-lg text-zinc-400 hover:bg-red-50 hover:text-red-600"
             onClick={(event) => {
               event.stopPropagation();
               onCancel();
             }}
             title="Cancelar pedido"
           >
-            <XCircle className="size-5" />
+            <XCircle className="size-4" />
           </Button>
         </div>
       </div>
@@ -570,7 +570,7 @@ function OrderDrawer({
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full bg-[#ffcf00] px-2.5 py-1 text-[10px] font-black uppercase text-zinc-950">Resumo do pedido</span>
-              {order && <span className="font-black">{orderDisplayRef(order as any)}</span>}
+              {order && <span className="text-sm font-black">{orderDisplayRef(order as any)}</span>}
             </div>
             <p className="mt-1 truncate text-sm text-white/70">{order?.customer_name || "Carregando..."}</p>
           </div>
@@ -723,7 +723,7 @@ function OrderDrawer({
                 )}
                 {order.delivery_mode !== "pickup" && order.status === "out_for_delivery" && (
                   <Button variant="outline" className="border-amber-300 bg-amber-50 text-amber-800" onClick={sendArrival} disabled={arrivalLoading}>
-                    <MessageCircle className="mr-2 size-4" /> {arrivalLoading ? "Avisando..." : "Avisar que chegou"}
+                    <MessageCircle className="mr-1.5 size-3.5" /> {arrivalLoading ? "Avisando..." : "Avisar que chegou"}
                   </Button>
                 )}
                 {order.status === "out_for_delivery" && <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => updateStatus("delivered")}><CheckCircle2 className="mr-2 size-4" /> Entregue</Button>}
@@ -942,7 +942,7 @@ function OrdersBoard() {
               <section key={column.key} className="flex min-h-[520px] flex-col overflow-hidden rounded-3xl border border-zinc-200 bg-[#ebe9e3] shadow-sm">
                 <div className="sticky top-0 z-10 border-b border-zinc-200 bg-white/95 px-4 py-4 backdrop-blur">
                   <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
                       <span className={`grid size-10 place-items-center rounded-2xl text-white shadow-sm ${column.accent}`}><Icon className="size-5" /></span>
                       <div><h2 className="text-lg font-black text-zinc-950">{column.title}</h2><p className="text-[11px] text-zinc-500">{column.subtitle}</p></div>
                     </div>
