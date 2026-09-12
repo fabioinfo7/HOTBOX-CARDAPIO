@@ -1,0 +1,6 @@
+# Garante que o Railway (Nixpacks) use Node.js 22 no build e no runtime.
+# Sem isso, o Railway pode escolher uma versão mais antiga do Node (ex: 18),
+# que não tem a função util.styleText usada pelas ferramentas de build
+# (rolldown/vite) — causando o erro "does not provide an export named 'styleText'".
+[phases.setup]
+nixPkgs = ["nodejs_22"]
