@@ -368,6 +368,110 @@ export const setProductLoyaltyEligible = createServerFn({ method: "POST" })
       : ({ ok: true } as const);
   });
 
+
+export const createLoyaltyUserAdmin = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: {
+      accessToken?: string | null;
+      fullName: string;
+      email: string;
+      phone?: string | null;
+      password: string;
+      initialPoints?: number;
+      initialLifetimeOrders?: number;
+      adminNotes?: string | null;
+    }) => data,
+  )
+  .handler(async ({ data }) => {
+    const auth = await requireStoreAdmin(data.accessToken);
+    if (!auth.ok) return auth;
+
+    const fullName = String(data.fullName || "").trim();
+    const email = String(data.email || "").trim().toLowerCase();
+    const phone = digits(data.phone) || null;
+    const password = String(data.password || "");
+    const points = Math.max(0, Math.floor(Number(data.initialPoints || 0)));
+    const lifetimeOrders = Math.max(
+      0,
+      Math.floor(Number(data.initialLifetimeOrders || 0)),
+    );
+
+    if (!fullName) return { ok: false, error: "Informe o nome do cliente." } as const;
+    if (!email || !email.includes("@")) return { ok: false, error: "Informe um e-mail válido." } as const;
+    if (password.length < 6) return { ok: false, error: "A senha precisa ter pelo menos 6 caracteres." } as const;
+
+    const { data: created, error: createError } = await (auth.supabaseAdmin as any).auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { full_name: fullName, phone },
+    });
+
+    if (createError || !created?.user) {
+      return { ok: false, error: createError?.message || "Não foi possível criar o usuário." } as const;
+    }
+
+    const userId = String(created.user.id);
+
+    const [{ error: profileError }, { error: accountError }] = await Promise.all([
+      (auth.supabaseAdmin as any).from("customer_profiles").upsert(
+        {
+          user_id: userId,
+          full_name: fullName,
+          email,
+          phone,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id" },
+      ),
+      (auth.supabaseAdmin as any).from("loyalty_accounts").upsert(
+        {
+          user_id: userId,
+          points,
+          lifetime_qualifying_orders: lifetimeOrders,
+          active: true,
+          admin_notes: String(data.adminNotes || "").trim() || null,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id" },
+      ),
+    ]);
+
+    if (profileError || accountError) {
+      await (auth.supabaseAdmin as any).auth.admin.deleteUser(userId).catch(() => null);
+      return { ok: false, error: profileError?.message || accountError?.message || "Falha ao criar o cadastro do Clube." } as const;
+    }
+
+    if (points > 0) {
+      await (auth.supabaseAdmin as any).from("loyalty_ledger").insert({
+        user_id: userId,
+        event_type: "adjustment",
+        points_delta: points,
+        description: "Marcações iniciais definidas pela loja ao criar o usuário",
+      });
+    }
+
+    const { data: synced } = await (auth.supabaseAdmin as any).rpc("loyalty_admin_sync_rewards", {
+      p_user_id: userId,
+    });
+
+    return { ok: true, userId, sync: synced } as const;
+  });
+
+export const deleteLoyaltyUserAdmin = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: { accessToken?: string | null; userId: string }) => data,
+  )
+  .handler(async ({ data }) => {
+    const auth = await requireStoreAdmin(data.accessToken);
+    if (!auth.ok) return auth;
+
+    const { error } = await (auth.supabaseAdmin as any).auth.admin.deleteUser(data.userId);
+    return error
+      ? ({ ok: false, error: error.message } as const)
+      : ({ ok: true } as const);
+  });
+
 export const addExistingCustomerToLoyalty = createServerFn({ method: "POST" })
   .inputValidator(
     (data: {
@@ -428,6 +532,7 @@ export const updateLoyaltyParticipant = createServerFn({ method: "POST" })
       fullName?: string | null;
       email?: string | null;
       phone?: string | null;
+      newPassword?: string | null;
       points: number;
       lifetimeOrders: number;
       adminNotes?: string | null;
@@ -456,6 +561,25 @@ export const updateLoyaltyParticipant = createServerFn({ method: "POST" })
       0,
       Number(account.lifetime_qualifying_orders || 0),
     );
+
+    const authPatch: Record<string, any> = {};
+    const nextEmail = String(data.email || "").trim().toLowerCase();
+    const nextPassword = String(data.newPassword || "");
+    if (nextEmail) authPatch.email = nextEmail;
+    if (nextPassword) {
+      if (nextPassword.length < 6) return { ok: false, error: "A nova senha precisa ter pelo menos 6 caracteres." } as const;
+      authPatch.password = nextPassword;
+    }
+    authPatch.user_metadata = {
+      full_name: String(data.fullName || "").trim() || null,
+      phone: digits(data.phone) || null,
+    };
+
+    const { error: authUpdateError } = await (supabaseAdmin as any).auth.admin.updateUserById(
+      data.userId,
+      authPatch,
+    );
+    if (authUpdateError) return { ok: false, error: authUpdateError.message } as const;
 
     const [{ error: profileError }, { error: updateError }] = await Promise.all([
       (supabaseAdmin as any)
