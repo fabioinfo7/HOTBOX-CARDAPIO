@@ -596,7 +596,10 @@ function OrderDetail() {
           </Button>
         </Link>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" className="rounded-full font-semibold" onClick={openEditDialog}>
+          <Button size="sm" variant="outline" onClick={printOrderSummary} title="Imprimir nota do pedido" className="print:hidden">
+                <Printer className="size-4" /> Imprimir nota
+              </Button>
+              <Button variant="outline" className="rounded-full font-semibold" onClick={openEditDialog}>
             <Pencil className="size-4" /> CORRIGIR DADOS
           </Button>
           <Button variant="outline" className="rounded-full font-semibold" onClick={() => window.print()}>
