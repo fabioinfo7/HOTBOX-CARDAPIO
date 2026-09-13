@@ -512,6 +512,46 @@ function startLivePresenceTracking() {
   };
 }
 
+export async function trackAnalyticsAndWait(
+  event_name: string,
+  extra: Partial<AnalyticsEventInput> = {},
+) {
+  if (typeof window === "undefined") return { ok: false };
+  if (/^\/(loja|admin|entregador)(\/|$)/.test(window.location.pathname)) return { ok: false };
+
+  startLivePresenceTracking();
+  const ids = analyticsIdentity();
+  const eventId = metaEventId(event_name, extra);
+  const browserSignals = metaBrowserSignals();
+  const richProperties = {
+    ...((extra.properties && typeof extra.properties === "object" ? extra.properties : {}) as Record<string, unknown>),
+    ...browserSignals,
+    event_id: eventId,
+  };
+  const enrichedExtra: Partial<AnalyticsEventInput> = { ...extra, properties: richProperties };
+  const payload: AnalyticsEventInput = {
+    ...ids,
+    ...attribution(),
+    ...deviceInfo(),
+    event_name,
+    event_category: extra.event_category || "engagement",
+    page_path: extra.page_path || currentAnalyticsPage().page_path,
+    page_title: extra.page_title || currentAnalyticsPage().page_title,
+    ...enrichedExtra,
+  } as AnalyticsEventInput;
+
+  trackMetaPixel(event_name, enrichedExtra);
+  try {
+    return await trackAnalyticsEvent({ data: payload });
+  } catch (error: any) {
+    console.warn("[analytics] falha ao enviar evento antes do redirecionamento", {
+      event_name,
+      message: error?.message || String(error),
+    });
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+
 export function trackAnalytics(
   event_name: string,
   extra: Partial<AnalyticsEventInput> = {},
