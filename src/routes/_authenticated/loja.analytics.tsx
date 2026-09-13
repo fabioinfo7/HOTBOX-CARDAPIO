@@ -28,6 +28,7 @@ import {
   Megaphone,
   MapPin,
   Clock3,
+  Copy,
   HelpCircle,
 } from "lucide-react";
 
@@ -287,6 +288,12 @@ function AnalyticsPage() {
   const [liveSessions, setLiveSessions] = useState<SessionRow[]>([]);
   const [liveLoading, setLiveLoading] = useState(true);
   const [liveError, setLiveError] = useState("");
+  const [activeTab, setActiveTab] = useState<"overview" | "campaigns" | "regions" | "journey">("overview");
+  const [utmSource, setUtmSource] = useState("instagram");
+  const [utmMedium, setUtmMedium] = useState("paid_social");
+  const [utmCampaign, setUtmCampaign] = useState("");
+  const [utmContent, setUtmContent] = useState("");
+  const [utmCopied, setUtmCopied] = useState(false);
 
   async function loadLive() {
     const cutoff = new Date(Date.now() - 45 * 1000).toISOString();
@@ -659,1128 +666,277 @@ function AnalyticsPage() {
     !health?.client_sessions_error &&
     !health?.client_events_error;
 
+  const campaignRows = useMemo(() => {
+    const grouped = new Map<string, { source: string; campaign: string; visits: number; purchases: number; revenue: number }>();
+    for (const session of sessions) {
+      const campaign = String(session.campaign || "").trim();
+      if (!campaign) continue;
+      const source = String(session.source || "direct");
+      const key = `${source}::${campaign}`;
+      const row = grouped.get(key) || { source, campaign, visits: 0, purchases: 0, revenue: 0 };
+      row.visits += 1;
+      if (session.converted) row.purchases += 1;
+      row.revenue += Number(session.revenue || 0);
+      grouped.set(key, row);
+    }
+    return [...grouped.values()].sort((a, b) => b.purchases - a.purchases || b.visits - a.visits).slice(0, 20);
+  }, [sessions]);
+
+  const regionRows = useMemo(() => {
+    const purchaseSessions = new Set(sessions.filter((s) => s.converted).map((s) => String(s.id)));
+    const cartSessions = new Set(events.filter((e) => ["add_to_cart", "order_bump_added"].includes(String(e.event_name))).map((e) => String(e.session_id)));
+    const latestBySession = new Map<string, any>();
+
+    for (const event of events) {
+      if (event.event_name !== "delivery_area_checked") continue;
+      const sessionId = String(event.session_id || "");
+      if (!sessionId || latestBySession.has(sessionId)) continue;
+      latestBySession.set(sessionId, event);
+    }
+
+    const grouped = new Map<string, any>();
+    for (const [sessionId, event] of latestBySession.entries()) {
+      const cep = String(event.properties?.cep || "").replace(/\D/g, "").slice(0, 8);
+      const neighborhood = String(event.properties?.neighborhood || "Não identificado").trim() || "Não identificado";
+      const supported = event.properties?.supported !== false;
+      const key = `${cep || "sem_cep"}::${neighborhood.toLowerCase()}`;
+      const row = grouped.get(key) || { cep, neighborhood, visits: 0, carts: 0, purchases: 0, outside: 0 };
+      row.visits += 1;
+      if (cartSessions.has(sessionId)) row.carts += 1;
+      if (purchaseSessions.has(sessionId)) row.purchases += 1;
+      if (!supported) row.outside += 1;
+      grouped.set(key, row);
+    }
+
+    return [...grouped.values()].sort((a, b) => b.visits - a.visits).slice(0, 30);
+  }, [events, sessions]);
+
+  const regionNeighborhoodRows = useMemo(() => {
+    const grouped = new Map<string, { neighborhood: string; visits: number; purchases: number; outside: number }>();
+    for (const row of regionRows) {
+      const key = row.neighborhood.toLowerCase();
+      const current = grouped.get(key) || { neighborhood: row.neighborhood, visits: 0, purchases: 0, outside: 0 };
+      current.visits += row.visits;
+      current.purchases += row.purchases;
+      current.outside += row.outside;
+      grouped.set(key, current);
+    }
+    return [...grouped.values()].sort((a, b) => b.visits - a.visits).slice(0, 10);
+  }, [regionRows]);
+
+  const utmUrl = useMemo(() => {
+    const base = "https://hotbox.up.railway.app/";
+    const url = new URL(base);
+    if (utmSource.trim()) url.searchParams.set("utm_source", utmSource.trim().toLowerCase().replace(/\s+/g, "_"));
+    if (utmMedium.trim()) url.searchParams.set("utm_medium", utmMedium.trim().toLowerCase().replace(/\s+/g, "_"));
+    if (utmCampaign.trim()) url.searchParams.set("utm_campaign", utmCampaign.trim().toLowerCase().replace(/\s+/g, "_"));
+    if (utmContent.trim()) url.searchParams.set("utm_content", utmContent.trim().toLowerCase().replace(/\s+/g, "_"));
+    return url.toString();
+  }, [utmSource, utmMedium, utmCampaign, utmContent]);
+
+  async function copyUtm() {
+    try {
+      await navigator.clipboard.writeText(utmUrl);
+      setUtmCopied(true);
+      window.setTimeout(() => setUtmCopied(false), 1600);
+    } catch {
+      setUtmCopied(false);
+    }
+  }
+
   return (
-    <div className="space-y-6 p-4 md:p-6 print:p-0">
-      <div className="flex flex-wrap items-center gap-3 print:hidden">
-        <div>
-          <h1 className="text-2xl font-black">
-            Clientes, origem e comportamento
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Veja quem foi identificado, de onde cada visita veio, o que a pessoa fez no cardápio e se terminou comprando.
+    <div className="hotbox-admin-page space-y-5 print:p-0">
+      <div className="hotbox-admin-header print:hidden">
+        <div className="hotbox-admin-title-wrap">
+          <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-zinc-950 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-[#ffcf00]">
+            <TrendingUp className="size-3.5" /> Analytics HotBox
+          </div>
+          <h1 className="hotbox-admin-title">O que realmente está trazendo vendas</h1>
+          <p className="hotbox-admin-subtitle">
+            Visitas, campanhas, regiões e caminho até a compra — organizados para ajudar você a decidir onde investir e o que melhorar.
           </p>
         </div>
-
-        <div className="ml-auto flex flex-wrap gap-2">
-          {[1, 7, 15, 30, 90].map((d) => (
-            <Button
-              key={d}
-              size="sm"
-              variant={days === d ? "default" : "outline"}
-              onClick={() => setDays(d)}
-            >
-              {d === 1 ? "Hoje" : `Últimos ${d} dias`}
+        <div className="flex flex-wrap gap-2">
+          {[1, 7, 30, 90].map((d) => (
+            <Button key={d} size="sm" variant={days === d ? "default" : "outline"} onClick={() => setDays(d)}>
+              {d === 1 ? "Hoje" : `${d} dias`}
             </Button>
           ))}
-
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => void load()}
-          >
-            <RefreshCw className="mr-2 size-4" />
-            Atualizar informações
-          </Button>
-
-          <Button
-            size="sm"
-            onClick={() => window.print()}
-          >
-            <Printer className="mr-2 size-4" />
-            Imprimir
+          <Button size="sm" variant="outline" onClick={() => { void load(); void loadLive(); }}>
+            <RefreshCw className="mr-2 size-4" /> Atualizar
           </Button>
         </div>
       </div>
 
-      <div className="hidden print:block">
-        <h1 className="text-2xl font-black">
-          HotBox — Relatório de clientes e vendas
-        </h1>
-        <p>
-          Período: últimos {days} dias • Impresso em{" "}
-          {new Date().toLocaleString("pt-BR")}
-        </p>
-      </div>
-
-      {!loading && health && (
-        <Card
-          className={`p-4 ${
-            connected
-              ? "border-emerald-500/30 bg-emerald-500/5"
-              : "border-red-500/40 bg-red-500/5"
-          }`}
-        >
-          <div className="flex flex-wrap items-start gap-3">
-            <div className="min-w-0 flex-1">
-              <p className="font-black">
-                {connected
-                  ? "Tudo funcionando normalmente"
-                  : "O sistema não conseguiu carregar todas as informações"}
-              </p>
-
-              <p className="mt-1 text-xs text-muted-foreground">
-                {connected
-                  ? sessions.length || events.length
-                    ? "As visitas e ações dos clientes estão sendo registradas."
-                    : "O acompanhamento está ativo. Como os dados foram zerados ou ainda não houve novas visitas, os números estão vazios."
-                  : "Atualize a página. Se continuar, será necessário revisar a conexão com o banco de dados."}
-              </p>
-
-              {!connected &&
-                (health.sessions_error ||
-                  health.events_error ||
-                  health.exception ||
-                  health.client_sessions_error ||
-                  health.client_events_error) && (
-                  <div className="mt-2 rounded-lg border bg-background p-2 text-xs">
-                    <b>O que aconteceu:</b>{" "}
-                    {health.sessions_error?.message ||
-                      health.events_error?.message ||
-                      health.exception ||
-                      health.client_sessions_error ||
-                      health.client_events_error}
-                  </div>
-                )}
-            </div>
-
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => void load()}
-            >
-              <RefreshCw className="mr-2 size-4" />
-              Tentar novamente
-            </Button>
-          </div>
+      {!connected && !loading && (
+        <Card className="hotbox-admin-danger p-4 text-sm">
+          <b>Alguns dados podem estar temporariamente indisponíveis.</b>
+          <p className="mt-1 text-muted-foreground">O cardápio continua funcionando normalmente; esta mensagem afeta apenas os relatórios.</p>
         </Card>
       )}
 
-      <Card className="border-orange-200 bg-orange-50/50 p-5">
-        <div className="flex gap-3">
-          <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-orange-100">
-            <HelpCircle className="size-5" />
-          </span>
-          <div>
-            <h2 className="font-black">
-              Como ler esta página
-            </h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Comece pelos cartões abaixo. Eles mostram quantas pessoas
-              chegaram, quantas demonstraram interesse e quantas compraram.
-              Depois veja o caminho da compra para descobrir onde mais pessoas
-              estão desistindo. As demais áreas mostram quais canais,
-              campanhas, produtos, aparelhos e formas de pagamento trouxeram
-              mais resultado.
-            </p>
-          </div>
-        </div>
-      </Card>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Card className="hotbox-admin-kpi p-4">
+          <p className="text-xs font-bold uppercase text-zinc-500">Pessoas que entraram</p>
+          <p className="mt-2 text-3xl font-black">{visitors}</p>
+          <p className="mt-1 text-xs text-zinc-500">{sessions.length} visitas no período</p>
+        </Card>
+        <Card className="hotbox-admin-kpi p-4">
+          <p className="text-xs font-bold uppercase text-zinc-500">Compras concluídas</p>
+          <p className="mt-2 text-3xl font-black">{converted}</p>
+          <p className="mt-1 text-xs text-zinc-500">Conversão de {pct(converted, sessions.length)}</p>
+        </Card>
+        <Card className="hotbox-admin-kpi p-4">
+          <p className="text-xs font-bold uppercase text-zinc-500">Vendas rastreadas</p>
+          <p className="mt-2 text-3xl font-black">{brl(revenue)}</p>
+          <p className="mt-1 text-xs text-zinc-500">Ticket médio {brl(avgTicket)}</p>
+        </Card>
+        <Card className="hotbox-admin-kpi p-4">
+          <p className="text-xs font-bold uppercase text-zinc-500">Precisam de atenção</p>
+          <p className="mt-2 text-3xl font-black">{abandoned + rejectedCardCount}</p>
+          <p className="mt-1 text-xs text-zinc-500">{abandoned} abandonos • {rejectedCardCount} cartões recusados</p>
+        </Card>
+      </div>
 
-      <Card className="overflow-hidden border-emerald-500/30">
-        <div className="flex flex-wrap items-start justify-between gap-3 border-b bg-emerald-500/5 p-5">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="relative flex size-3">
-                <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-500 opacity-60" />
-                <span className="relative inline-flex size-3 rounded-full bg-emerald-500" />
-              </span>
-              <h2 className="text-lg font-black">Pessoas no cardápio agora</h2>
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Atualiza automaticamente a cada 10 segundos. Uma pessoa é considerada ao vivo
-              quando o cardápio dela enviou sinal nos últimos 45 segundos.
-            </p>
-          </div>
-
-          <div className="flex gap-2">
-            <div className="rounded-xl border bg-background px-4 py-2 text-center">
-              <p className="text-[10px] font-bold uppercase text-muted-foreground">
-                Ao vivo agora
-              </p>
-              <p className="text-2xl font-black">{liveSessions.length}</p>
-            </div>
-            <div className="rounded-xl border bg-background px-4 py-2 text-center">
-              <p className="text-[10px] font-bold uppercase text-muted-foreground">
-                Identificados
-              </p>
-              <p className="text-2xl font-black">{liveIdentified}</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="grid gap-5 p-5 xl:grid-cols-[0.9fr_1.6fr]">
-          <div>
-            <h3 className="font-black">Em quais páginas estão agora</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Mostra a página que está aberta neste exato momento em cada navegador ativo.
-            </p>
-
-            <div className="mt-3 space-y-2">
-              {liveLoading ? (
-                <EmptyMessage text="Carregando pessoas ao vivo..." />
-              ) : liveError ? (
-                <EmptyMessage text="O acompanhamento ao vivo ainda não está disponível. Execute a atualização do banco enviada junto com estes arquivos." />
-              ) : liveByPage.length === 0 ? (
-                <EmptyMessage text="Não há ninguém navegando no cardápio neste momento." />
-              ) : (
-                liveByPage.map(([path, count]) => (
-                  <div
-                    key={path}
-                    className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2"
-                  >
-                    <span className="font-bold">{friendlyPagePath(path)}</span>
-                    <span className="shrink-0 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-black text-emerald-800">
-                      {count} {count === 1 ? "pessoa" : "pessoas"}
-                    </span>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          <div>
-            <h3 className="font-black">Quem está ao vivo</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Nome e telefone aparecem quando a pessoa já se identificou durante a compra.
-            </p>
-
-            <div className="mt-3 overflow-auto">
-              {liveSessions.length === 0 ? (
-                <EmptyMessage text="Nenhum visitante ativo agora." />
-              ) : (
-                <table className="w-full min-w-[720px] text-xs">
-                  <thead>
-                    <tr className="border-b text-left">
-                      <th className="py-2">Quem está navegando</th>
-                      <th>Origem</th>
-                      <th>Página aberta agora</th>
-                      <th>Aparelho</th>
-                      <th>Último sinal</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {liveSessions.map((session) => {
-                      const secondsAgo = Math.max(
-                        0,
-                        Math.floor(
-                          (Date.now() -
-                            new Date(
-                              session.presence_last_seen_at ||
-                                session.last_seen_at,
-                            ).getTime()) /
-                            1000,
-                        ),
-                      );
-
-                      return (
-                        <tr key={session.id} className="border-b align-top">
-                          <td className="py-2">
-                            <b>{visitorIdentityLabel(session)}</b>
-                            <br />
-                            <span className="text-muted-foreground">
-                              {session.customer_phone ||
-                                "Ainda não informou telefone"}
-                            </span>
-                          </td>
-                          <td>
-                            <b>{niceSource(session.source)}</b>
-                            <br />
-                            <span className="text-muted-foreground">
-                              {niceMedium(session.medium) ||
-                                "Forma de chegada não informada"}
-                            </span>
-                          </td>
-                          <td className="font-bold">
-                            {friendlyPagePath(
-                              session.current_page_path ||
-                                session.entry_path ||
-                                "/",
-                            )}
-                          </td>
-                          <td>{niceDevice(session.device_type)}</td>
-                          <td>
-                            {secondsAgo <= 5
-                              ? "Agora"
-                              : `Há ${secondsAgo} segundos`}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
-        </div>
-      </Card>
+      <div className="flex flex-wrap gap-2 rounded-2xl border bg-white p-2 shadow-sm print:hidden">
+        {[
+          ["overview", "Visão geral", Eye],
+          ["campaigns", "Campanhas e UTM", Megaphone],
+          ["regions", "Regiões", MapPin],
+          ["journey", "Jornada do cliente", RouteIcon],
+        ].map(([key, label, Icon]: any) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setActiveTab(key)}
+            className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-black transition ${activeTab === key ? "bg-zinc-950 text-white shadow-sm" : "text-zinc-600 hover:bg-zinc-100"}`}
+          >
+            <Icon className={`size-4 ${activeTab === key ? "text-[#ffcf00]" : ""}`} /> {label}
+          </button>
+        ))}
+      </div>
 
       {loading ? (
-        <Card className="p-10 text-center">
-          Carregando as informações dos clientes...
-        </Card>
+        <Card className="p-8 text-center text-sm text-muted-foreground">Carregando informações...</Card>
       ) : (
         <>
-          {sessions.length === 0 && events.length === 0 && (
-            <Card className="border-dashed p-8 text-center">
-              <PackageOpen className="mx-auto size-10 text-muted-foreground" />
-              <h2 className="mt-3 text-lg font-black">
-                Ainda não há dados neste período
-              </h2>
-              <p className="mx-auto mt-1 max-w-2xl text-sm text-muted-foreground">
-                A contagem começa novamente a partir das próximas visitas.
-                Quando alguém entrar na Bio ou no Cardápio Digital, esta
-                página será preenchida automaticamente.
-              </p>
-            </Card>
+          {activeTab === "overview" && (
+            <div className="grid gap-4 xl:grid-cols-[1.15fr_.85fr]">
+              <Card className="hotbox-admin-card p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h2 className="text-lg font-black">Caminho até a compra</h2>
+                    <p className="mt-1 text-sm text-muted-foreground">Mostra onde as pessoas estão avançando ou desistindo.</p>
+                  </div>
+                  <Badge variant="secondary">{days === 1 ? "Hoje" : `${days} dias`}</Badge>
+                </div>
+                <div className="mt-5 space-y-3">
+                  {funnel.map((step, index) => {
+                    const previous = index === 0 ? step.value : funnel[index - 1].value;
+                    const width = sessions.length ? Math.max(4, (step.value / sessions.length) * 100) : 0;
+                    return (
+                      <div key={step.label}>
+                        <div className="mb-1 flex items-end justify-between gap-3">
+                          <div><p className="font-bold">{step.label}</p><p className="text-xs text-zinc-500">{index === 0 ? "Início da jornada" : `${pct(step.value, previous)} avançaram desta etapa`}</p></div>
+                          <span className="text-lg font-black">{step.value}</span>
+                        </div>
+                        <div className="h-2 overflow-hidden rounded-full bg-zinc-100"><div className="h-full rounded-full bg-zinc-950" style={{ width: `${width}%` }} /></div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+
+              <div className="space-y-4">
+                <Card className="hotbox-admin-accent p-5">
+                  <div className="flex items-center justify-between gap-3"><div><p className="text-xs font-black uppercase text-[#ffcf00]">Agora no cardápio</p><p className="mt-1 text-4xl font-black">{liveSessions.length}</p></div><Users className="size-8 text-[#ffcf00]" /></div>
+                  <p className="mt-3 text-sm text-white/70">{liveIdentified} já identificados. Atualização automática.</p>
+                  {liveByPage.slice(0, 3).map(([page, count]) => <div key={page} className="mt-2 flex justify-between rounded-xl bg-white/10 px-3 py-2 text-sm"><span>{friendlyPagePath(page)}</span><b>{count}</b></div>)}
+                </Card>
+                <Card className="hotbox-admin-card p-5">
+                  <h2 className="font-black">De onde vieram as visitas</h2>
+                  <div className="mt-4 space-y-3">
+                    {groupSessions("source").slice(0, 6).map(([source, data]) => (
+                      <div key={source} className="flex items-center justify-between gap-4 border-b pb-3 last:border-0 last:pb-0">
+                        <div><p className="font-bold">{niceSource(source)}</p><p className="text-xs text-zinc-500">{data.count} visitas • {data.conv} compras</p></div>
+                        <b>{pct(data.conv, data.count)}</b>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              </div>
+            </div>
           )}
 
-          <div>
-            <h2 className="text-lg font-black">Resumo do período</h2>
-            <p className="text-xs text-muted-foreground">
-              Principais números para entender rapidamente o movimento do cardápio.
-            </p>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            {cards.map(({ title, value, icon: Icon, help }) => (
-              <Card key={title} className="p-4">
-                <div className="flex items-start gap-3">
-                  <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-muted">
-                    <Icon className="size-5" />
-                  </span>
-
-                  <div className="min-w-0">
-                    <p className="text-xs font-bold uppercase text-muted-foreground">
-                      {title}
-                    </p>
-                    <p className="text-2xl font-black">{value}</p>
-                    <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                      {help}
-                    </p>
+          {activeTab === "campaigns" && (
+            <div className="space-y-4">
+              <Card className="hotbox-admin-card overflow-hidden">
+                <div className="border-b bg-zinc-950 p-5 text-white">
+                  <h2 className="text-lg font-black">Gerador de link UTM para campanhas</h2>
+                  <p className="mt-1 text-sm text-white/65">Use estes links nos anúncios. O Analytics identifica automaticamente origem, campanha e criativo.</p>
+                </div>
+                <div className="grid gap-4 p-5 lg:grid-cols-2">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div><label className="mb-1 block text-xs font-black uppercase text-zinc-500">Origem</label><Input value={utmSource} onChange={(e) => setUtmSource(e.target.value)} placeholder="instagram" /></div>
+                    <div><label className="mb-1 block text-xs font-black uppercase text-zinc-500">Tipo de tráfego</label><Input value={utmMedium} onChange={(e) => setUtmMedium(e.target.value)} placeholder="paid_social" /></div>
+                    <div><label className="mb-1 block text-xs font-black uppercase text-zinc-500">Nome da campanha</label><Input value={utmCampaign} onChange={(e) => setUtmCampaign(e.target.value)} placeholder="promo_costela_setembro" /></div>
+                    <div><label className="mb-1 block text-xs font-black uppercase text-zinc-500">Criativo / anúncio</label><Input value={utmContent} onChange={(e) => setUtmContent(e.target.value)} placeholder="video_costela_01" /></div>
+                  </div>
+                  <div className="rounded-2xl border bg-[#fffaf0] p-4">
+                    <p className="text-xs font-black uppercase text-zinc-500">Link pronto</p>
+                    <p className="mt-2 break-all rounded-xl bg-white p-3 text-sm font-medium shadow-sm">{utmUrl}</p>
+                    <Button className="mt-3 w-full bg-zinc-950 font-black text-white hover:bg-zinc-800" onClick={copyUtm}><Copy className="mr-2 size-4" /> {utmCopied ? "Link copiado" : "Copiar link UTM"}</Button>
                   </div>
                 </div>
               </Card>
-            ))}
-          </div>
 
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <Card className="p-4">
-              <p className="text-xs font-bold uppercase text-muted-foreground">
-                Valor médio de cada compra
-              </p>
-              <p className="mt-1 text-2xl font-black">
-                {brl(avgTicket)}
-              </p>
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                Quanto cada compra concluída valeu em média.
-              </p>
-            </Card>
-
-            <Card className="p-4">
-              <p className="text-xs font-bold uppercase text-muted-foreground">
-                Quem abriu produto
-              </p>
-              <p className="mt-1 text-2xl font-black">
-                {pct(productViews, sessions.length)}
-              </p>
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                Percentual das visitas que demonstraram interesse em algum produto.
-              </p>
-            </Card>
-
-            <Card className="p-4">
-              <p className="text-xs font-bold uppercase text-muted-foreground">
-                Quem colocou na sacola
-              </p>
-              <p className="mt-1 text-2xl font-black">
-                {pct(addCart, sessions.length)}
-              </p>
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                Percentual das visitas que chegaram a adicionar algum item.
-              </p>
-            </Card>
-
-            <Card className="p-4">
-              <p className="text-xs font-bold uppercase text-muted-foreground">
-                Quem comprou
-              </p>
-              <p className="mt-1 text-2xl font-black">
-                {pct(converted, sessions.length)}
-              </p>
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                Percentual das visitas que terminaram em venda.
-              </p>
-            </Card>
-          </div>
-
-          <div className="grid gap-5 xl:grid-cols-2">
-            <Card className="p-5">
-              <div className="flex items-start gap-3">
-                <RouteIcon className="mt-0.5 size-5" />
-                <div>
-                  <h2 className="font-black">
-                    Caminho até a compra
-                  </h2>
-                  <p className="mb-4 text-xs text-muted-foreground">
-                    Mostra quantas pessoas avançaram em cada etapa. Quando
-                    houver uma queda grande entre duas etapas, é ali que vale
-                    investigar primeiro.
-                  </p>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                {funnel.map((item, i) => {
-                  const max = Math.max(1, sessions.length);
-                  const previous =
-                    i > 0 ? funnel[i - 1].value : item.value;
-                  const lost = Math.max(0, previous - item.value);
-
-                  return (
-                    <div key={item.label}>
-                      <div className="mb-1 flex justify-between gap-3 text-sm">
-                        <div>
-                          <b>{item.label}</b>
-                          <p className="text-[11px] text-muted-foreground">
-                            {item.help}
-                          </p>
-                        </div>
-                        <span className="shrink-0 font-bold">
-                          {item.value} • {pct(item.value, max)}
-                        </span>
-                      </div>
-
-                      <div className="h-3 overflow-hidden rounded-full bg-muted">
-                        <div
-                          className="h-full rounded-full bg-foreground"
-                          style={{
-                            width: `${Math.max(
-                              item.value ? 2 : 0,
-                              (item.value / max) * 100,
-                            )}%`,
-                          }}
-                        />
-                      </div>
-
-                      {i > 0 && previous > 0 && (
-                        <p className="mt-1 text-[11px] text-muted-foreground">
-                          {lost === 0
-                            ? "Ninguém foi perdido nesta passagem."
-                            : `${lost} pessoa(s) não avançaram para esta etapa (${pct(
-                                lost,
-                                previous,
-                              )}).`}
-                        </p>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </Card>
-
-            <Card className="p-5">
-              <div className="flex items-start gap-3">
-                <Megaphone className="mt-0.5 size-5" />
-                <div>
-                  <h2 className="font-black">
-                    De onde seus clientes estão vindo
-                  </h2>
-                  <p className="mb-3 text-xs text-muted-foreground">
-                    Compare quais canais trouxeram mais visitas, compras e valor vendido. Facebook, Instagram e anúncios da Meta aparecem separados quando a origem pode ser identificada.
-                  </p>
-                </div>
-              </div>
-
-              {groupSessions("source").length === 0 ? (
-                <EmptyMessage text="Ainda não há visitas para comparar." />
-              ) : (
-                <div className="overflow-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b text-left">
-                        <th className="py-2">De onde veio</th>
-                        <th>Entradas</th>
-                        <th>Compras</th>
-                        <th>Compraram</th>
-                        <th>Valor vendido</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {groupSessions("source").map(([k, x]) => (
-                        <tr key={k} className="border-b">
-                          <td className="py-2 font-bold">
-                            {niceSource(k)}
-                          </td>
-                          <td>{x.count}</td>
-                          <td>{x.conv}</td>
-                          <td>{pct(x.conv, x.count)}</td>
-                          <td>{brl(x.revenue)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
+              <Card className="hotbox-admin-card p-5">
+                <h2 className="text-lg font-black">Campanhas que trouxeram resultado</h2>
+                <p className="mt-1 text-sm text-muted-foreground">Prioriza visitas, compras e vendas. Campanhas sem UTM não aparecem aqui.</p>
+                <div className="mt-4 overflow-x-auto rounded-2xl border">
+                  <table className="w-full text-sm"><thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500"><tr><th className="p-3">Campanha</th><th className="p-3">Origem</th><th className="p-3 text-right">Visitas</th><th className="p-3 text-right">Compras</th><th className="p-3 text-right">Conversão</th><th className="p-3 text-right">Vendas</th></tr></thead>
+                    <tbody>{campaignRows.length ? campaignRows.map((row) => <tr key={`${row.source}-${row.campaign}`} className="border-t"><td className="p-3 font-bold">{niceCampaign(row.campaign)}</td><td className="p-3">{niceSource(row.source)}</td><td className="p-3 text-right">{row.visits}</td><td className="p-3 text-right font-bold">{row.purchases}</td><td className="p-3 text-right">{pct(row.purchases, row.visits)}</td><td className="p-3 text-right font-black">{brl(row.revenue)}</td></tr>) : <tr><td colSpan={6} className="p-8 text-center text-zinc-500">Ainda não há campanhas com UTM registradas neste período.</td></tr>}</tbody>
                   </table>
                 </div>
-              )}
-            </Card>
-          </div>
+              </Card>
+            </div>
+          )}
 
-          <div className="grid gap-5 xl:grid-cols-3">
-            <Card className="p-5">
-              <h2 className="font-black">
-                Onde as pessoas mais entram
-              </h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Os endereços com códigos de anúncio são agrupados automaticamente. Você verá apenas o nome real da página.
-              </p>
-
-              <div className="mt-3 space-y-2">
-                {groupPageViews().length === 0 ? (
-                  <EmptyMessage text="Ainda não há páginas registradas." />
-                ) : (
-                  groupPageViews().map(([k, x], i) => (
-                    <div
-                      key={k}
-                      className="flex justify-between gap-3 border-b pb-2 text-sm"
-                    >
-                      <span className="max-w-[72%]">
-                        <b>
-                          {i + 1}. {friendlyPagePath(k)}
-                        </b>
-                      </span>
-                      <span className="shrink-0">
-                        {x.count} {x.count === 1 ? "visita" : "visitas"}
-                      </span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </Card>
-
-            <Card className="p-5">
-              <h2 className="font-black">
-                Botões e links mais clicados
-              </h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Mostra o que mais chama a atenção dos visitantes.
-              </p>
-
-              <div className="mt-3 space-y-2">
-                {groupEvents("click", "analytics_label").length === 0 ? (
-                  <EmptyMessage text="Ainda não há cliques registrados." />
-                ) : (
-                  groupEvents("click", "analytics_label").map(
-                    ([k, x], i) => (
-                      <div
-                        key={k}
-                        className="flex justify-between gap-3 border-b pb-2 text-sm"
-                      >
-                        <span className="max-w-[68%] truncate">
-                          <b>
-                            {i + 1}. {k}
-                          </b>
-                        </span>
-                        <span>{x.count} clique(s)</span>
-                      </div>
-                    ),
-                  )
-                )}
-              </div>
-            </Card>
-
-            <Card className="p-5">
-              <div className="flex items-center gap-2">
-                <MapPin className="size-4" />
-                <h2 className="font-black">
-                  Cidade aproximada
-                </h2>
-              </div>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Local aproximado informado pela conexão do visitante. Pode não ser exato.
-              </p>
-
-              <div className="mt-3 space-y-2">
-                {groupSessions("city").length === 0 ? (
-                  <EmptyMessage text="Ainda não há localização disponível." />
-                ) : (
-                  groupSessions("city").map(([k, x]) => (
-                    <div
-                      key={k}
-                      className="flex justify-between gap-3 border-b pb-2 text-sm"
-                    >
-                      <span className="font-bold">{k}</span>
-                      <span>
-                        {x.count} entrada(s) • {x.conv} compra(s)
-                      </span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </Card>
-          </div>
-
-          <div className="grid gap-5 xl:grid-cols-3">
-            <Card className="p-5">
-              <h2 className="font-black">
-                Campanhas que trouxeram visitas
-              </h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Quando o link do anúncio ou postagem identifica a campanha,
-                ela aparece aqui.
-              </p>
-
-              <div className="mt-3 space-y-2">
-                {groupSessions("campaign").length === 0 ? (
-                  <EmptyMessage text="Nenhuma campanha identificada neste período." />
-                ) : (
-                  groupSessions("campaign").map(([k, x]) => (
-                    <div
-                      key={k}
-                      className="flex justify-between gap-3 border-b pb-2 text-sm"
-                    >
-                      <span className="max-w-[60%] truncate font-bold">
-                        {k}
-                      </span>
-                      <span>
-                        {x.count} entrada(s) • {x.conv} compra(s)
-                      </span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </Card>
-
-            <Card className="p-5">
-              <h2 className="font-black">
-                Como as pessoas acessam
-              </h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Mostra se seus clientes usam mais celular, computador ou tablet.
-              </p>
-
-              <div className="mt-3 space-y-2">
-                {groupSessions("device_type").length === 0 ? (
-                  <EmptyMessage text="Ainda não há aparelhos registrados." />
-                ) : (
-                  groupSessions("device_type").map(([k, x]) => {
-                    const Icon =
-                      k === "mobile"
-                        ? Smartphone
-                        : k === "tablet"
-                          ? Tablet
-                          : Monitor;
-
-                    return (
-                      <div
-                        key={k}
-                        className="flex items-center justify-between gap-3 border-b pb-2 text-sm"
-                      >
-                        <span className="flex items-center gap-2 font-bold">
-                          <Icon className="size-4" />
-                          {niceDevice(k)}
-                        </span>
-                        <span>
-                          {x.count} entrada(s) • {x.conv} compra(s)
-                        </span>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </Card>
-
-            <Card className="p-5">
-              <div className="flex items-center gap-2">
-                <CircleDollarSign className="size-4" />
-                <h2 className="font-black">
-                  Como preferem pagar
-                </h2>
-              </div>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Veja quais formas de pagamento aparecem com mais frequência.
-              </p>
-
-              <div className="mt-3 space-y-2">
-                {groupSessions("payment_method").length === 0 ? (
-                  <EmptyMessage text="Ainda não há pagamentos registrados." />
-                ) : (
-                  groupSessions("payment_method").map(([k, x]) => (
-                    <div
-                      key={k}
-                      className="flex justify-between gap-3 border-b pb-2 text-sm"
-                    >
-                      <span className="font-bold">
-                        {nicePayment(k)}
-                      </span>
-                      <span>
-                        {x.count} registro(s) • {x.conv} compra(s)
-                      </span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </Card>
-          </div>
-
-          <div className="grid gap-5 xl:grid-cols-2">
-            <Card className="p-5">
-              <div className="flex items-start gap-3">
-                <CreditCard className="mt-0.5 size-5" />
-                <div>
-                  <h2 className="font-black">
-                    Pagamentos no cartão que não foram aprovados
-                  </h2>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Aqui você consegue ver quantas tentativas foram recusadas e o motivo informado pelo meio de pagamento. Isso ajuda a diferenciar desistência do cliente de uma venda perdida por recusa do cartão.
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <div className="rounded-xl border p-3">
-                  <p className="text-xs font-bold text-muted-foreground">
-                    Tentativas não aprovadas
-                  </p>
-                  <p className="text-2xl font-black">{rejectedCardCount}</p>
-                </div>
-                <div className="rounded-xl border p-3">
-                  <p className="text-xs font-bold text-muted-foreground">
-                    Valor que tentou ser pago
-                  </p>
-                  <p className="text-2xl font-black">{brl(rejectedCardValue)}</p>
-                </div>
-              </div>
-
-              <div className="mt-4 space-y-2">
-                {rejectedPayments.length === 0 ? (
-                  <EmptyMessage text="Nenhum cartão recusado foi registrado neste período." />
-                ) : (
-                  rejectedPayments.slice(0, 20).map((e: any) => (
-                    <div key={e.id} className="rounded-xl border p-3 text-sm">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <b>
-                          {String(
-                            e.properties?.reason_friendly ||
-                              "Pagamento não aprovado",
-                          )}
-                        </b>
-                        <span className="text-xs text-muted-foreground">
-                          {dt(e.created_at)}
-                        </span>
-                      </div>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Valor: {brl(Number(e.value || 0))}
-                        {e.checkout_id ? ` • Tentativa ligada ao pedido em andamento` : ""}
-                      </p>
-                    </div>
-                  ))
-                )}
-              </div>
-            </Card>
-
-            <Card className="p-5">
-              <div className="flex items-start gap-3">
-                <Megaphone className="mt-0.5 size-5" />
-                <div>
-                  <h2 className="font-black">
-                    Resultado de quem veio do Facebook e Instagram
-                  </h2>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    O sistema identifica Facebook e Instagram quando o link ou a página de origem permite. Quando existe apenas o identificador do anúncio da Meta, sem dizer qual aplicativo abriu o link, mostramos como “Anúncio da Meta (Facebook ou Instagram)” para não dar uma informação errada.
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <div className="rounded-xl border p-3">
-                  <p className="text-xs font-bold text-muted-foreground">
-                    Visitas vindas da Meta
-                  </p>
-                  <p className="text-2xl font-black">{metaSessions.length}</p>
-                </div>
-                <div className="rounded-xl border p-3">
-                  <p className="text-xs font-bold text-muted-foreground">
-                    Compras dessas visitas
-                  </p>
-                  <p className="text-2xl font-black">{metaPurchases.length}</p>
-                </div>
-                <div className="rounded-xl border p-3">
-                  <p className="text-xs font-bold text-muted-foreground">
-                    Valor vendido para essas visitas
-                  </p>
-                  <p className="text-2xl font-black">{brl(metaRevenue)}</p>
-                </div>
-                <div className="rounded-xl border p-3">
-                  <p className="text-xs font-bold text-muted-foreground">
-                    Facebook identificado diretamente
-                  </p>
-                  <p className="text-2xl font-black">{facebookSessions.length}</p>
-                </div>
-              </div>
-
-              <div className="mt-4 space-y-2">
-                {[
-                  ["Facebook", sessions.filter((s) => s.source === "facebook")],
-                  ["Instagram", sessions.filter((s) => s.source === "instagram")],
-                  ["Anúncio da Meta (Facebook ou Instagram)", sessions.filter((s) => s.source === "meta_ads")],
-                ].map(([label, rows]: any) => {
-                  const list = rows as any[];
-                  const purchases = list.filter((s) => s.converted).length;
-                  const value = list.reduce((sum, s) => sum + Number(s.revenue || 0), 0);
-                  return (
-                    <div key={label} className="flex justify-between gap-3 border-b pb-2 text-sm">
-                      <span className="font-bold">{label}</span>
-                      <span className="text-right">
-                        {list.length} visita(s) • {purchases} compra(s) • {brl(value)}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </Card>
-          </div>
-
-          <div className="grid gap-5 xl:grid-cols-2">
-            <Card className="p-5">
-              <h2 className="font-black">
-                Produtos que mais despertaram interesse
-              </h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                São os produtos que mais pessoas abriram para ver detalhes.
-              </p>
-
-              <div className="mt-3 space-y-2">
-                {groupEvents("product_view", "product_name").length ===
-                0 ? (
-                  <EmptyMessage text="Ainda não há visualizações de produtos." />
-                ) : (
-                  groupEvents("product_view", "product_name").map(
-                    ([k, x], i) => (
-                      <div
-                        key={k}
-                        className="flex justify-between gap-3 border-b pb-2 text-sm"
-                      >
-                        <span>
-                          <b>
-                            {i + 1}. {k}
-                          </b>
-                        </span>
-                        <span>{x.count} abertura(s)</span>
-                      </div>
-                    ),
-                  )
-                )}
-              </div>
-            </Card>
-
-            <Card className="p-5">
-              <h2 className="font-black">
-                Produtos que mais foram para a sacola
-              </h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Mostra os itens com maior intenção de compra.
-              </p>
-
-              <div className="mt-3 space-y-2">
-                {groupEvents("add_to_cart", "product_name").length ===
-                0 ? (
-                  <EmptyMessage text="Ainda não há itens adicionados à sacola." />
-                ) : (
-                  groupEvents("add_to_cart", "product_name").map(
-                    ([k, x], i) => (
-                      <div
-                        key={k}
-                        className="flex justify-between gap-3 border-b pb-2 text-sm"
-                      >
-                        <span>
-                          <b>
-                            {i + 1}. {k}
-                          </b>
-                        </span>
-                        <span>{x.count} unidade(s)</span>
-                      </div>
-                    ),
-                  )
-                )}
-              </div>
-            </Card>
-          </div>
-
-          <Card className="p-5">
-            <div className="flex flex-wrap gap-3">
-              <div>
-                <div className="flex items-center gap-2">
-                  <UserRound className="size-4" />
-                  <h2 className="font-black">
-                    Histórico de cada visitante
-                  </h2>
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Veja, pessoa por pessoa, quando entrou, de onde veio, quais páginas abriu, o que fez e se terminou comprando.
-                </p>
-              </div>
-
-              <div className="ml-auto flex items-center gap-2 print:hidden">
-                <Search className="size-4" />
-                <Input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Buscar nome, telefone, pedido ou campanha..."
-                  className="w-80 max-w-full"
-                />
+          {activeTab === "regions" && (
+            <div className="space-y-4">
+              <div className="grid gap-4 lg:grid-cols-3">
+                <Card className="hotbox-admin-card p-5 lg:col-span-2">
+                  <h2 className="text-lg font-black">Regiões que mais demonstram interesse</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">CEP e bairro são registrados quando o visitante consulta a área de entrega. Não tentamos adivinhar o CEP por IP.</p>
+                  <div className="mt-4 overflow-x-auto rounded-2xl border">
+                    <table className="w-full text-sm"><thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500"><tr><th className="p-3">CEP</th><th className="p-3">Bairro</th><th className="p-3 text-right">Consultas</th><th className="p-3 text-right">Carrinhos</th><th className="p-3 text-right">Compras</th><th className="p-3 text-right">Conversão</th></tr></thead>
+                      <tbody>{regionRows.length ? regionRows.map((row) => <tr key={`${row.cep}-${row.neighborhood}`} className="border-t"><td className="p-3 font-mono text-xs">{row.cep ? `${row.cep.slice(0,5)}-${row.cep.slice(5)}` : "—"}</td><td className="p-3 font-bold">{row.neighborhood}</td><td className="p-3 text-right">{row.visits}</td><td className="p-3 text-right">{row.carts}</td><td className="p-3 text-right font-bold">{row.purchases}</td><td className="p-3 text-right">{pct(row.purchases, row.visits)}</td></tr>) : <tr><td colSpan={6} className="p-8 text-center text-zinc-500">Os dados começam a aparecer quando os visitantes consultarem CEP ou bairro no cardápio.</td></tr>}</tbody>
+                    </table>
+                  </div>
+                </Card>
+                <Card className="hotbox-admin-card p-5">
+                  <h2 className="font-black">Bairros com mais procura</h2>
+                  <p className="mt-1 text-xs text-zinc-500">Ajuda a decidir onde anunciar e onde pode valer expandir entrega.</p>
+                  <div className="mt-4 space-y-3">{regionNeighborhoodRows.length ? regionNeighborhoodRows.map((row, i) => <div key={row.neighborhood} className="flex items-center gap-3"><span className="grid size-8 place-items-center rounded-full bg-zinc-950 text-xs font-black text-[#ffcf00]">{i+1}</span><div className="min-w-0 flex-1"><p className="truncate font-bold">{row.neighborhood}</p><p className="text-xs text-zinc-500">{row.visits} consultas • {row.purchases} compras{row.outside ? ` • ${row.outside} fora da área` : ""}</p></div></div>) : <p className="text-sm text-zinc-500">Sem consultas de região ainda.</p>}</div>
+                </Card>
               </div>
             </div>
+          )}
 
-            {journey.length === 0 ? (
-              <div className="mt-4">
-                <EmptyMessage text="Nenhum visitante para mostrar neste período." />
-              </div>
-            ) : (
-              <div className="mt-4 overflow-auto">
-                <table className="w-full min-w-[1100px] text-xs">
-                  <thead>
-                    <tr className="border-b text-left">
-                      <th className="py-2">Data e hora</th>
-                      <th>Quem entrou</th>
-                      <th>Origem da visita</th>
-                      <th>Campanha</th>
-                      <th>Aparelho</th>
-                      <th>Tempo no site</th>
-                      <th>Ações realizadas</th>
-                      <th>Pagamento</th>
-                      <th>Pedido</th>
-                      <th>Resultado</th>
-                    </tr>
-                  </thead>
-
-                  <tbody>
-                    {journey.map((s) => {
-                      const ev = events.filter(
-                        (e) => e.session_id === s.id,
-                      );
-                      const duration = Math.max(
-                        0,
-                        Math.round(
-                          (new Date(s.last_seen_at).getTime() -
-                            new Date(s.first_seen_at).getTime()) /
-                            1000,
-                        ),
-                      );
-                      const isOld =
-                        now -
-                          new Date(s.last_seen_at).getTime() >
-                        15 * 60000;
-                      const didAbandon =
-                        !s.converted &&
-                        isOld &&
-                        (eventSet.get(s.id)?.has("add_to_cart") ||
-                          eventSet
-                            .get(s.id)
-                            ?.has("checkout_started"));
-
-                      return (
-                        <tr
-                          key={s.id}
-                          className="border-b align-top"
-                        >
-                          <td className="py-2">
-                            {dt(s.first_seen_at)}
-                          </td>
-
-                          <td>
-                            <b>{visitorIdentityLabel(s)}</b>
-                            <br />
-                            <span className="text-muted-foreground">
-                              {s.customer_phone
-                                ? String(s.customer_phone)
-                                : "Ainda não informou telefone"}
-                            </span>
-                          </td>
-
-                          <td>
-                            <b>{niceSource(s.source)}</b>
-                            <br />
-                            <span className="text-muted-foreground">
-                              {niceMedium(s.medium) || "Forma de chegada não informada"}
-                            </span>
-                          </td>
-
-                          <td>{niceCampaign(s.campaign)}</td>
-
-                          <td>
-                            {niceDevice(s.device_type)}
-                            {s.browser ? (
-                              <>
-                                <br />
-                                <span className="text-muted-foreground">
-                                  Navegador: {s.browser}
-                                </span>
-                              </>
-                            ) : null}
-                          </td>
-
-                          <td>
-                            <span className="flex items-center gap-1">
-                              <Clock3 className="size-3" />
-                              {Math.floor(duration / 60)} min{" "}
-                              {duration % 60} s
-                            </span>
-                          </td>
-
-                          <td>
-                            <details className="max-w-[380px]">
-                              <summary className="cursor-pointer font-bold">
-                                Ver {ev.length} ação(ões)
-                              </summary>
-
-                              <div className="mt-2 max-h-80 space-y-2 overflow-auto rounded-xl border bg-muted/30 p-2">
-                                {[...ev].reverse().map(
-                                  (e: any) => (
-                                    <div
-                                      key={e.id}
-                                      className="rounded-lg bg-background p-2"
-                                    >
-                                      <div className="flex justify-between gap-2">
-                                        <b>
-                                          {niceEvent(e.event_name)}
-                                        </b>
-                                        <span className="text-[10px] text-muted-foreground">
-                                          {new Date(
-                                            e.created_at,
-                                          ).toLocaleTimeString(
-                                            "pt-BR",
-                                          )}
-                                        </span>
-                                      </div>
-
-                                      <div className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-                                        {e.page_path
-                                          ? `Local: ${friendlyPagePath(
-                                              e.page_path,
-                                            )}`
-                                          : ""}
-                                        {e.product_name
-                                          ? ` • Produto: ${e.product_name}`
-                                          : ""}
-                                        {e.payment_method
-                                          ? ` • Pagamento: ${nicePayment(
-                                              e.payment_method,
-                                            )}`
-                                          : ""}
-                                        {e.value != null
-                                          ? ` • Valor: ${brl(
-                                              Number(e.value),
-                                            )}`
-                                          : ""}
-                                      </div>
-                                    </div>
-                                  ),
-                                )}
-                              </div>
-                            </details>
-                          </td>
-
-                          <td>
-                            {s.payment_method
-                              ? nicePayment(s.payment_method)
-                              : "Ainda não escolheu"}
-                          </td>
-
-                          <td>
-                            {s.order_id
-                              ? String(s.order_id)
-                              : "Sem pedido"}
-                          </td>
-
-                          <td>
-                            {s.converted ? (
-                              <Badge>Comprou</Badge>
-                            ) : didAbandon ? (
-                              <Badge variant="outline">
-                                Desistiu no caminho
-                              </Badge>
-                            ) : (
-                              <Badge variant="outline">
-                                Ainda navegando
-                              </Badge>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {filteredJourney.length > 0 && (
-              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4 print:hidden">
-                <p className="text-xs text-muted-foreground">
-                  Mostrando{" "}
-                  <b>
-                    {(currentJourneyPage - 1) * JOURNEY_PAGE_SIZE + 1}
-                    {"–"}
-                    {Math.min(
-                      currentJourneyPage * JOURNEY_PAGE_SIZE,
-                      filteredJourney.length,
-                    )}
-                  </b>{" "}
-                  de <b>{filteredJourney.length}</b> visitante(s)
-                </p>
-
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={currentJourneyPage <= 1}
-                    onClick={() =>
-                      setJourneyPage((page) => Math.max(1, page - 1))
-                    }
-                  >
-                    Anterior
-                  </Button>
-
-                  <span className="rounded-lg border bg-muted/40 px-3 py-1.5 text-xs font-bold">
-                    Página {currentJourneyPage} de {journeyTotalPages}
-                  </span>
-
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={currentJourneyPage >= journeyTotalPages}
-                    onClick={() =>
-                      setJourneyPage((page) =>
-                        Math.min(journeyTotalPages, page + 1),
-                      )
-                    }
-                  >
-                    Próxima
-                  </Button>
+          {activeTab === "journey" && (
+            <div className="space-y-4">
+              <Card className="hotbox-admin-card p-5">
+                <div className="flex flex-wrap items-center gap-3"><div><h2 className="text-lg font-black">Histórico de visitantes</h2><p className="mt-1 text-sm text-muted-foreground">Use quando precisar investigar uma visita, campanha, pedido ou abandono específico.</p></div><div className="ml-auto w-full max-w-sm"><Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar cliente, campanha, pedido..." /></div></div>
+                <div className="mt-4 overflow-x-auto rounded-2xl border">
+                  <table className="w-full text-sm"><thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500"><tr><th className="p-3">Quando</th><th className="p-3">Visitante</th><th className="p-3">Origem</th><th className="p-3">Campanha</th><th className="p-3">Situação</th></tr></thead>
+                    <tbody>{journey.length ? journey.map((s) => <tr key={s.id} className="border-t"><td className="p-3 whitespace-nowrap">{dt(s.first_seen_at)}</td><td className="p-3 font-bold">{visitorIdentityLabel(s)}</td><td className="p-3">{niceSource(s.source)}</td><td className="p-3">{s.campaign ? niceCampaign(s.campaign) : "—"}</td><td className="p-3">{s.converted ? <Badge className="bg-emerald-600">Comprou</Badge> : <Badge variant="secondary">Não comprou</Badge>}</td></tr>) : <tr><td colSpan={5} className="p-8 text-center text-zinc-500">Nenhum visitante encontrado.</td></tr>}</tbody>
+                  </table>
                 </div>
-              </div>
-            )}
-          </Card>
-
-          <Card className="p-5 text-sm leading-relaxed">
-            <h2 className="font-black">
-              O que esta página registra
-            </h2>
-            <p className="mt-2 text-muted-foreground">
-              O sistema acompanha visitas, páginas abertas, origem da visita,
-              aparelho usado, produtos vistos, itens colocados na sacola,
-              início da finalização e compra. Ele não deve guardar senha,
-              código de segurança do cartão nem número completo do cartão.
-            </p>
-          </Card>
+                <div className="mt-4 flex items-center justify-end gap-2"><Button size="sm" variant="outline" disabled={currentJourneyPage <= 1} onClick={() => setJourneyPage((v) => Math.max(1, v - 1))}>Anterior</Button><span className="text-xs font-bold">Página {currentJourneyPage} de {journeyTotalPages}</span><Button size="sm" variant="outline" disabled={currentJourneyPage >= journeyTotalPages} onClick={() => setJourneyPage((v) => Math.min(journeyTotalPages, v + 1))}>Próxima</Button></div>
+              </Card>
+              {rejectedCardCount > 0 && <Card className="hotbox-admin-danger p-5"><h2 className="font-black">Pagamentos no cartão que merecem atenção</h2><p className="mt-1 text-sm text-muted-foreground">{rejectedCardCount} tentativa(s) não aprovada(s), somando {brl(rejectedCardValue)} em tentativas de compra.</p></Card>}
+            </div>
+          )}
         </>
       )}
     </div>
