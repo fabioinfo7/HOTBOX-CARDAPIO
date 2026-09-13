@@ -1,0 +1,54 @@
+HOTBOX — SISTEMA CONSOLIDADO PARA NOVO DEPLOY
+Data: 2026-09-13
+
+POR QUE OS DEPLOYS QUEBRARAM
+Os últimos ajustes foram enviados em grupos separados. Alguns arquivos passaram a importar componentes/backends de atualizações posteriores que não estavam presentes no mesmo deploy. Exemplos já vistos nos logs:
+- hotbox-admin.css ausente;
+- pagarme-payment.tsx ausente;
+- efi-payment.tsx ausente;
+- backend de fidelidade incompatível com a tela;
+- analytics.ts com versão incompatível.
+
+SOLUÇÃO
+Não faça mais deploy de arquivos individuais desta sequência.
+Use este pacote completo e único como nova base do projeto.
+Ele consolida a V9 e as atualizações posteriores no mesmo diretório.
+
+INCLUÍDO NESTA BASE
+- identidade visual V9 + hotbox-admin.css;
+- botão Imprimir nota no pedido;
+- correções de adicionais/valores da IA;
+- fidelidade admin compatível;
+- Analytics completo, presença ao vivo, UTM, CEP/bairro e recuperação;
+- recuperação manual/automática de vendas;
+- Pagar.me;
+- Efí;
+- InfinitePay/Mercado Pago/Appmax já existentes;
+- roteamento de gateway por forma de pagamento;
+- novo fluxo: cardápio primeiro, verificação de entrega depois da sacola;
+- webhooks dos gateways;
+- migrations novas.
+
+MIGRATIONS NOVAS IMPORTANTES
+Execute no Supabase, em ordem cronológica, se ainda não foram aplicadas:
+1. supabase/migrations/20260913024000_sales_recovery_analytics.sql
+2. supabase/migrations/20260913033000_pagarme_gateway_routing.sql
+3. supabase/migrations/20260913043000_efi_gateway_routing.sql
+
+DEPLOY
+1. Substitua a base do projeto no repositório por este pacote consolidado.
+2. Não copie somente index.tsx/loja.tsx isoladamente.
+3. Confirme que src/styles/hotbox-admin.css está versionado.
+4. Confirme que src/components/pagarme-payment.tsx e src/components/efi-payment.tsx estão versionados.
+5. Faça commit/push de TODOS os arquivos juntos.
+6. Railway: faça um deploy novo a partir desse commit.
+7. Se falhar, envie apenas o NOVO log de 'npm run build' até 'Build Failed'.
+
+VALIDAÇÕES LOCAIS EXECUTADAS
+- node preflight.mjs: OK
+- 183 arquivos TS/TSX/JS/JSX verificados sintaticamente: 0 erros
+- todos os imports locais @/ e relativos verificados: 0 ausentes
+- arquivos críticos Pagar.me/Efí/CSS presentes: OK
+
+LIMITAÇÃO DA VALIDAÇÃO
+npm install não concluiu dentro do limite do ambiente daqui, então o build Vite de produção completo não foi executado localmente. Isso não altera as validações acima, mas o Railway ainda será o teste final de dependências/build.
