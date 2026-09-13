@@ -727,7 +727,7 @@ function CustomerHome() {
   const [payOnDeliveryEnabled, setPayOnDeliveryEnabled] = useState(false);
   const [payOnDeliveryCardEnabled, setPayOnDeliveryCardEnabled] = useState(true);
   const [payOnDeliveryPixEnabled, setPayOnDeliveryPixEnabled] = useState(true);
-  const [paymentChoice, setPaymentChoice] = useState<PaymentChoice>("online_pix");
+  const [paymentChoice, setPaymentChoice] = useState<PaymentChoice | null>(null);
   const [digitalMenuEnabled, setDigitalMenuEnabled] = useState(true);
   const [publicStoreStatus, setPublicStoreStatus] = useState<PublicStoreStatus | null>(null);
   const [, setStoreClockTick] = useState(0);
@@ -1145,16 +1145,15 @@ function CustomerHome() {
       setPayOnDeliveryPixEnabled(pay.pay_on_delivery_pix_enabled !== false);
       const canPixOnline = (data as any)?.digital_menu_pix_enabled !== false && pay.pix_payment_available === true;
       const canCardOnline = (data as any)?.digital_menu_card_enabled !== false && pay.card_payment_available === true;
+      // Não pré-seleciona nenhuma forma de pagamento.
+      // O cliente deve escolher explicitamente Pix, cartão ou pagamento na entrega.
+      setPaymentChoice(null);
       if (canPixOnline) {
-        setPaymentChoice("online_pix");
         setPaymentProvider(loadedPixProvider);
         setForm((current) => ({ ...current, payment: loadedPixProvider }));
       } else if (canCardOnline) {
-        setPaymentChoice("online_card");
         setPaymentProvider(loadedCardProvider);
         setForm((current) => ({ ...current, payment: loadedCardProvider }));
-      } else if (pay.pay_on_delivery_enabled === true) {
-        setPaymentChoice(pay.pay_on_delivery_card_enabled !== false ? "delivery_card" : "delivery_pix");
       }
 
       const groups = (groupResult?.data || []) as AddonGroup[];
@@ -1193,8 +1192,7 @@ function CustomerHome() {
   useEffect(() => {
     if (form.deliveryMode === "pickup") {
       if (paymentChoice === "delivery_card" || paymentChoice === "delivery_pix") {
-        if (pixEnabled && pixPaymentAvailable) setPaymentChoice("online_pix");
-        else if (cardEnabled && cardPaymentAvailable) setPaymentChoice("online_card");
+        setPaymentChoice(null);
       }
       setScheduleAccepted(false);
     }
@@ -2285,6 +2283,12 @@ function CustomerHome() {
   const removeItem = (idx: number) => setCart((c) => c.filter((_, ix) => ix !== idx));
 
   function requestPlaceOrder() {
+    if (!paymentChoice) {
+      scrollToCheckoutSection("payment-section");
+      toast.info("Escolha a forma de pagamento para continuar.");
+      return;
+    }
+
     const storeOpenNow = isStoreOpenByBusinessHours(publicStoreStatus);
     const isReservation =
       !storeOpenNow &&
@@ -2309,6 +2313,11 @@ function CustomerHome() {
 
   async function placeOrder(reservationConfirmedNow = false, forcedPaymentChoice?: PaymentChoice) {
     const selectedPaymentChoice = forcedPaymentChoice || paymentChoice;
+    if (!selectedPaymentChoice) {
+      scrollToCheckoutSection("payment-section");
+      toast.info("Escolha a forma de pagamento para continuar.");
+      return;
+    }
     const selectedProvider: CheckoutPayment = selectedPaymentChoice === "online_pix" ? pixProvider : selectedPaymentChoice === "online_card" ? cardProvider : paymentProvider;
     const selectedOnlineAvailable = selectedPaymentChoice === "online_pix" ? pixPaymentAvailable : selectedPaymentChoice === "online_card" ? cardPaymentAvailable : false;
     if (!cart.length) return toast.error("Seu carrinho está vazio");
@@ -3762,6 +3771,10 @@ function CustomerHome() {
               />
             ) : (
               <div className="space-y-3">
+                <div className="rounded-2xl border bg-white p-4 shadow-sm">
+                  <p className="text-sm font-black">Escolha como deseja pagar</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Selecione uma das formas de pagamento abaixo para continuar.</p>
+                </div>
                 {pixEnabled && pixPaymentAvailable && (
                   <button
                     type="button"
@@ -3867,7 +3880,7 @@ function CustomerHome() {
                           ? "Pagar com Pix"
                           : paymentChoice === "online_card"
                             ? "Pagar com cartão"
-                            : "Continuar para pagamento"}
+                            : "Escolher forma de pagamento"}
                 </span>
                 <span>{brl(total)}</span>
               </Button>
