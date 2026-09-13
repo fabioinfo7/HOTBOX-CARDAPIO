@@ -41,7 +41,7 @@ import { AppmaxPayment } from "@/components/appmax-payment";
 import { quoteLoyaltyReward } from "@/lib/loyalty.functions";
 import { quoteSiteDelivery } from "@/lib/site-checkout.functions";
 import { getPublicTestimonialsFn } from "@/lib/satisfaction.functions";
-import { trackAnalytics, analyticsIdentity } from "@/lib/analytics";
+import { trackAnalytics, analyticsIdentity, setAnalyticsVirtualPage } from "@/lib/analytics";
 import { MetaPixelInjector } from "@/components/meta-pixel-injector";
 
 export const Route = createFileRoute("/")({
@@ -746,6 +746,37 @@ function CustomerHome() {
   const [checkingCoupon, setCheckingCoupon] = useState(false);
 
   const [view, setView] = useState<View>("list");
+
+  // HOTBOX_VIRTUAL_PAGE_TRACKING
+  // O cardápio é uma SPA: detalhes, carrinho e checkout não mudam a URL real.
+  // Por isso publicamos uma "página virtual" para o Analytics/presença ao vivo.
+  useEffect(() => {
+    let path = "/cardapio";
+    let title = "Cardápio HotBox";
+
+    if (areaStatus !== "supported") {
+      path = "/cardapio/area-entrega";
+      title = "Verificação da área de entrega";
+    } else if (view === "detail" && selectedProduct) {
+      const slug = String(selectedProduct.name || selectedProduct.id || "produto")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      path = `/produto/${slug || selectedProduct.id}`;
+      title = `Produto — ${selectedProduct.name}`;
+    } else if (view === "cart") {
+      path = "/carrinho";
+      title = "Carrinho";
+    } else if (view === "checkout") {
+      path = "/checkout";
+      title = "Finalização do pedido";
+    }
+
+    setAnalyticsVirtualPage(path, title, true);
+  }, [view, selectedProduct?.id, selectedProduct?.name, areaStatus]);
+
   const [query, setQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState("Batata");
   const [activeFilter, setActiveFilter] = useState<ActiveFilter>("todos");
@@ -898,6 +929,36 @@ function CustomerHome() {
     setAreaMessage("");
     setAreaStatus("supported");
   }, []);
+
+  // HOTBOX_REGION_SESSION_SYNC
+  // Se o cliente já tinha validado o CEP nesta aba/retorno OAuth, registra
+  // novamente a região na sessão atual para o Analytics não ficar sem bairro.
+  useEffect(() => {
+    if (areaStatus !== "supported") return;
+    const saved = readAreaAccess();
+    const cep = saved?.cep || form.cep || accessCep || "";
+    const neighborhood = saved?.neighborhood || form.neighborhood || validatedNeighborhood || "";
+    if (!cep && !neighborhood) return;
+
+    trackDeliveryRegion({
+      cep,
+      neighborhood,
+      city: saved?.city || form.city || null,
+      supported: true,
+      fee: Number(saved?.deliveryFee ?? deliveryFee ?? 0),
+      pricingMode: deliveryPricingMode || null,
+      source: "area_salva",
+    });
+  }, [
+    areaStatus,
+    accessCep,
+    form.cep,
+    form.neighborhood,
+    form.city,
+    validatedNeighborhood,
+    deliveryFee,
+    deliveryPricingMode,
+  ]);
 
   useEffect(() => {
     getPublicTestimonialsFn()
@@ -1141,11 +1202,23 @@ function CustomerHome() {
     supported?: boolean;
     fee?: number | null;
     pricingMode?: string | null;
-    source?: "cep" | "bairro_manual";
+    source?: "cep" | "bairro_manual" | "area_salva";
   }) {
     const cleanCep = onlyDigits(input.cep || "").slice(0, 8);
     const neighborhood = String(input.neighborhood || "").trim();
     if (!cleanCep && !neighborhood) return;
+
+    // Uma sessão precisa ter a região registrada mesmo quando o CEP veio
+    // de uma validação salva de uma visita anterior. Evita duplicar a mesma
+    // região dezenas de vezes na mesma sessão.
+    try {
+      const ids = analyticsIdentity();
+      const dedupeKey = `hb_region_${ids.session_id}_${cleanCep}_${neighborhood.toLowerCase()}`;
+      if (sessionStorage.getItem(dedupeKey)) return;
+      sessionStorage.setItem(dedupeKey, "1");
+    } catch {
+      // segue normalmente
+    }
 
     trackAnalytics("delivery_area_checked", {
       event_category: "delivery_region",
