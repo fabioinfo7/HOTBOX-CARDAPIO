@@ -1,4 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import hotboxLogoUrl from "@/assets/logo-hotbox.jpeg";
 import { useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { toast } from "sonner";
@@ -144,8 +145,6 @@ type ActiveOrderSummary = {
   created_at: string;
   delivery_mode?: string | null;
 };
-
-import hotboxLogoUrl from "@/assets/logo-hotbox.jpeg";
 
 const HOTBOX_LOGO_URL = hotboxLogoUrl;
 const WHATSAPP_URL = "https://wa.me/5521984296288?text=" + encodeURIComponent("Olá! Preciso de ajuda com meu pedido no cardápio digital da Hotbox.");
