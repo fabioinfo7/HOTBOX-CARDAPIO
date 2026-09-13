@@ -88,7 +88,8 @@ function buildExtractionPrompt(catalogLines: string[], transcript: string): any[
 Produtos e adicionais válidos: use APENAS os nomes EXATOS abaixo. Cada linha mostra um produto e, quando houver, seus adicionais cadastrados com os preços atuais.
 ${catalogLines.map((line) => `- ${line}`).join("\n")}
 
-REGRA DE ADICIONAIS: só registre um adicional se ele estiver listado para aquele produto. Nunca invente adicional ou preço.
+REGRA DE ADICIONAIS: só registre um adicional se ele estiver listado para aquele produto. Todo adicional pago pedido pelo cliente deve ficar no campo addons do item, nunca somente em notes. Nunca invente adicional ou preço. O total deve incluir produto principal, bebidas/refrigerantes, todos os adicionais pagos e taxa de entrega.
+REGRA DE ITENS: tudo que o cliente pediu e confirmou deve aparecer em items — batata, combo, refrigerante, água, bebida ou qualquer outro produto ativo. Bebidas não podem ficar somente em notes ou observações.
 
 Responda SOMENTE um JSON, sem nenhum texto antes ou depois, no formato exato:
 {
@@ -355,6 +356,35 @@ export const generateOrderFromConversation = createServerFn({ method: "POST" })
     const suggestions: { raw: string; closest: string[] }[] = [];
     const unmatchedAddons: Array<{ product: string; addon: string; available: string[] }> = [];
 
+
+    function addonQtyFromNotes(notes: string | null | undefined, addonName: string): number {
+      const normalize = (value: string) =>
+        value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+      const n = normalize(String(notes ?? ""));
+      const a = normalize(addonName);
+      if (!n || !a) return 0;
+
+      const aliases = Array.from(new Set([
+        a,
+        ...a.split(/\s+/).filter((token) => token.length >= 4 && !["extra","adicional","crocante","cremoso","cremosa"].includes(token)),
+      ])).filter(Boolean);
+
+      for (const alias of aliases) {
+        const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        if (new RegExp(`\\b(?:sem|tirar|tira|retirar|retira|remove|remover)\\s+(?:o\\s+|a\\s+)?${escaped}\\b`).test(n)) return 0;
+      }
+      for (const alias of aliases) {
+        const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const numeric =
+          n.match(new RegExp(`\\b(\\d{1,2})\\s*x?\\s*${escaped}\\b`)) ||
+          n.match(new RegExp(`\\b${escaped}\\s*x\\s*(\\d{1,2})\\b`));
+        if (numeric) return Math.max(1, Math.min(20, Number(numeric[1]) || 1));
+      }
+      return aliases.some((alias) =>
+        new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(n),
+      ) ? 1 : 0;
+    }
+
     const items = extracted.items.map((it) => {
       const match = findProductMatch(productList, it.product_name);
       if (!match) {
@@ -375,7 +405,21 @@ export const generateOrderFromConversation = createServerFn({ method: "POST" })
       let addonExtra = 0;
       const addonDescriptions: string[] = [];
 
+      const mergedAddonRequests = new Map<string, ExtractedAddon>();
       for (const requested of it.addons ?? []) {
+        const key = String(requested.name || "").trim().toLowerCase();
+        if (key) mergedAddonRequests.set(key, requested);
+      }
+      for (const option of availableOptions) {
+        const displayName = String(option.display_name || option.name || "").trim();
+        if (!displayName) continue;
+        const key = displayName.toLowerCase();
+        if (mergedAddonRequests.has(key)) continue;
+        const qtyFromNotes = addonQtyFromNotes(it.notes, displayName);
+        if (qtyFromNotes > 0) mergedAddonRequests.set(key, { name: displayName, quantity: qtyFromNotes });
+      }
+
+      for (const requested of [...mergedAddonRequests.values()]) {
         const key = String(requested.name || "").trim().toLowerCase();
         const option =
           availableOptions.find(
