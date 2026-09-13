@@ -1,922 +1,1621 @@
-import { createFileRoute, Link, Outlet, useNavigate, useLocation } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
+import { createFileRoute } from "@tanstack/react-router";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { Button } from "@/components/ui/button";
+import { analyticsHealthFn } from "@/lib/analytics-health.functions";
 import { Card } from "@/components/ui/card";
-import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-} from "@/components/ui/dropdown-menu";
-import {
-  LayoutDashboard,
-  Pizza,
-  Settings,
-  LogOut,
-  ShieldCheck,
-  Bike,
   Users,
-  History,
-  MessageCircle,
-  Calculator,
-  ExternalLink,
-  ClipboardList,
-  Maximize2,
-  Minimize2,
-  Expand,
-  Shrink,
-  ScrollText,
-  TrendingUp,
-  Truck,
-  HandCoins,
-  MapPinned,
-  ChevronDown,
-  ChevronRight,
-  Ticket,
-  ThumbsUp,
-  WalletCards,
-  Trophy,
-  BarChart3,
+  Eye,
   ShoppingCart,
-  X,
+  CreditCard,
+  CheckCircle2,
+  Ban,
+  Printer,
+  RefreshCw,
+  TrendingUp,
+  MousePointerClick,
+  Smartphone,
+  Monitor,
+  Tablet,
+  Search,
+  PackageOpen,
+  Route as RouteIcon,
+  CircleDollarSign,
+  UserRound,
+  Megaphone,
+  MapPin,
+  Clock3,
+  Copy,
+  HelpCircle,
+  Activity,
+  BarChart3,
+  Instagram,
+  Facebook,
+  Globe2,
+  MessageCircle,
 } from "lucide-react";
-import { FreightApprovalPopup } from "@/components/freight-approval-popup";
-import { HumanHandoffAlert } from "@/components/human-handoff-alert";
-import { AutoPrintReceipt } from "@/components/auto-print-receipt";
-import { PwaInstallButton } from "@/components/pwa-install";
-import "@/styles/hotbox-admin.css";
 
-import hotboxLogoUrl from "@/assets/logo-hotbox.jpeg";
-
-const HOTBOX_LOGO_URL = hotboxLogoUrl;
-
-export const Route = createFileRoute("/_authenticated/loja")({
-  component: AdminLayout,
+export const Route = createFileRoute("/_authenticated/loja/analytics")({
+  component: AnalyticsPage,
 });
 
-export const WIDE_MODE_EVENT = "hb:wide-mode-changed";
-export function getWideMode() {
-  try {
-    return localStorage.getItem("hb_wide_mode") === "1";
-  } catch {
-    return false;
-  }
-}
-export function setWideMode(v: boolean) {
-  try {
-    localStorage.setItem("hb_wide_mode", v ? "1" : "0");
-  } catch {
-    /* ignore */
-  }
-  window.dispatchEvent(new CustomEvent(WIDE_MODE_EVENT, { detail: v }));
-}
+type SessionRow = any;
+type EventRow = any;
 
-/** Conta conversas com mensagem NÃO LIDA — badge zera quando o admin abre a conversa */
-async function countActiveChats(): Promise<number> {
-  const { count } = await supabase
-    .from("whatsapp_conversations")
-    .select("id", { count: "exact", head: true })
-    .eq("has_unread", true);
-  return count ?? 0;
-}
+const brl = (v: number) =>
+  new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  }).format(v || 0);
 
-/** Beep alto sintetizado — não depende de nenhum arquivo, sempre funciona */
-let __audioCtx: AudioContext | null = null;
-function playIncomingBeep() {
-  try {
-    if (typeof window === "undefined") return;
-    const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
-    if (!Ctx) return;
-    __audioCtx ||= new Ctx();
-    const ctx = __audioCtx!;
-    if (ctx.state === "suspended") ctx.resume().catch(() => {});
-    const now = ctx.currentTime;
-    // dois bipes curtos em 880Hz/1175Hz, volume alto (0.9)
-    [0, 0.22].forEach((offset, i) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "square";
-      osc.frequency.value = i === 0 ? 880 : 1175;
-      gain.gain.setValueAtTime(0.0001, now + offset);
-      gain.gain.exponentialRampToValueAtTime(0.9, now + offset + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.18);
-      osc.connect(gain).connect(ctx.destination);
-      osc.start(now + offset);
-      osc.stop(now + offset + 0.2);
-    });
-  } catch {
-    /* som nunca pode quebrar o app */
-  }
-}
+const pct = (a: number, b: number) =>
+  b ? `${((a / b) * 100).toFixed(1)}%` : "0,0%";
 
+const dt = (v: string) =>
+  new Date(v).toLocaleString("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+  });
 
-type LiveAdminBubble = {
-  id: string;
-  kind: "visitors" | "cart";
-  title: string;
-  message: string;
+const SOURCE_LABEL: Record<string, string> = {
+  direct: "Acesso direto ao site",
+  none: "Acesso direto ao site",
+  referral: "Veio de outro site",
+  organic: "Busca orgânica",
+  paid_social: "Anúncio em rede social",
+  facebook: "Facebook",
+  fb: "Facebook",
+  facebook_ads: "Anúncio do Facebook",
+  instagram: "Instagram",
+  ig: "Instagram",
+  instagram_ads: "Anúncio do Instagram",
+  meta: "Anúncio da Meta",
+  meta_ads: "Anúncio da Meta (Facebook ou Instagram)",
+  metaads: "Anúncio da Meta (Facebook ou Instagram)",
+  google: "Google",
+  google_ads: "Anúncio do Google",
+  gads: "Anúncio do Google",
+  whatsapp: "WhatsApp",
+  wa: "WhatsApp",
+  bio: "Página da Bio",
+  ifood: "iFood",
+  "99food": "99Food",
 };
 
-function pluralPeople(count: number) {
-  return count === 1 ? "1 pessoa" : `${count} pessoas`;
+const DEVICE_LABEL: Record<string, string> = {
+  mobile: "Celular",
+  tablet: "Tablet",
+  desktop: "Computador",
+};
+
+const PAYMENT_LABEL: Record<string, string> = {
+  pix: "Pix",
+  card: "Cartão",
+  credit: "Cartão",
+  debit: "Cartão",
+  delivery_card: "Cartão na entrega",
+  delivery_pix: "Pix na entrega",
+  mercadopago: "Mercado Pago",
+  appmax: "Appmax",
+  infinitepay: "InfinitePay",
+  stripe: "Stripe",
+  online: "Pagamento online",
+};
+
+const EVENT_LABEL: Record<string, string> = {
+  page_view: "Entrou em uma página",
+  menu_access_granted: "Entrou de verdade no cardápio",
+  ifood_redirect_outside_area: "Redirecionado ao iFood por área não atendida",
+  outside_area_redirect_whatsapp: "Fora da área — direcionado ao WhatsApp",
+  product_view: "Abriu um produto",
+  add_to_cart: "Colocou produto na sacola",
+  order_bump_added: "Aceitou uma oferta extra",
+  cart_opened: "Abriu a sacola",
+  checkout_started: "Começou a finalizar o pedido",
+  checkout_created: "Pedido foi preparado para pagamento",
+  checkout_submitted: "Enviou os dados do pedido",
+  payment_selected: "Escolheu como pagar",
+  payment_redirect: "Foi para a tela de pagamento",
+  payment_started: "Começou o pagamento",
+  payment_failed: "Pagamento no cartão não foi aprovado",
+  purchase: "Compra confirmada",
+  order_created: "Pedido criado",
+  click: "Clicou em um botão ou link",
+  lead: "Entrou em contato",
+  contact: "Entrou em contato",
+};
+
+function isPaidMedium(value: unknown) {
+  const medium = String(value || "").trim().toLowerCase();
+  return ["paid_social", "cpc", "paid", "ppc", "social_paid"].includes(medium);
 }
 
-function AdminLayout() {
-  const nav = useNavigate();
-  const loc = useLocation();
-  const [checking, setChecking] = useState(true);
-  const [unreadChats, setUnreadChats] = useState(0);
-  const [liveBubble, setLiveBubble] = useState<LiveAdminBubble | null>(null);
-  const liveBubbleTimerRef = useRef<number | null>(null);
-  const previousLiveVisitorsRef = useRef<number | null>(null);
-  const seenCartEventsRef = useRef<Set<string>>(new Set());
-  const cartWatchStartedAtRef = useRef<string>(new Date().toISOString());
+function trafficChannel(session: SessionRow) {
+  const source = String(session?.source || "").trim().toLowerCase();
+  const medium = String(session?.medium || "").trim().toLowerCase();
 
-  function showLiveAdminBubble(next: Omit<LiveAdminBubble, "id">) {
-    if (liveBubbleTimerRef.current) {
-      window.clearTimeout(liveBubbleTimerRef.current);
+  if (["instagram", "ig", "instagram_ads"].includes(source)) {
+    return isPaidMedium(medium) || source === "instagram_ads"
+      ? "Instagram — anúncios"
+      : "Instagram — orgânico";
+  }
+
+  if (["facebook", "fb", "facebook_ads"].includes(source)) {
+    return isPaidMedium(medium) || source === "facebook_ads"
+      ? "Facebook — anúncios"
+      : "Facebook — orgânico";
+  }
+
+  if (["meta_ads", "meta", "metaads"].includes(source)) {
+    return "Meta Ads — rede não identificada";
+  }
+
+  if (source === "google") {
+    return isPaidMedium(medium) || ["cpc", "paid"].includes(medium)
+      ? "Google — anúncios"
+      : "Google — orgânico";
+  }
+
+  if (source === "whatsapp" || source === "wa") return "WhatsApp";
+  if (source === "direct" || source === "none" || !source) return "Acesso direto";
+  if (source === "bio") return "Página da Bio";
+
+  return niceSource(source);
+}
+
+function trafficChannelHelp(channel: string) {
+  if (channel === "Instagram — anúncios") return "Identificado por UTM/medium pago ou sinal de anúncio.";
+  if (channel === "Instagram — orgânico") return "Clique do Instagram sem indicação de mídia paga.";
+  if (channel === "Facebook — anúncios") return "Identificado por UTM/medium pago ou sinal de anúncio.";
+  if (channel === "Facebook — orgânico") return "Clique do Facebook sem indicação de mídia paga.";
+  if (channel === "Meta Ads — rede não identificada") return "Há sinal de anúncio Meta, mas sem UTM que diga se veio do Instagram ou Facebook.";
+  return "";
+}
+
+function niceSource(value: unknown) {
+  const raw = String(value || "").trim();
+  if (!raw) return "Origem não identificada";
+
+  const normalized = raw
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+
+  if (SOURCE_LABEL[normalized]) return SOURCE_LABEL[normalized];
+
+  if (/instagram|\big\b/i.test(raw)) return "Instagram";
+  if (/facebook|\bfb\b/i.test(raw)) return "Facebook";
+  if (/meta/i.test(raw)) return "Anúncio da Meta";
+  if (/whatsapp|\bwa\b/i.test(raw)) return "WhatsApp";
+  if (/google/i.test(raw)) return "Google";
+  if (/ifood/i.test(raw)) return "iFood";
+  if (/99.?food/i.test(raw)) return "99Food";
+
+  return raw
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+
+function niceMedium(value: unknown) {
+  const raw = String(value || "").trim().toLowerCase();
+  const labels: Record<string, string> = {
+    social: "Rede social",
+    organic_social: "Orgânico em rede social",
+    paid_social: "Anúncio em rede social",
+    organic: "Busca orgânica",
+    referral: "Link de outro site",
+    none: "Acesso direto",
+    cpc: "Anúncio pago",
+    paid: "Anúncio pago",
+    email: "E-mail",
+  };
+  return labels[raw] || (raw ? raw.replace(/[_-]+/g, " ") : "");
+}
+
+function niceCampaign(value: unknown) {
+  const raw = String(value || "").trim();
+  if (!raw) return "Sem campanha identificada";
+  return raw
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function visitorIdentityLabel(session: SessionRow) {
+  if (session.customer_name) return String(session.customer_name);
+  if (session.customer_phone) return `Cliente ${String(session.customer_phone)}`;
+  return "Visitante ainda não identificado";
+}
+
+function formatCustomerPhone(value: unknown) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return "";
+  const br = digits.startsWith("55") && digits.length >= 12 ? digits.slice(2) : digits;
+  if (br.length === 11) return `(${br.slice(0, 2)}) ${br.slice(2, 7)}-${br.slice(7)}`;
+  if (br.length === 10) return `(${br.slice(0, 2)}) ${br.slice(2, 6)}-${br.slice(6)}`;
+  return String(value || "");
+}
+
+function whatsappRecoveryHref(phone: unknown, customerName?: unknown) {
+  const raw = String(phone || "").replace(/\D/g, "");
+  if (!raw) return "";
+  const international = raw.startsWith("55") ? raw : `55${raw}`;
+  const name = String(customerName || "").trim();
+  const greeting = name
+    ? `Olá, ${name}! Aqui é da HotBox Delivery. Vi que você iniciou um pedido no nosso cardápio e estou passando para saber se posso te ajudar a finalizar 😊`
+    : "Olá! Aqui é da HotBox Delivery. Vi que você iniciou um pedido no nosso cardápio e estou passando para saber se posso te ajudar a finalizar 😊";
+  return `https://wa.me/${international}?text=${encodeURIComponent(greeting)}`;
+}
+
+function niceDevice(value: unknown) {
+  const raw = String(value || "").trim();
+  return DEVICE_LABEL[raw] || raw || "Não identificado";
+}
+
+function nicePayment(value: unknown) {
+  const raw = String(value || "").trim();
+  return PAYMENT_LABEL[raw] || raw || "Não identificado";
+}
+
+function niceEvent(value: unknown) {
+  const raw = String(value || "").trim();
+  return EVENT_LABEL[raw] || "Interagiu com o cardápio";
+}
+
+function friendlyPagePath(value: unknown) {
+  const raw = String(value || "").trim();
+  if (!raw) return "Página não identificada";
+
+  let path = raw;
+
+  try {
+    if (/^https?:\/\//i.test(raw)) {
+      path = new URL(raw).pathname;
+    } else {
+      path = raw.split("?")[0].split("#")[0];
+    }
+  } catch {
+    path = raw.split("?")[0].split("#")[0];
+  }
+
+  path = path.replace(/\/+$/, "") || "/";
+
+  const exact: Record<string, string> = {
+    "/": "Cardápio Digital — página principal",
+    "/cardapio": "Cardápio Digital — página principal",
+    "/cardapio/area-entrega": "Verificação de entrega (fluxo antigo)",
+    "/entrega/verificar": "Verificando entrega",
+    "/carrinho": "Carrinho",
+    "/bio": "Página da Bio — links da HotBox",
+    "/obrigado": "Confirmação após a compra",
+    "/avaliacao": "Página de avaliação do pedido",
+    "/politica-de-privacidade": "Política de Privacidade",
+    "/privacidade": "Política de Privacidade",
+    "/termos": "Termos de uso",
+    "/checkout": "Finalização do pedido",
+    "/sacola": "Sacola de compras",
+  };
+
+  if (exact[path]) return exact[path];
+
+  if (/^\/produto\//i.test(path)) {
+    const slug = decodeURIComponent(path.split("/").filter(Boolean).slice(1).join(" "));
+    return slug
+      ? `Produto — ${slug.replace(/[-_]+/g, " ")}`
+      : "Detalhes de um produto";
+  }
+
+  if (/^\/pedido\//i.test(path)) {
+    return "Acompanhamento de pedido";
+  }
+
+  if (/^\/avaliacao\//i.test(path)) {
+    return "Avaliação de pedido";
+  }
+
+  // Nunca exibe uma rota técnica crua para o usuário do painel.
+  const readable = decodeURIComponent(path)
+    .split("/")
+    .filter(Boolean)
+    .map((part) =>
+      part
+        .replace(/[-_]+/g, " ")
+        .replace(/\b\w/g, (letter) => letter.toUpperCase()),
+    )
+    .join(" › ");
+
+  return readable ? `Página — ${readable}` : "Página não identificada";
+}
+
+
+function canonicalPageKey(value: unknown) {
+  const raw = String(value || "").trim();
+  if (!raw) return "/";
+
+  try {
+    if (/^https?:\/\//i.test(raw)) {
+      const url = new URL(raw);
+      return (url.pathname || "/").replace(/\/+$/, "") || "/";
+    }
+  } catch {
+    // segue para limpeza simples
+  }
+
+  const path = raw.split("?")[0].split("#")[0];
+  return (path || "/").replace(/\/+$/, "") || "/";
+}
+
+function EmptyMessage({ text }: { text: string }) {
+  return (
+    <div className="rounded-xl border border-dashed p-5 text-center text-sm text-muted-foreground">
+      {text}
+    </div>
+  );
+}
+
+function AnalyticsPage() {
+  const [days, setDays] = useState(30);
+  const [loading, setLoading] = useState(true);
+  const [sessions, setSessions] = useState<SessionRow[]>([]);
+  const [events, setEvents] = useState<EventRow[]>([]);
+  const [search, setSearch] = useState("");
+  const [journeyPage, setJourneyPage] = useState(1);
+  const JOURNEY_PAGE_SIZE = 20;
+  const [health, setHealth] = useState<any>(null);
+  const [liveSessions, setLiveSessions] = useState<SessionRow[]>([]);
+  const [liveLoading, setLiveLoading] = useState(true);
+  const [liveError, setLiveError] = useState("");
+  const [activeTab, setActiveTab] = useState<"overview" | "live" | "campaigns" | "regions" | "behavior" | "journey">("overview");
+  const [utmSource, setUtmSource] = useState("instagram");
+  const [utmMedium, setUtmMedium] = useState("paid_social");
+  const [utmCampaign, setUtmCampaign] = useState("");
+  const [utmContent, setUtmContent] = useState("");
+  const [utmCopied, setUtmCopied] = useState(false);
+  const [livePageFilter, setLivePageFilter] = useState("all");
+  const [liveOriginFilter, setLiveOriginFilter] = useState("all");
+  const [campaignOriginFilter, setCampaignOriginFilter] = useState("all");
+  const [campaignNameFilter, setCampaignNameFilter] = useState("all");
+  const [campaignResultFilter, setCampaignResultFilter] = useState("all");
+  const [regionFilter, setRegionFilter] = useState("");
+  const [regionStatusFilter, setRegionStatusFilter] = useState("all");
+  const [productFilter, setProductFilter] = useState("");
+  const [productActivityFilter, setProductActivityFilter] = useState("all");
+  const [journeyOriginFilter, setJourneyOriginFilter] = useState("all");
+  const [journeyCampaignFilter, setJourneyCampaignFilter] = useState("all");
+  const [journeySituationFilter, setJourneySituationFilter] = useState("all");
+
+  async function loadLive() {
+    const cutoff = new Date(Date.now() - 45 * 1000).toISOString();
+
+    const { data, error } = await (supabase as any)
+      .from("analytics_sessions")
+      .select("*")
+      .gte("presence_last_seen_at", cutoff)
+      .order("presence_last_seen_at", { ascending: false })
+      .limit(500);
+
+    if (error) {
+      setLiveError(error.message || "Não foi possível carregar quem está ao vivo.");
+      setLiveSessions([]);
+    } else {
+      setLiveError("");
+      setLiveSessions(data || []);
     }
 
-    setLiveBubble({
-      ...next,
-      id: `${next.kind}_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+    setLiveLoading(false);
+  }
+
+  async function load() {
+    setLoading(true);
+
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+
+    const [s, e, h] = await Promise.all([
+      (supabase as any)
+        .from("analytics_sessions")
+        .select("*")
+        .gte("first_seen_at", since)
+        .order("first_seen_at", { ascending: false })
+        .limit(10000),
+      (supabase as any)
+        .from("analytics_events")
+        .select("*")
+        .gte("created_at", since)
+        .order("created_at", { ascending: false })
+        .limit(30000),
+      analyticsHealthFn().catch((error: any) => ({
+        ok: false,
+        exception: error?.message || String(error),
+      })),
+    ]);
+
+    setSessions(s.data || []);
+    setEvents(e.data || []);
+    setHealth({
+      ...h,
+      client_sessions_error: s.error?.message || null,
+      client_events_error: e.error?.message || null,
+    });
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    void load();
+  }, [days]);
+
+  useEffect(() => {
+    void loadLive();
+
+    const timer = window.setInterval(() => {
+      void loadLive();
+    }, 10000);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    setJourneyPage(1);
+  }, [search, days, journeyOriginFilter, journeyCampaignFilter, journeySituationFilter]);
+
+  const eventSet = useMemo(() => {
+    const by = new Map<string, Set<string>>();
+
+    events.forEach((e) => {
+      if (!by.has(e.session_id)) by.set(e.session_id, new Set());
+      by.get(e.session_id)!.add(e.event_name);
     });
 
-    liveBubbleTimerRef.current = window.setTimeout(() => {
-      setLiveBubble(null);
-      liveBubbleTimerRef.current = null;
-    }, 5000);
-  }
+    return by;
+  }, [events]);
 
-  // Alertas globais do cardápio — aparecem em qualquer tela do sistema.
-  useEffect(() => {
-    let disposed = false;
+  const countStep = (names: string[]) =>
+    sessions.filter((s) =>
+      names.some((n) => eventSet.get(s.id)?.has(n)),
+    ).length;
 
-    async function checkLiveVisitors() {
-      const cutoff = new Date(Date.now() - 45_000).toISOString();
+  const menuAccessSessionIds = useMemo(() => {
+    const ids = new Set<string>();
+    const insideEvents = new Set([
+      "menu_access_granted", "product_view", "add_to_cart", "order_bump_added", "cart_opened",
+      "delivery_check_started", "delivery_area_checked", "outside_area_detected",
+      "checkout_started", "checkout_created", "checkout_submitted", "payment_selected", "payment_started",
+      "payment_redirect", "payment_failed", "purchase", "order_created",
+    ]);
+    for (const event of events) {
+      const id = String(event.session_id || "");
+      if (!id) continue;
+      const page = canonicalPageKey(event.page_path || event.properties?.page_path || "/");
+      if (
+        insideEvents.has(String(event.event_name)) ||
+        page === "/cardapio" ||
+        page === "/carrinho" ||
+        page === "/entrega/verificar" ||
+        page === "/checkout" ||
+        page.startsWith("/produto/")
+      ) ids.add(id);
+    }
+    return ids;
+  }, [events]);
 
-      const { data, error } = await (supabase as any)
-        .from("analytics_sessions")
-        .select("id,visitor_id,presence_last_seen_at,current_page_path")
-        .gte("presence_last_seen_at", cutoff)
-        .limit(500);
+  const deliveryCheckStartedSessionIds = useMemo(
+    () => new Set(events.filter((e) => e.event_name === "delivery_check_started").map((e) => String(e.session_id || "")).filter(Boolean)),
+    [events],
+  );
 
-      if (disposed || error) return;
+  const deliveryApprovedSessionIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const event of events) {
+      if (event.event_name !== "delivery_area_checked") continue;
+      if (event.properties?.supported === false) continue;
+      const id = String(event.session_id || "");
+      if (id) ids.add(id);
+    }
+    return ids;
+  }, [events]);
 
-      const menuRows = (data || []).filter((row: any) => {
-        const raw = String(row?.current_page_path || "/").split("?")[0].replace(/\/+$/, "") || "/";
-        return (
-          raw === "/cardapio" ||
-          (raw.startsWith("/cardapio/") && !raw.startsWith("/cardapio/area-entrega")) ||
-          raw === "/carrinho" ||
-          raw === "/checkout" ||
-          raw.startsWith("/produto/")
-        );
-      });
+  const outsideAreaSessionIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const event of events) {
+      const id = String(event.session_id || "");
+      if (!id) continue;
+      if (event.event_name === "outside_area_detected") ids.add(id);
+      if (event.event_name === "delivery_area_checked" && event.properties?.supported === false) ids.add(id);
+    }
+    return ids;
+  }, [events]);
 
-      const uniqueVisitors = new Set(
-        menuRows
-          .map((row: any) => String(row?.visitor_id || row?.id || "").trim())
+  const ifoodRedirectSessionIds = useMemo(
+    () => new Set(events.filter((e) => e.event_name === "ifood_redirect_outside_area").map((e) => String(e.session_id || "")).filter(Boolean)),
+    [events],
+  );
+
+  const nfoodRedirectSessionIds = useMemo(
+    () => new Set(events.filter((e) => e.event_name === "nfood_redirect_outside_area").map((e) => String(e.session_id || "")).filter(Boolean)),
+    [events],
+  );
+
+  const platformRedirectSessionIds = useMemo(() => {
+    const ids = new Set<string>(ifoodRedirectSessionIds);
+    for (const id of nfoodRedirectSessionIds) ids.add(id);
+    return ids;
+  }, [ifoodRedirectSessionIds, nfoodRedirectSessionIds]);
+
+  const deliveryCheckedSessionIds = useMemo(
+    () => new Set(events.filter((e) => e.event_name === "delivery_area_checked").map((e) => String(e.session_id || "")).filter(Boolean)),
+    [events],
+  );
+
+  const actualMenuSessions = useMemo(
+    () => sessions.filter((s) => menuAccessSessionIds.has(String(s.id))),
+    [sessions, menuAccessSessionIds],
+  );
+
+  const deliveryCheckAbandonSessions = useMemo(() => {
+    const currentNow = Date.now();
+    return actualMenuSessions.filter((s) => {
+      const id = String(s.id);
+      if (!deliveryCheckStartedSessionIds.has(id)) return false;
+      if (deliveryCheckedSessionIds.has(id) || outsideAreaSessionIds.has(id) || s.converted) return false;
+      const inactiveMs = currentNow - new Date(s.last_seen_at || s.first_seen_at).getTime();
+      return inactiveMs > 5 * 60000;
+    });
+  }, [actualMenuSessions, deliveryCheckStartedSessionIds, deliveryCheckedSessionIds, outsideAreaSessionIds]);
+
+  const deliveryCheckAbandonSessionIds = useMemo(
+    () => new Set(deliveryCheckAbandonSessions.map((s) => String(s.id))),
+    [deliveryCheckAbandonSessions],
+  );
+
+  const ifoodRedirectSessions = useMemo(
+    () => actualMenuSessions.filter((s) => ifoodRedirectSessionIds.has(String(s.id))),
+    [actualMenuSessions, ifoodRedirectSessionIds],
+  );
+
+  const platformRedirectSessions = useMemo(
+    () => actualMenuSessions.filter((s) => platformRedirectSessionIds.has(String(s.id))),
+    [actualMenuSessions, platformRedirectSessionIds],
+  );
+
+  const visitors = new Set(actualMenuSessions.map((s) => s.visitor_id)).size;
+  const converted = actualMenuSessions.filter((s) => s.converted).length;
+  const revenue = actualMenuSessions.reduce(
+    (a, s) => a + Number(s.revenue || 0),
+    0,
+  );
+  const pageViews = events.filter((e) => {
+    if (e.event_name !== "page_view") return false;
+    if (!menuAccessSessionIds.has(String(e.session_id || ""))) return false;
+    const page = canonicalPageKey(e.page_path || e.properties?.page_path || "/");
+    return page === "/cardapio" || page === "/carrinho" || page === "/entrega/verificar" || page === "/checkout" || page.startsWith("/produto/");
+  }).length;
+  const productViews = countStep(["product_view"]);
+  const addCart = countStep([
+    "add_to_cart",
+    "order_bump_added",
+  ]);
+  const deliveryChecksStarted = actualMenuSessions.filter((s) => deliveryCheckStartedSessionIds.has(String(s.id))).length;
+  const deliveryApproved = actualMenuSessions.filter((s) => deliveryApprovedSessionIds.has(String(s.id))).length;
+  const outsideAreaDetected = actualMenuSessions.filter((s) => outsideAreaSessionIds.has(String(s.id))).length;
+  const platformRedirects = platformRedirectSessions.length;
+  const checkout = countStep([
+    "checkout_started",
+    "checkout_created",
+    "begin_checkout",
+  ]);
+  const payment = countStep([
+    "payment_selected",
+    "payment_redirect",
+    "payment_started",
+  ]);
+  const now = Date.now();
+
+  const abandoned = actualMenuSessions.filter(
+    (s) =>
+      !s.converted &&
+      now - new Date(s.last_seen_at).getTime() > 15 * 60000 &&
+      (eventSet.get(s.id)?.has("add_to_cart") ||
+        eventSet.get(s.id)?.has("checkout_started")),
+  ).length;
+
+  const rejectedPayments = events.filter(
+    (e) => e.event_name === "payment_failed",
+  );
+  const rejectedCardCount = rejectedPayments.length;
+  const rejectedCardValue = rejectedPayments.reduce(
+    (sum, e) => sum + Number(e.value || 0),
+    0,
+  );
+
+
+  const rejectedSessionIds = useMemo(
+    () =>
+      new Set(
+        events
+          .filter((event) => event.event_name === "payment_failed")
+          .map((event) => String(event.session_id || ""))
           .filter(Boolean),
-      );
-      const currentCount = uniqueVisitors.size;
+      ),
+    [events],
+  );
 
-      const pageCounts = new Map<string, number>();
-      for (const row of menuRows) {
-        const raw = String(row?.current_page_path || "/").split("?")[0].replace(/\/+$/, "") || "/";
-        const label =
-          raw.startsWith("/produto/") ? "vendo produto" :
-          raw === "/carrinho" ? "no carrinho" :
-          raw === "/checkout" ? "finalizando pedido" :
-          "na página principal";
-        pageCounts.set(label, (pageCounts.get(label) || 0) + 1);
-      }
-      const pageSummary = [...pageCounts.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 2)
-        .map(([label, count]) => `${count} ${label}`)
-        .join(" • ");
-      const previousCount = previousLiveVisitorsRef.current;
+  const abandonedSessionIds = useMemo(() => {
+    const currentNow = Date.now();
+    return new Set(
+      sessions
+        .filter(
+          (session) =>
+            !session.converted &&
+            currentNow - new Date(session.last_seen_at).getTime() > 15 * 60000 &&
+            (eventSet.get(session.id)?.has("add_to_cart") ||
+              eventSet.get(session.id)?.has("checkout_started")),
+        )
+        .map((session) => String(session.id)),
+    );
+  }, [sessions, eventSet]);
 
-      if (previousCount === null) {
-        previousLiveVisitorsRef.current = currentCount;
+  function recoveryStatus(session: SessionRow) {
+    if (session.converted) return "Comprou";
+    if (rejectedSessionIds.has(String(session.id))) return "Cartão não aprovado";
+    if (abandonedSessionIds.has(String(session.id))) return "Abandonou checkout";
+    return "Não comprou";
+  }
 
-        if (currentCount > 0) {
-          showLiveAdminBubble({
-            kind: "visitors",
-            title: "Tem gente no cardápio agora",
-            message: pageSummary || `${pluralPeople(currentCount)} navegando neste momento.`,
-          });
-        }
-        return;
-      }
+  const metaSessions = actualMenuSessions.filter((s) =>
+    ["facebook", "instagram", "meta_ads"].includes(String(s.source || "")),
+  );
+  const facebookSessions = actualMenuSessions.filter(
+    (s) => String(s.source || "") === "facebook",
+  );
+  const metaPurchases = metaSessions.filter((s) => s.converted);
+  const metaRevenue = metaSessions.reduce(
+    (sum, s) => sum + Number(s.revenue || 0),
+    0,
+  );
 
-      if (currentCount > previousCount) {
-        const entered = currentCount - previousCount;
-        showLiveAdminBubble({
-          kind: "visitors",
-          title: entered === 1 ? "Uma pessoa entrou no cardápio" : `${entered} pessoas entraram no cardápio`,
-          message: pageSummary ? `Agora há ${pluralPeople(currentCount)}: ${pageSummary}.` : `Agora há ${pluralPeople(currentCount)} navegando.`,
-        });
-      }
+  const avgTicket = converted ? revenue / converted : 0;
 
-      previousLiveVisitorsRef.current = currentCount;
+  const channelRows = useMemo(() => {
+    const grouped = new Map<string, { visits: number; purchases: number; revenue: number }>();
+    for (const session of actualMenuSessions) {
+      const channel = trafficChannel(session);
+      const row = grouped.get(channel) || { visits: 0, purchases: 0, revenue: 0 };
+      row.visits += 1;
+      if (session.converted) row.purchases += 1;
+      row.revenue += Number(session.revenue || 0);
+      grouped.set(channel, row);
     }
+    return [...grouped.entries()]
+      .map(([channel, data]) => ({ channel, ...data }))
+      .sort((a, b) => b.visits - a.visits);
+  }, [actualMenuSessions]);
 
-    function announceCartEvent(row: any) {
-      const eventId = String(row?.id || "").trim();
-      if (eventId && seenCartEventsRef.current.has(eventId)) return;
-      if (eventId) seenCartEventsRef.current.add(eventId);
+  const channelTotals = useMemo(() => {
+    const get = (name: string) => channelRows.find((row) => row.channel === name) || { visits: 0, purchases: 0, revenue: 0 };
+    return {
+      instagramOrganic: get("Instagram — orgânico"),
+      instagramPaid: get("Instagram — anúncios"),
+      facebookOrganic: get("Facebook — orgânico"),
+      facebookPaid: get("Facebook — anúncios"),
+      metaUnknown: get("Meta Ads — rede não identificada"),
+    };
+  }, [channelRows]);
 
-      const productName = String(
-        row?.product_name ||
-          row?.properties?.product_name ||
-          row?.properties?.content_name ||
-          "",
-      ).trim();
-      const quantity = Math.max(1, Number(row?.quantity || row?.properties?.quantity || 1) || 1);
-
-      showLiveAdminBubble({
-        kind: "cart",
-        title: "Produto adicionado à sacola",
-        message: productName
-          ? `${quantity > 1 ? `${quantity}x ` : ""}${productName} acabou de ser adicionado.`
-          : "Uma pessoa acabou de adicionar um produto à sacola.",
+  const latestRegionBySession = useMemo(() => {
+    const map = new Map<string, { cep: string; neighborhood: string; supported: boolean; created_at: string }>();
+    for (const event of events) {
+      if (event.event_name !== "delivery_area_checked") continue;
+      const sessionId = String(event.session_id || "");
+      if (!sessionId || map.has(sessionId)) continue;
+      map.set(sessionId, {
+        cep: String(event.properties?.cep || "").replace(/\D/g, "").slice(0, 8),
+        neighborhood: String(event.properties?.neighborhood || "").trim(),
+        supported: event.properties?.supported !== false,
+        created_at: String(event.created_at || ""),
       });
     }
+    return map;
+  }, [events]);
 
-    async function pollCartEvents() {
-      const since = cartWatchStartedAtRef.current;
-
-      const { data, error } = await (supabase as any)
-        .from("analytics_events")
-        .select("id,event_name,created_at,product_name,quantity,properties")
-        .eq("event_name", "add_to_cart")
-        .gt("created_at", since)
-        .order("created_at", { ascending: true })
-        .limit(50);
-
-      if (disposed || error || !data?.length) return;
-
-      for (const row of data) {
-        announceCartEvent(row);
-      }
-
-      const newest = data[data.length - 1]?.created_at;
-      if (newest) cartWatchStartedAtRef.current = String(newest);
-    }
-
-    void checkLiveVisitors();
-
-    const liveInterval = window.setInterval(() => {
-      void checkLiveVisitors();
-    }, 10_000);
-
-    const cartInterval = window.setInterval(() => {
-      void pollCartEvents();
-    }, 5_000);
-
-    const channel = supabase
-      .channel("layout-cardapio-live-alerts")
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "analytics_events",
-          filter: "event_name=eq.add_to_cart",
-        },
-        (payload: any) => {
-          if (disposed) return;
-          announceCartEvent(payload?.new || {});
-        },
-      )
-      .subscribe();
-
-    return () => {
-      disposed = true;
-      window.clearInterval(liveInterval);
-      window.clearInterval(cartInterval);
-      supabase.removeChannel(channel);
-
-      if (liveBubbleTimerRef.current) {
-        window.clearTimeout(liveBubbleTimerRef.current);
-        liveBubbleTimerRef.current = null;
-      }
-    };
-  }, []);
-
-  // badge de conversas ativas — atualiza em tempo real e a cada minuto
-  useEffect(() => {
-    countActiveChats().then(setUnreadChats);
-    const interval = setInterval(() => countActiveChats().then(setUnreadChats), 60_000);
-    const ch = supabase
-      .channel("layout-active-chats")
-      .on("postgres_changes", { event: "*", schema: "public", table: "whatsapp_conversations" }, () => {
-        countActiveChats().then(setUnreadChats);
-      })
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "whatsapp_messages" }, () => {
-        countActiveChats().then(setUnreadChats);
-      })
-      .subscribe();
-    return () => {
-      clearInterval(interval);
-      supabase.removeChannel(ch);
-    };
-  }, []);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [anyAdmin, setAnyAdmin] = useState(true);
-  const [userId, setUserId] = useState<string>("");
-  const [wide, setWide] = useState(getWideMode());
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [isDesktop, setIsDesktop] = useState(false);
-
-  useEffect(() => {
-    const mq = window.matchMedia("(min-width: 1024px)");
-    const sync = () => setIsDesktop(mq.matches);
-    sync();
-    mq.addEventListener?.("change", sync);
-    return () => mq.removeEventListener?.("change", sync);
-  }, []);
-
-  useEffect(() => {
-    document.body.classList.add("hb-admin-active");
-    return () => document.body.classList.remove("hb-admin-active");
-  }, []);
-
-  useEffect(() => {
-    const handler = (e: any) => setWide(!!e.detail);
-    window.addEventListener(WIDE_MODE_EVENT, handler);
-    return () => window.removeEventListener(WIDE_MODE_EVENT, handler);
-  }, []);
-
-  // som alto sempre que chegar mensagem nova de cliente (qualquer tela da loja)
-  useEffect(() => {
-    const ch = supabase
-      .channel("layout-incoming-msg-beep")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "whatsapp_messages", filter: "direction=eq.in" },
-        () => playIncomingBeep(),
-      )
-      .subscribe();
-    // desbloqueia o AudioContext no 1º gesto do usuário (política do navegador)
-    const unlock = () => {
-      try {
-        const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
-        if (Ctx) {
-          __audioCtx ||= new Ctx();
-          __audioCtx?.resume().catch(() => {});
-        }
-      } catch {
-        /* ignore */
-      }
-      // Desbloqueia também o AudioContext do alarme sintetizado de pedidos
-      try {
-        const Ctx2 = (window as any).AudioContext || (window as any).webkitAudioContext;
-        if (Ctx2) { const tmp = new Ctx2(); tmp.resume().catch(() => {}); }
-      } catch { /* ignore */ }
-      window.removeEventListener("pointerdown", unlock);
-      window.removeEventListener("keydown", unlock);
-    };
-    window.addEventListener("pointerdown", unlock);
-    window.addEventListener("keydown", unlock);
-    return () => {
-      supabase.removeChannel(ch);
-      window.removeEventListener("pointerdown", unlock);
-      window.removeEventListener("keydown", unlock);
-    };
-  }, []);
-
-  function toggleWide() {
-    const next = !wide;
-    setWide(next);
-    setWideMode(next);
-  }
-
-  function toggleFullscreen() {
-    if (document.fullscreenElement) {
-      document.exitFullscreen();
-    } else {
-      document.documentElement.requestFullscreen().catch(() => toast.error("Não foi possível entrar em tela cheia"));
-    }
-  }
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const { data: u } = await supabase.auth.getUser();
-        if (!u.user) {
-          setChecking(false);
-          return;
-        }
-        setUserId(u.user.id);
-        const { data: role } = await supabase
-          .from("user_roles")
-          .select("role")
-          .eq("user_id", u.user.id)
-          .eq("role", "store_admin")
-          .maybeSingle();
-        setIsAdmin(!!role);
-        if (!role) {
-          const { count } = await supabase
-            .from("user_roles")
-            .select("*", { count: "exact", head: true })
-            .eq("role", "store_admin");
-          setAnyAdmin((count ?? 0) > 0);
-        }
-      } catch (e) {
-        console.error("admin check failed", e);
-      } finally {
-        setChecking(false);
-      }
-    })();
-  }, []);
-
-  async function claim() {
-    const { data, error } = await supabase.rpc("claim_first_admin");
-    if (error) return toast.error("Não foi possível reivindicar");
-    if (data) {
-      toast.success("Você agora é administrador da loja!");
-      setIsAdmin(true);
-    } else toast.error("Já existe um administrador");
-  }
-
-  async function signOut() {
-    await supabase.auth.signOut();
-    nav({ to: "/admin/login" });
-  }
-
-  // Itens de uso mais frequente ficam soltos, sempre visíveis. O resto entra
-  // em grupos — o menu tinha 14 itens soltos e ficou grande demais pra
-  // escanear rápido.
-  //
-  // IMPORTANTE: esse bloco (e o useState/useEffect dele) precisa ficar ANTES
-  // dos returns antecipados de "Verificando acesso..." / "Acesso restrito"
-  // logo abaixo — hook não pode ser chamado condicionalmente. Colocar depois
-  // de um return causava "Rendered more hooks than during the previous
-  // render" (erro #310) assim que `checking` virava false.
-  const nav_pinned = [
-    { to: "/loja/dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { to: "/loja", label: "Pedidos", icon: ClipboardList, exact: true },
-    { to: "/loja/chat", label: "Chat", icon: MessageCircle },
-  ];
-
-  const nav_groups: { key: string; label: string; icon: typeof Pizza; items: typeof nav_pinned }[] = [
-    {
-      key: "cardapio",
-      label: "Cardápio",
-      icon: Pizza,
-      items: [
-        { to: "/loja/produtos", label: "Produtos", icon: Pizza },
-        { to: "/loja/precificacao", label: "Precificação", icon: Calculator },
-        { to: "/loja/cupons", label: "Cupons", icon: Ticket },
-      ],
-    },
-    {
-      key: "entrega",
-      label: "Entrega",
-      icon: Truck,
-      items: [
-        { to: "/loja/frete", label: "Frete", icon: Truck },
-        { to: "/loja/zonas-entrega", label: "Zonas", icon: MapPinned },
-        { to: "/loja/entregadores", label: "Entregadores", icon: Bike },
-      ],
-    },
-    {
-      key: "comercial",
-      label: "Comercial",
-      icon: TrendingUp,
-      items: [
-        { to: "/loja/pedidos", label: "Histórico", icon: History },
-        { to: "/loja/financeiro", label: "Financeiro", icon: TrendingUp },
-        { to: "/loja/analytics", label: "Analytics 360", icon: BarChart3 },
-        { to: "/loja/reengajamento", label: "Recuperação de vendas", icon: TrendingUp },
-        { to: "/loja/financeiro-cardapio", label: "Financeiro Cardápio", icon: WalletCards },
-        { to: "/loja/fidelidade", label: "Clube HotBox", icon: Trophy },
-        { to: "/loja/receber", label: "A Receber", icon: HandCoins },
-        { to: "/loja/leads", label: "Leads", icon: Users },
-        { to: "/loja/avaliacoes", label: "Avaliações", icon: ThumbsUp },
-      ],
-    },
-    {
-      key: "sistema",
-      label: "Sistema",
-      icon: Settings,
-      items: [
-        { to: "/loja/logs", label: "Logs", icon: ScrollText },
-        { to: "/loja/config", label: "Config", icon: Settings },
-      ],
-    },
-  ];
-
-  function isItemActive(n: { to: string; exact?: boolean }) {
-    return n.exact ? loc.pathname === n.to : loc.pathname.startsWith(n.to);
-  }
-  function isGroupActive(group: (typeof nav_groups)[number]) {
-    return group.items.some(isItemActive);
-  }
-
-  // Grupo com a rota ativa começa aberto; os outros começam fechados. O
-  // usuário pode abrir/fechar livremente depois — só reabre sozinho quando a
-  // navegação entra num grupo diferente.
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
-    const initial: Record<string, boolean> = {};
-    for (const g of nav_groups) initial[g.key] = isGroupActive(g);
-    return initial;
-  });
-  useEffect(() => {
-    const active = nav_groups.find(isGroupActive);
-    if (active) setOpenGroups((prev) => (prev[active.key] ? prev : { ...prev, [active.key]: true }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loc.pathname]);
-  function toggleGroup(key: string) {
-    setOpenGroups((prev) => ({ ...prev, [key]: !prev[key] }));
-  }
-
-  if (checking)
-    return <div className="grid min-h-screen place-items-center text-muted-foreground">Verificando acesso...</div>;
-
-  if (!isAdmin) {
+  const liveMenuSessions = useMemo(() => liveSessions.filter((session) => {
+    const raw = canonicalPageKey(session.current_page_path || session.entry_path || "/");
     return (
-      <div className="grid min-h-screen place-items-center bg-background px-4">
-        <Card className="w-full max-w-md p-6 text-center">
-          <ShieldCheck className="mx-auto mb-3 size-10 text-primary" />
-          <h1 className="text-xl font-bold">Acesso restrito</h1>
-          {!anyAdmin ? (
-            <>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Nenhum administrador cadastrado. Como você é o primeiro, pode se tornar o dono da loja.
-              </p>
-              <Button className="mt-4 w-full" onClick={claim}>
-                Sou o dono da loja
-              </Button>
-            </>
-          ) : (
-            <p className="mt-2 text-sm text-muted-foreground">Peça a um administrador para liberar seu acesso.</p>
-          )}
-          <Button variant="outline" className="mt-3 w-full" onClick={signOut}>
-            Sair
-          </Button>
-        </Card>
-      </div>
+      raw === "/cardapio" || raw === "/carrinho" || raw === "/checkout" || raw.startsWith("/produto/")
     );
+  }), [liveSessions]);
+
+  const liveDeliverySessions = useMemo(() => liveSessions.filter((session) => {
+    const raw = canonicalPageKey(session.current_page_path || session.entry_path || "/");
+    return raw === "/entrega/verificar";
+  }), [liveSessions]);
+
+  const liveProcessSessions = useMemo(() => {
+    const seen = new Set<string>();
+    return [...liveMenuSessions, ...liveDeliverySessions].filter((session) => {
+      const key = String(session.id || session.visitor_id || "");
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [liveMenuSessions, liveDeliverySessions]);
+
+  const liveWithRegion = liveProcessSessions.filter((session) => latestRegionBySession.has(String(session.id))).length;
+  const liveAwaitingRegion = liveDeliverySessions.length;
+
+  const topProducts = useMemo(() => {
+    const grouped = new Map<string, { views: number; carts: number; value: number }>();
+    for (const event of events) {
+      if (!["product_view", "add_to_cart", "order_bump_added"].includes(String(event.event_name))) continue;
+      const name = String(event.product_name || event.properties?.product_name || "Produto não identificado").trim();
+      const row = grouped.get(name) || { views: 0, carts: 0, value: 0 };
+      if (event.event_name === "product_view") row.views += 1;
+      if (["add_to_cart", "order_bump_added"].includes(event.event_name)) row.carts += Number(event.quantity || 1);
+      row.value += Number(event.value || 0);
+      grouped.set(name, row);
+    }
+    return [...grouped.entries()]
+      .map(([name, data]) => ({ name, ...data }))
+      .sort((a, b) => b.views - a.views || b.carts - a.carts)
+      .slice(0, 12);
+  }, [events]);
+
+  const filteredTopProducts = useMemo(() => topProducts.filter((row) => {
+    const matchesText = !productFilter.trim() || row.name.toLowerCase().includes(productFilter.trim().toLowerCase());
+    const matchesActivity = productActivityFilter === "all" ||
+      (productActivityFilter === "viewed" && row.views > 0) ||
+      (productActivityFilter === "cart" && row.carts > 0) ||
+      (productActivityFilter === "high_interest" && row.views > 0 && row.carts / row.views >= 0.2);
+    return matchesText && matchesActivity;
+  }), [topProducts, productFilter, productActivityFilter]);
+
+  const paymentMethodRows = useMemo(() => {
+    const grouped = new Map<string, number>();
+    for (const session of actualMenuSessions.filter((s) => s.converted)) {
+      const key = nicePayment(session.payment_method);
+      grouped.set(key, (grouped.get(key) || 0) + 1);
+    }
+    return [...grouped.entries()].sort((a, b) => b[1] - a[1]);
+  }, [actualMenuSessions]);
+
+
+  const liveByPage = useMemo(() => {
+    const grouped = new Map<string, number>();
+
+    for (const session of liveProcessSessions) {
+      const key = canonicalPageKey(
+        session.current_page_path || session.entry_path || "/",
+      );
+      grouped.set(key, (grouped.get(key) || 0) + 1);
+    }
+
+    return [...grouped.entries()].sort((a, b) => b[1] - a[1]);
+  }, [liveProcessSessions]);
+
+  const liveIdentified = liveProcessSessions.filter(
+    (session) => session.customer_name || session.customer_phone,
+  ).length;
+
+
+  const liveRows = useMemo(() => {
+    return liveProcessSessions
+      .map((session) => {
+        const region = latestRegionBySession.get(String(session.id));
+        return {
+          ...session,
+          currentPageLabel: friendlyPagePath(session.current_page_path || session.entry_path || "/"),
+          channelLabel: trafficChannel(session),
+          regionLabel: region?.neighborhood || "",
+          cep: region?.cep || "",
+        };
+      })
+      .sort((a, b) => new Date(b.presence_last_seen_at || 0).getTime() - new Date(a.presence_last_seen_at || 0).getTime());
+  }, [liveProcessSessions, latestRegionBySession]);
+
+  const filteredLiveRows = useMemo(() => liveRows.filter((row) => {
+    const pageKey = canonicalPageKey(row.current_page_path || row.entry_path || "/");
+    const origin = trafficChannel(row);
+    const matchesPage = livePageFilter === "all" ||
+      (livePageFilter === "product" && pageKey.startsWith("/produto/")) ||
+      (livePageFilter === "cart" && pageKey === "/carrinho") ||
+      (livePageFilter === "checkout" && pageKey === "/checkout") ||
+      (livePageFilter === "delivery" && pageKey === "/entrega/verificar") ||
+      (livePageFilter === "menu" && pageKey === "/cardapio");
+    const matchesOrigin = liveOriginFilter === "all" || origin === liveOriginFilter;
+    return matchesPage && matchesOrigin;
+  }), [liveRows, livePageFilter, liveOriginFilter]);
+
+  function groupSessions(field: string) {
+    const m = new Map<
+      string,
+      { count: number; conv: number; revenue: number }
+    >();
+
+    actualMenuSessions.forEach((s) => {
+      const k = String(s[field] || "Não identificado");
+      const x = m.get(k) || {
+        count: 0,
+        conv: 0,
+        revenue: 0,
+      };
+      x.count++;
+      if (s.converted) x.conv++;
+      x.revenue += Number(s.revenue || 0);
+      m.set(k, x);
+    });
+
+    return [...m.entries()]
+      .sort((a, b) => b[1].count - a[1].count)
+      .slice(0, 12);
   }
 
-  const isChatPage = loc.pathname.startsWith("/loja/chat");
-  const horizontal = isDesktop && (wide || isChatPage);
+  function groupEvents(name: string, field: string) {
+    const m = new Map<
+      string,
+      { count: number; value: number }
+    >();
 
-  const mobileNav = [
-    { to: "/loja", label: "Pedidos", icon: ClipboardList, exact: true },
-    { to: "/loja/chat", label: "Chat", icon: MessageCircle },
-    { to: "/loja/produtos", label: "Cardápio", icon: Pizza },
-    { to: "/loja/financeiro-cardapio", label: "Financeiro", icon: WalletCards },
-    { to: "/loja/config", label: "Ajustes", icon: Settings },
+    events
+      .filter((e) => e.event_name === name)
+      .forEach((e) => {
+        const k = String(
+          e[field] ||
+            e.properties?.[field] ||
+            "Não identificado",
+        );
+        const x = m.get(k) || { count: 0, value: 0 };
+        x.count += Number(e.quantity || 1);
+        x.value += Number(e.value || 0);
+        m.set(k, x);
+      });
+
+    return [...m.entries()]
+      .sort((a, b) => b[1].count - a[1].count)
+      .slice(0, 12);
+  }
+
+  function groupPageViews() {
+    const m = new Map<
+      string,
+      { count: number; value: number }
+    >();
+
+    events
+      .filter((e) => e.event_name === "page_view")
+      .forEach((e) => {
+        const raw =
+          e.page_path ||
+          e.properties?.page_path ||
+          e.properties?.event_source_url ||
+          "/";
+        const key = canonicalPageKey(raw);
+        const x = m.get(key) || { count: 0, value: 0 };
+        x.count += 1;
+        x.value += Number(e.value || 0);
+        m.set(key, x);
+      });
+
+    return [...m.entries()]
+      .sort((a, b) => b[1].count - a[1].count)
+      .slice(0, 12);
+  }
+
+  function journeyStage(session: SessionRow) {
+    const id = String(session.id);
+    const sessionEvents = eventSet.get(id);
+    if (session.converted) return "Comprou";
+    if (rejectedSessionIds.has(id)) return "Cartão não aprovado";
+    if (abandonedSessionIds.has(id)) return "Abandonou checkout";
+    if (platformRedirectSessionIds.has(id)) return "Foi para plataforma parceira";
+    if (outsideAreaSessionIds.has(id)) return "Fora da área própria";
+    if (deliveryCheckAbandonSessionIds.has(id)) return "Abandonou na verificação da entrega";
+    if (deliveryApprovedSessionIds.has(id)) return "Entrega confirmada";
+    if (deliveryCheckStartedSessionIds.has(id)) return "Verificando entrega";
+    if (sessionEvents?.has("checkout_started") || sessionEvents?.has("checkout_created")) return "Iniciou checkout";
+    if (sessionEvents?.has("add_to_cart") || sessionEvents?.has("order_bump_added")) return "Adicionou à sacola";
+    if (sessionEvents?.has("product_view")) return "Viu produto";
+    if (menuAccessSessionIds.has(id)) return "Entrou no cardápio";
+    return "Visita não identificada";
+  }
+
+  const originOptions = useMemo(() => Array.from(new Set(sessions.map((s) => trafficChannel(s)))).sort(), [sessions]);
+  const campaignOptions = useMemo(() => Array.from(new Set(sessions.map((s) => String(s.campaign || "").trim()).filter(Boolean))).sort(), [sessions]);
+
+  const filteredJourney = sessions.filter((s) => {
+    const q = search.trim().toLowerCase();
+    const matchesSearch = !q || [
+      s.customer_name, s.customer_phone, s.source, s.medium, s.campaign, s.order_id, s.checkout_id, s.visitor_id,
+    ].some((v) => String(v || "").toLowerCase().includes(q));
+    const matchesOrigin = journeyOriginFilter === "all" || trafficChannel(s) === journeyOriginFilter;
+    const matchesCampaign = journeyCampaignFilter === "all" || String(s.campaign || "") === journeyCampaignFilter;
+    const matchesSituation = journeySituationFilter === "all" || journeyStage(s) === journeySituationFilter;
+    return matchesSearch && matchesOrigin && matchesCampaign && matchesSituation;
+  });
+
+  const journeyTotalPages = Math.max(
+    1,
+    Math.ceil(filteredJourney.length / JOURNEY_PAGE_SIZE),
+  );
+
+  const currentJourneyPage = Math.min(journeyPage, journeyTotalPages);
+
+  const journey = filteredJourney.slice(
+    (currentJourneyPage - 1) * JOURNEY_PAGE_SIZE,
+    currentJourneyPage * JOURNEY_PAGE_SIZE,
+  );
+
+  const funnel = [
+    {
+      label: "Entraram no cardápio",
+      value: actualMenuSessions.length,
+      help: "Acesso real ao cardápio. O CEP não bloqueia mais a entrada.",
+    },
+    {
+      label: "Abriram algum produto",
+      value: productViews,
+      help: "Pessoas que tocaram em um produto para ver os detalhes.",
+    },
+    {
+      label: "Colocaram algo na sacola",
+      value: addCart,
+      help: "Pessoas que demonstraram intenção de compra adicionando um item.",
+    },
+    {
+      label: "Chegaram à verificação de entrega",
+      value: deliveryChecksStarted,
+      help: "Pessoas que montaram a sacola e avançaram para confirmar CEP/bairro e taxa.",
+    },
+    {
+      label: "Tiveram entrega própria aprovada",
+      value: deliveryApproved,
+      help: "Pessoas em endereço atendido diretamente pela HotBox.",
+    },
+    {
+      label: "Iniciaram checkout",
+      value: checkout,
+      help: "Pessoas que avançaram para dados e pagamento após a entrega ser confirmada ou escolheram retirada.",
+    },
+    {
+      label: "Começaram o pagamento",
+      value: payment,
+      help: "Pessoas que chegaram à etapa de escolher ou iniciar o pagamento.",
+    },
+    {
+      label: "Compraram",
+      value: converted,
+      help: "Pessoas que concluíram uma compra no período.",
+    },
   ];
 
-  const mobileTitle =
-    mobileNav.find((item) => item.exact ? loc.pathname === item.to : loc.pathname.startsWith(item.to))?.label ||
-    (loc.pathname.includes("/pedido/") ? "Pedido" : "HOTBOX DELIVERY");
+  const cards = [
+    {
+      title: "Pessoas diferentes",
+      value: visitors,
+      icon: Users,
+      help: "Quantidade aproximada de pessoas diferentes que realmente abriram o cardápio.",
+    },
+    {
+      title: "Entradas reais no cardápio",
+      value: actualMenuSessions.length,
+      icon: Eye,
+      help: "Uma mesma pessoa pode entrar mais de uma vez em momentos diferentes.",
+    },
+    {
+      title: "Compras concluídas",
+      value: `${converted} (${pct(converted, actualMenuSessions.length)})`,
+      icon: CheckCircle2,
+      help: "Mostra quantas visitas terminaram em compra.",
+    },
+    {
+      title: "Valor das compras",
+      value: brl(revenue),
+      icon: TrendingUp,
+      help: "Total de vendas que o sistema conseguiu ligar às visitas mostradas aqui.",
+    },
+    {
+      title: "Páginas abertas",
+      value: pageViews,
+      icon: MousePointerClick,
+      help: "Total de vezes que as páginas acompanhadas foram abertas.",
+    },
+    {
+      title: "Colocaram na sacola",
+      value: addCart,
+      icon: ShoppingCart,
+      help: "Pessoas que adicionaram pelo menos um produto à sacola.",
+    },
+    {
+      title: "Foram finalizar",
+      value: checkout,
+      icon: CreditCard,
+      help: "Pessoas que chegaram à parte final do pedido.",
+    },
+    {
+      title: "Desistiram no caminho",
+      value: abandoned,
+      icon: Ban,
+      help: "Pessoas que colocaram algo na sacola ou começaram a finalizar, mas não compraram e ficaram mais de 15 minutos sem continuar.",
+    },
+    {
+      title: "Cartões não aprovados",
+      value: rejectedCardCount,
+      icon: CreditCard,
+      help: "Quantidade de tentativas de pagamento no cartão que não foram aprovadas. Uma mesma pessoa pode tentar mais de uma vez.",
+    },
+    {
+      title: "Vieram da Meta",
+      value: metaSessions.length,
+      icon: Megaphone,
+      help: "Visitas identificadas como vindas do Facebook, Instagram ou de um anúncio da Meta.",
+    },
+  ];
+
+  const connected =
+    health?.ok &&
+    !health?.client_sessions_error &&
+    !health?.client_events_error;
+
+  const campaignRows = useMemo(() => {
+    const grouped = new Map<string, {
+      source: string; medium: string; campaign: string; content: string;
+      visits: number; productViews: number; carts: number; deliveryChecks: number;
+      deliveryApproved: number; deliveryAbandons: number; outsideArea: number;
+      platformRedirects: number; purchases: number; revenue: number;
+    }>();
+    const deliveryAbandonIds = deliveryCheckAbandonSessionIds;
+    for (const session of actualMenuSessions) {
+      const id = String(session.id);
+      const campaign = String(session.campaign || "").trim();
+      if (!campaign) continue;
+      const source = String(session.source || "direct");
+      const medium = String(session.medium || "");
+      const content = String(session.content || "");
+      const key = `${source}::${medium}::${campaign}::${content}`;
+      const row = grouped.get(key) || {
+        source, medium, campaign, content, visits: 0, productViews: 0, carts: 0,
+        deliveryChecks: 0, deliveryApproved: 0, deliveryAbandons: 0, outsideArea: 0,
+        platformRedirects: 0, purchases: 0, revenue: 0,
+      };
+      row.visits += 1;
+      const sessionEvents = eventSet.get(id);
+      if (sessionEvents?.has("product_view")) row.productViews += 1;
+      if (sessionEvents?.has("add_to_cart") || sessionEvents?.has("order_bump_added")) row.carts += 1;
+      if (deliveryCheckStartedSessionIds.has(id)) row.deliveryChecks += 1;
+      if (deliveryApprovedSessionIds.has(id)) row.deliveryApproved += 1;
+      if (deliveryAbandonIds.has(id)) row.deliveryAbandons += 1;
+      if (outsideAreaSessionIds.has(id)) row.outsideArea += 1;
+      if (platformRedirectSessionIds.has(id)) row.platformRedirects += 1;
+      if (session.converted) row.purchases += 1;
+      row.revenue += Number(session.revenue || 0);
+      grouped.set(key, row);
+    }
+    return [...grouped.values()].sort((a, b) => b.purchases - a.purchases || b.visits - a.visits);
+  }, [actualMenuSessions, eventSet, deliveryCheckStartedSessionIds, deliveryApprovedSessionIds, deliveryCheckAbandonSessionIds, outsideAreaSessionIds, platformRedirectSessionIds]);
+
+  const filteredCampaignRows = useMemo(() => campaignRows.filter((row) => {
+    const channel = trafficChannel({ source: row.source, medium: row.medium });
+    const matchesOrigin = campaignOriginFilter === "all" || channel === campaignOriginFilter;
+    const matchesCampaign = campaignNameFilter === "all" || row.campaign === campaignNameFilter;
+    const matchesResult = campaignResultFilter === "all" ||
+      (campaignResultFilter === "sales" && row.purchases > 0) ||
+      (campaignResultFilter === "traffic" && row.visits > 0) ||
+      (campaignResultFilter === "no_sales" && row.visits > 0 && row.purchases === 0) ||
+      (campaignResultFilter === "delivery_abandon" && row.deliveryAbandons > 0) ||
+      (campaignResultFilter === "outside" && row.outsideArea > 0) ||
+      (campaignResultFilter === "platform" && row.platformRedirects > 0);
+    return matchesOrigin && matchesCampaign && matchesResult;
+  }), [campaignRows, campaignOriginFilter, campaignNameFilter, campaignResultFilter]);
+
+  const regionRows = useMemo(() => {
+    const purchaseSessions = new Set(actualMenuSessions.filter((s) => s.converted).map((s) => String(s.id)));
+    const cartSessions = new Set(events.filter((e) => ["add_to_cart", "order_bump_added"].includes(String(e.event_name))).map((e) => String(e.session_id)));
+    const latestBySession = new Map<string, any>();
+    for (const event of events) {
+      if (event.event_name !== "delivery_area_checked") continue;
+      const sessionId = String(event.session_id || "");
+      if (!sessionId || latestBySession.has(sessionId)) continue;
+      latestBySession.set(sessionId, event);
+    }
+    const grouped = new Map<string, any>();
+    for (const [sessionId, event] of latestBySession.entries()) {
+      const cep = String(event.properties?.cep || "").replace(/\D/g, "").slice(0, 8);
+      const neighborhood = String(event.properties?.neighborhood || "Não identificado").trim() || "Não identificado";
+      const supported = event.properties?.supported !== false;
+      const key = `${cep || "sem_cep"}::${neighborhood.toLowerCase()}`;
+      const row = grouped.get(key) || { cep, neighborhood, checks: 0, supported: 0, outside: 0, platformRedirects: 0, carts: 0, purchases: 0 };
+      row.checks += 1;
+      if (supported) row.supported += 1;
+      else row.outside += 1;
+      if (platformRedirectSessionIds.has(sessionId)) row.platformRedirects += 1;
+      if (cartSessions.has(sessionId)) row.carts += 1;
+      if (purchaseSessions.has(sessionId)) row.purchases += 1;
+      grouped.set(key, row);
+    }
+    return [...grouped.values()].sort((a, b) => b.checks - a.checks);
+  }, [events, actualMenuSessions, platformRedirectSessionIds]);
+
+  const filteredRegionRows = useMemo(() => regionRows.filter((row) => {
+    const q = regionFilter.trim().toLowerCase();
+    const matchesText = !q || String(row.neighborhood).toLowerCase().includes(q) || String(row.cep).includes(q.replace(/\D/g, ""));
+    const matchesStatus = regionStatusFilter === "all" ||
+      (regionStatusFilter === "inside" && row.supported > 0) ||
+      (regionStatusFilter === "outside" && row.outside > 0) ||
+      (regionStatusFilter === "platform" && row.platformRedirects > 0);
+    return matchesText && matchesStatus;
+  }), [regionRows, regionFilter, regionStatusFilter]);
+
+  const regionNeighborhoodRows = useMemo(() => {
+    const grouped = new Map<string, { neighborhood: string; checks: number; supported: number; purchases: number; outside: number; platformRedirects: number }>();
+    for (const row of regionRows) {
+      const key = row.neighborhood.toLowerCase();
+      const current = grouped.get(key) || { neighborhood: row.neighborhood, checks: 0, supported: 0, purchases: 0, outside: 0, platformRedirects: 0 };
+      current.checks += row.checks;
+      current.supported += row.supported;
+      current.purchases += row.purchases;
+      current.outside += row.outside;
+      current.platformRedirects += row.platformRedirects;
+      grouped.set(key, current);
+    }
+    return [...grouped.values()].sort((a, b) => b.checks - a.checks).slice(0, 10);
+  }, [regionRows]);
+
+  const utmUrl = useMemo(() => {
+    const base = "https://hotbox.up.railway.app/";
+    const url = new URL(base);
+    if (utmSource.trim()) url.searchParams.set("utm_source", utmSource.trim().toLowerCase().replace(/\s+/g, "_"));
+    if (utmMedium.trim()) url.searchParams.set("utm_medium", utmMedium.trim().toLowerCase().replace(/\s+/g, "_"));
+    if (utmCampaign.trim()) url.searchParams.set("utm_campaign", utmCampaign.trim().toLowerCase().replace(/\s+/g, "_"));
+    if (utmContent.trim()) url.searchParams.set("utm_content", utmContent.trim().toLowerCase().replace(/\s+/g, "_"));
+    return url.toString();
+  }, [utmSource, utmMedium, utmCampaign, utmContent]);
+
+  function applyUtmPreset(source: "instagram" | "facebook", paid: boolean) {
+    setUtmSource(source);
+    setUtmMedium(paid ? "paid_social" : "organic_social");
+    if (!utmCampaign.trim()) {
+      setUtmCampaign(paid ? "campanha_meta" : source === "instagram" ? "bio_instagram" : "pagina_facebook");
+    }
+  }
+
+  async function copyUtm() {
+    try {
+      await navigator.clipboard.writeText(utmUrl);
+      setUtmCopied(true);
+      window.setTimeout(() => setUtmCopied(false), 1600);
+    } catch {
+      setUtmCopied(false);
+    }
+  }
 
   return (
-    <div className="hotbox-admin-shell min-h-screen bg-background lg:flex lg:flex-col">
-      <FreightApprovalPopup />
-      <HumanHandoffAlert />
-      <AutoPrintReceipt />
-      {/* botões de tela larga / tela cheia — fixos, aparecem em qualquer página */}
-
-      <div className="fixed right-3 top-3 z-50 hidden gap-1.5 lg:flex">
-        <Button
-          variant="outline"
-          size="icon"
-          className="bg-background shadow-md"
-          title={wide ? "Mostrar menu" : "Tela larga (esconde o menu)"}
-          onClick={toggleWide}
-        >
-          {wide ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
-        </Button>
-        <Button
-          variant="outline"
-          size="icon"
-          className="bg-background shadow-md"
-          title={isFullscreen ? "Sair da tela cheia (Esc)" : "Tela cheia (F11)"}
-          onClick={toggleFullscreen}
-        >
-          {isFullscreen ? <Shrink className="size-4" /> : <Expand className="size-4" />}
-        </Button>
+    <div className="hotbox-admin-page space-y-5 print:p-0">
+      <div className="hotbox-admin-header print:hidden">
+        <div className="hotbox-admin-title-wrap">
+          <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-zinc-950 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-[#ffcf00]">
+            <TrendingUp className="size-3.5" /> Analytics HotBox
+          </div>
+          <h1 className="hotbox-admin-title">O que realmente está trazendo vendas</h1>
+          <p className="hotbox-admin-subtitle">
+            Ao vivo, tráfego pago e orgânico, produtos, sacola, verificação de entrega, regiões, plataformas parceiras, pagamentos e jornada completa até a compra — tudo separado em abas.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {[1, 7, 30, 90].map((d) => (
+            <Button key={d} size="sm" variant={days === d ? "default" : "outline"} onClick={() => setDays(d)}>
+              {d === 1 ? "Hoje" : `${d} dias`}
+            </Button>
+          ))}
+          <Button size="sm" variant="outline" onClick={() => { void load(); void loadLive(); }}>
+            <RefreshCw className="mr-2 size-4" /> Atualizar
+          </Button>
+        </div>
       </div>
 
-      {!horizontal && (
-        <div className="lg:flex lg:flex-1">
-          <aside className="sticky top-0 z-30 hidden h-screen w-64 shrink-0 flex-col justify-between overflow-y-auto bg-foreground px-4 py-5 lg:flex">
-            <div>
-              <Link to="/loja/dashboard" className="mb-6 flex items-center gap-3 px-1">
-                <img src={HOTBOX_LOGO_URL} alt="HotBox Delivery" className="h-14 w-14 rounded-xl object-contain shadow" />
-                <div className="leading-tight">
-                  <p className="font-display text-lg font-black text-background">
-                    HOT<span className="text-primary">BOX</span>
-                  </p>
-                  <p className="text-[11px] font-bold uppercase tracking-widest text-primary">Delivery</p>
-                </div>
-              </Link>
-
-              <nav className="space-y-1">
-                {nav_pinned.map((n) => {
-                  const Icon = n.icon;
-                  const active = isItemActive(n);
-                  const isChat = n.to === "/loja/chat";
-                  const hasUnread = isChat && unreadChats > 0;
-                  return (
-                    <Link
-                      key={n.to}
-                      to={n.to}
-                      className={`group flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-semibold transition ${active ? "bg-background text-foreground shadow-sm" : "text-background/70 hover:bg-background/10 hover:text-background"}`}
-                    >
-                      <span className="flex items-center gap-3">
-                        <span className="relative">
-                          <Icon className={`size-[18px] ${hasUnread && !active ? "text-emerald-400" : ""}`} />
-                          {hasUnread && (
-                            <span className="absolute -right-1 -top-1 flex size-2 items-center justify-center">
-                              <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                              <span className="relative inline-flex size-2 rounded-full bg-emerald-400" />
-                            </span>
-                          )}
-                        </span>
-                        {n.label}
-                        {hasUnread && (
-                          <span className="ml-1 rounded-full bg-emerald-400 px-1.5 py-0.5 text-[10px] font-bold leading-none text-foreground">
-                            {unreadChats}
-                          </span>
-                        )}
-                      </span>
-                      {active && <span className="size-1.5 rounded-full bg-primary" />}
-                    </Link>
-                  );
-                })}
-
-                <div className="my-2 border-t border-background/10" />
-
-                {nav_groups.map((group) => {
-                  const GroupIcon = group.icon;
-                  const groupActive = isGroupActive(group);
-                  const open = !!openGroups[group.key];
-                  return (
-                    <Collapsible key={group.key} open={open} onOpenChange={() => toggleGroup(group.key)}>
-                      <CollapsibleTrigger asChild>
-                        <button
-                          type="button"
-                          className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-sm font-semibold transition ${groupActive ? "text-background" : "text-background/70 hover:bg-background/10 hover:text-background"}`}
-                        >
-                          <span className="flex items-center gap-3">
-                            <GroupIcon className="size-[18px]" />
-                            {group.label}
-                          </span>
-                          {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
-                        </button>
-                      </CollapsibleTrigger>
-                      <CollapsibleContent className="space-y-1 py-1 pl-4">
-                        {group.items.map((n) => {
-                          const Icon = n.icon;
-                          const active = isItemActive(n);
-                          return (
-                            <Link
-                              key={n.to}
-                              to={n.to}
-                              className={`flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold transition ${active ? "bg-background text-foreground shadow-sm" : "text-background/70 hover:bg-background/10 hover:text-background"}`}
-                            >
-                              <Icon className="size-4" />
-                              {n.label}
-                            </Link>
-                          );
-                        })}
-                      </CollapsibleContent>
-                    </Collapsible>
-                  );
-                })}
-
-                <div className="my-2 border-t border-background/10" />
-
-                <a
-                  href="/entregador/login"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="group flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-semibold text-background/70 transition hover:bg-background/10 hover:text-background"
-                >
-                  <span className="flex items-center gap-3">
-                    <Bike className="size-[18px]" /> App do Entregador
-                  </span>
-                  <ExternalLink className="size-3.5 opacity-60" />
-                </a>
-              </nav>
-            </div>
-
-            <Button
-              variant="ghost"
-              onClick={signOut}
-              className="justify-start gap-3 text-background/70 hover:bg-background/10 hover:text-background"
-            >
-              <LogOut className="size-4" /> Sair
-            </Button>
-          </aside>
-
-          <header className="hb-mobile-app-header sticky top-0 z-40 lg:hidden">
-            <div className="flex min-h-16 items-center gap-3 px-4">
-              <img src={HOTBOX_LOGO_URL} alt="HotBox Delivery" className="size-10 rounded-xl object-cover shadow-sm" />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-[10px] font-black uppercase tracking-[0.18em] text-white/55">HOTBOX DELIVERY</p>
-                <h1 className="truncate text-base font-black text-white">{mobileTitle}</h1>
-              </div>
-              <PwaInstallButton compact />
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={signOut}
-                className="size-9 rounded-full text-white/75 hover:bg-white/10 hover:text-white"
-                title="Sair"
-              >
-                <LogOut className="size-4" />
-              </Button>
-            </div>
-          </header>
-
-          <main className={`hb-admin-mobile-main mx-auto max-w-7xl flex-1 lg:px-8 lg:py-6 ${isChatPage ? "hb-admin-chat-main" : ""}`}>
-            <Outlet />
-          </main>
-
-          <nav className="hb-mobile-bottom-nav lg:hidden" aria-label="Navegação principal">
-            {mobileNav.map((item) => {
-              const Icon = item.icon;
-              const active = item.exact ? loc.pathname === item.to : loc.pathname.startsWith(item.to);
-              const isChat = item.to === "/loja/chat";
-              const count = isChat ? unreadChats : 0;
-              return (
-                <Link key={item.to} to={item.to} className={`hb-mobile-nav-item ${active ? "is-active" : ""}`}>
-                  <span className="relative">
-                    <Icon className="size-5" strokeWidth={active ? 2.6 : 2} />
-                    {count > 0 && <span className="hb-mobile-nav-badge">{count > 99 ? "99+" : count}</span>}
-                  </span>
-                  <span>{item.label}</span>
-                </Link>
-              );
-            })}
-          </nav>
-        </div>
+      {!connected && !loading && (
+        <Card className="hotbox-admin-danger p-4 text-sm">
+          <b>Alguns dados podem estar temporariamente indisponíveis.</b>
+          <p className="mt-1 text-muted-foreground">O cardápio continua funcionando normalmente; esta mensagem afeta apenas os relatórios.</p>
+        </Card>
       )}
 
-      {horizontal && (
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Card className="hotbox-admin-kpi p-4">
+          <p className="text-xs font-bold uppercase text-zinc-500">Pessoas no cardápio</p>
+          <p className="mt-2 text-3xl font-black">{visitors}</p>
+          <p className="mt-1 text-xs text-zinc-500">{actualMenuSessions.length} sessões que realmente visualizaram o cardápio</p>
+        </Card>
+        <Card className="hotbox-admin-kpi p-4">
+          <p className="text-xs font-bold uppercase text-zinc-500">Compras concluídas</p>
+          <p className="mt-2 text-3xl font-black">{converted}</p>
+          <p className="mt-1 text-xs text-zinc-500">Conversão de {pct(converted, actualMenuSessions.length)}</p>
+        </Card>
+        <Card className="hotbox-admin-kpi p-4">
+          <p className="text-xs font-bold uppercase text-zinc-500">Vendas rastreadas</p>
+          <p className="mt-2 text-3xl font-black">{brl(revenue)}</p>
+          <p className="mt-1 text-xs text-zinc-500">Ticket médio {brl(avgTicket)}</p>
+        </Card>
+        <Card className="hotbox-admin-kpi p-4">
+          <p className="text-xs font-bold uppercase text-zinc-500">Antes do cardápio</p>
+          <p className="mt-2 text-3xl font-black">{deliveryCheckAbandonSessions.length + outsideAreaDetected}</p>
+          <p className="mt-1 text-xs text-zinc-500">{deliveryCheckAbandonSessions.length} abandonaram na entrega • {outsideAreaDetected} estavam fora da área</p>
+        </Card>
+      </div>
+
+      <div className="flex flex-wrap gap-2 rounded-2xl border bg-white p-2 shadow-sm print:hidden">
+        {[
+          ["overview", "Visão geral", Eye],
+          ["live", "Ao vivo", Activity],
+          ["campaigns", "Origem e campanhas", Megaphone],
+          ["regions", "Regiões", MapPin],
+          ["behavior", "Funil e comportamento", BarChart3],
+          ["journey", "Jornada detalhada", RouteIcon],
+        ].map(([key, label, Icon]: any) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setActiveTab(key)}
+            className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-black transition ${activeTab === key ? "bg-zinc-950 text-white shadow-sm" : "text-zinc-600 hover:bg-zinc-100"}`}
+          >
+            <Icon className={`size-4 ${activeTab === key ? "text-[#ffcf00]" : ""}`} /> {label}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <Card className="p-8 text-center text-sm text-muted-foreground">Carregando informações...</Card>
+      ) : (
         <>
-          <header className="sticky top-0 z-30 flex items-center gap-1 overflow-x-auto border-b bg-foreground px-4 py-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <Link to="/loja/dashboard" className="mr-3 flex shrink-0 items-center gap-2">
-              <img src={HOTBOX_LOGO_URL} alt="HotBox Delivery" className="h-10 w-10 rounded-lg object-contain" />
-            </Link>
-            {nav_pinned.map((n) => {
-              const Icon = n.icon;
-              const active = isItemActive(n);
-              const isChat = n.to === "/loja/chat";
-              const hasUnread = isChat && unreadChats > 0;
-              return (
-                <Link
-                  key={n.to}
-                  to={n.to}
-                  className={`relative flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition ${active ? "bg-background text-foreground" : "text-background/70 hover:bg-background/10 hover:text-background"}`}
-                >
-                  <span className="relative">
-                    <Icon className={`size-3.5 ${hasUnread && !active ? "text-emerald-400" : ""}`} />
-                    {hasUnread && (
-                      <span className="absolute -right-1 -top-1 flex size-1.5 items-center justify-center">
-                        <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                        <span className="relative inline-flex size-1.5 rounded-full bg-emerald-400" />
-                      </span>
-                    )}
-                  </span>
-                  {n.label}
-                  {hasUnread && (
-                    <span className="rounded-full bg-emerald-400 px-1 py-0.5 text-[9px] font-bold leading-none text-foreground">
-                      {unreadChats}
-                    </span>
-                  )}
-                </Link>
-              );
-            })}
+          {activeTab === "overview" && (
+            <div className="space-y-4">
+              <div className="grid gap-4 xl:grid-cols-[1.2fr_.8fr]">
+                <Card className="hotbox-admin-card p-5">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <h2 className="text-lg font-black">Resumo do negócio digital</h2>
+                      <p className="mt-1 text-sm text-muted-foreground">As métricas mais importantes para entender tráfego, intenção e venda.</p>
+                    </div>
+                    <Badge variant="secondary">{days === 1 ? "Hoje" : `${days} dias`}</Badge>
+                  </div>
+                  <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <div className="rounded-2xl bg-zinc-50 p-4"><p className="text-xs font-black uppercase text-zinc-500">Conversão</p><p className="mt-2 text-2xl font-black">{pct(converted, actualMenuSessions.length)}</p><p className="text-xs text-zinc-500">{converted} compras</p></div>
+                    <div className="rounded-2xl bg-zinc-50 p-4"><p className="text-xs font-black uppercase text-zinc-500">Ticket médio</p><p className="mt-2 text-2xl font-black">{brl(avgTicket)}</p><p className="text-xs text-zinc-500">{brl(revenue)} rastreados</p></div>
+                    <div className="rounded-2xl bg-zinc-50 p-4"><p className="text-xs font-black uppercase text-zinc-500">Sacola</p><p className="mt-2 text-2xl font-black">{addCart}</p><p className="text-xs text-zinc-500">{pct(addCart, actualMenuSessions.length)} das visitas</p></div>
+                    <div className="rounded-2xl bg-zinc-50 p-4"><p className="text-xs font-black uppercase text-zinc-500">Abandonos</p><p className="mt-2 text-2xl font-black">{abandoned}</p><p className="text-xs text-zinc-500">sem compra após intenção</p></div>
+                  </div>
 
-            <div className="mx-1 h-4 w-px shrink-0 bg-background/15" />
+                  <div className="mt-5">
+                    <h3 className="font-black">Principais origens</h3>
+                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                      {channelRows.slice(0, 6).map((row) => (
+                        <div key={row.channel} className="flex items-center justify-between rounded-2xl border bg-white p-3">
+                          <div><p className="font-bold">{row.channel}</p><p className="text-xs text-zinc-500">{row.visits} visitas • {row.purchases} compras</p></div>
+                          <div className="text-right"><p className="font-black">{pct(row.purchases, row.visits)}</p><p className="text-[11px] text-zinc-500">{brl(row.revenue)}</p></div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </Card>
 
-            {nav_groups.map((group) => {
-              const GroupIcon = group.icon;
-              const groupActive = isGroupActive(group);
-              return (
-                <DropdownMenu key={group.key}>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
-                      className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition ${groupActive ? "bg-background text-foreground" : "text-background/70 hover:bg-background/10 hover:text-background"}`}
-                    >
-                      <GroupIcon className="size-3.5" />
-                      {group.label}
-                      <ChevronDown className="size-3" />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start">
-                    <DropdownMenuLabel>{group.label}</DropdownMenuLabel>
-                    {group.items.map((n) => {
-                      const Icon = n.icon;
-                      const active = isItemActive(n);
+                <div className="space-y-4">
+                  <Card className="hotbox-admin-accent p-5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div><p className="text-xs font-black uppercase text-[#ffcf00]">Agora dentro do cardápio</p><p className="mt-1 text-4xl font-black">{liveMenuSessions.length}</p></div>
+                      <Users className="size-8 text-[#ffcf00]" />
+                    </div>
+                    <p className="mt-3 text-sm text-white/70">{liveMenuSessions.length} no cardápio • {liveDeliverySessions.length} verificando entrega agora.</p>
+                    {liveByPage.slice(0, 4).map(([page, count]) => (
+                      <div key={page} className="mt-2 flex justify-between rounded-xl bg-white/10 px-3 py-2 text-sm">
+                        <span>{friendlyPagePath(page)}</span><b>{count}</b>
+                      </div>
+                    ))}
+                  </Card>
+
+                  <Card className="hotbox-admin-card p-5">
+                    <h2 className="font-black">Alertas que merecem atenção</h2>
+                    <div className="mt-4 space-y-3">
+                      <div className="flex justify-between rounded-xl bg-amber-50 p-3"><span>Abandonos com intenção</span><b>{abandoned}</b></div>
+                      <div className="flex justify-between rounded-xl bg-red-50 p-3"><span>Cartões não aprovados</span><b>{rejectedCardCount}</b></div>
+                      <div className="flex justify-between rounded-xl bg-zinc-50 p-3"><span>Procura fora da área</span><b>{regionRows.reduce((sum, row) => sum + Number(row.outside || 0), 0)}</b></div>
+                    </div>
+                  </Card>
+                </div>
+              </div>
+
+              <Card className="hotbox-admin-card p-5">
+                <div className="flex items-start justify-between gap-4"><div><h2 className="text-lg font-black">Entrega depois da intenção de compra</h2><p className="mt-1 text-sm text-muted-foreground">Agora o cliente vê os produtos primeiro. A região só é confirmada depois que ele monta a sacola e decide continuar.</p></div><Badge variant="secondary">funil de entrega</Badge></div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-2xl border bg-zinc-50 p-4"><p className="text-xs font-black uppercase text-zinc-500">Chegaram à verificação</p><p className="mt-2 text-3xl font-black">{deliveryChecksStarted}</p><p className="text-xs text-zinc-500">já tinham montado a sacola</p></div>
+                  <div className="rounded-2xl border border-zinc-200 bg-white p-4"><p className="text-xs font-black uppercase text-zinc-500">Abandono na entrega</p><p className="mt-2 text-3xl font-black">{deliveryCheckAbandonSessions.length}</p><p className="text-xs text-zinc-500">montaram a sacola, mas saíram na verificação</p></div>
+                  <div className="rounded-2xl border border-red-200 bg-red-50 p-4"><p className="text-xs font-black uppercase text-red-700">Fora da área própria</p><p className="mt-2 text-3xl font-black text-red-700">{outsideAreaDetected}</p><p className="text-xs text-red-600">{platformRedirects} seguiram para plataforma parceira</p></div>
+                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4"><p className="text-xs font-black uppercase text-emerald-700">Entradas no cardápio</p><p className="mt-2 text-3xl font-black text-emerald-700">{actualMenuSessions.length}</p><p className="text-xs text-emerald-700">agora o cardápio abre antes do CEP</p></div>
+                </div>
+              </Card>
+            </div>
+          )}
+
+          {activeTab === "live" && (
+            <div className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                <Card className="hotbox-admin-kpi p-4"><p className="text-xs font-black uppercase text-zinc-500">Dentro do cardápio agora</p><p className="mt-2 text-3xl font-black">{liveMenuSessions.length}</p><p className="text-xs text-zinc-500">página principal, produtos, carrinho ou checkout</p></Card>
+                <Card className="hotbox-admin-kpi p-4"><p className="text-xs font-black uppercase text-zinc-500">Com região confirmada</p><p className="mt-2 text-3xl font-black">{liveWithRegion}</p><p className="text-xs text-zinc-500">CEP/bairro já identificado nesta sessão</p></Card>
+                <Card className="hotbox-admin-kpi p-4"><p className="text-xs font-black uppercase text-zinc-500">Verificando entrega</p><p className="mt-2 text-3xl font-black">{liveAwaitingRegion}</p><p className="text-xs text-zinc-500">chegaram aqui depois de montar a sacola</p></Card>
+                <Card className="hotbox-admin-kpi p-4"><p className="text-xs font-black uppercase text-zinc-500">Identificados</p><p className="mt-2 text-3xl font-black">{liveIdentified}</p><p className="text-xs text-zinc-500">nome ou telefone conhecido</p></Card>
+              </div>
+
+              <Card className="hotbox-admin-card p-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-black">Onde cada pessoa está agora</h2>
+                    <p className="mt-1 text-sm text-muted-foreground">Mostra a página real em que a pessoa está: produtos, carrinho, verificação de entrega ou checkout.</p>
+                  </div>
+                  <Badge variant="secondary">atualiza a cada 10s</Badge>
+                </div>
+                {liveError ? <div className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{liveError}</div> : null}
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <select className="h-9 rounded-lg border bg-white px-3 text-sm" value={livePageFilter} onChange={(e) => setLivePageFilter(e.target.value)}><option value="all">Todas as páginas</option><option value="menu">Página principal</option><option value="product">Produto</option><option value="cart">Carrinho</option><option value="checkout">Checkout</option><option value="delivery">Verificando entrega</option></select>
+                  <select className="h-9 rounded-lg border bg-white px-3 text-sm" value={liveOriginFilter} onChange={(e) => setLiveOriginFilter(e.target.value)}><option value="all">Todas as origens</option>{originOptions.map((o) => <option key={o} value={o}>{o}</option>)}</select>
+                </div>
+                <div className="mt-4 overflow-x-auto rounded-2xl border">
+                  <table className="w-full text-sm">
+                    <thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500"><tr><th className="p-3">Página atual</th><th className="p-3">Origem</th><th className="p-3">Região</th><th className="p-3">Visitante</th><th className="p-3">Último sinal</th></tr></thead>
+                    <tbody>
+                      {filteredLiveRows.length ? filteredLiveRows.map((row) => (
+                        <tr key={row.id} className="border-t">
+                          <td className="p-3 font-bold">{row.currentPageLabel}</td>
+                          <td className="p-3">{row.channelLabel}</td>
+                          <td className="p-3">{row.regionLabel ? <><b>{row.regionLabel}</b>{row.cep ? <div className="text-xs text-zinc-500">{row.cep.slice(0,5)}-{row.cep.slice(5)}</div> : null}</> : <span className="text-zinc-400">Ainda não informou CEP</span>}</td>
+                          <td className="p-3">{visitorIdentityLabel(row)}</td>
+                          <td className="p-3 whitespace-nowrap">{row.presence_last_seen_at ? dt(row.presence_last_seen_at) : "—"}</td>
+                        </tr>
+                      )) : <tr><td colSpan={5} className="p-8 text-center text-zinc-500">Ninguém no cardápio neste momento.</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            </div>
+          )}
+
+          {activeTab === "campaigns" && (
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                {[
+                  ["Instagram orgânico", channelTotals.instagramOrganic, Instagram],
+                  ["Instagram anúncios", channelTotals.instagramPaid, Instagram],
+                  ["Facebook orgânico", channelTotals.facebookOrganic, Facebook],
+                  ["Facebook anúncios", channelTotals.facebookPaid, Facebook],
+                  ["Meta Ads sem rede", channelTotals.metaUnknown, Megaphone],
+                ].map(([label, data, Icon]: any) => (
+                  <Card key={label} className="hotbox-admin-kpi p-4">
+                    <div className="flex items-center justify-between"><p className="text-xs font-black uppercase text-zinc-500">{label}</p><Icon className="size-4 text-zinc-400" /></div>
+                    <p className="mt-2 text-2xl font-black">{data.visits}</p>
+                    <p className="text-xs text-zinc-500">{data.purchases} compras • {pct(data.purchases, data.visits)}</p>
+                  </Card>
+                ))}
+              </div>
+
+              {channelTotals.metaUnknown.visits > 0 && (
+                <Card className="border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+                  <b>{channelTotals.metaUnknown.visits} visita(s) de anúncio Meta não informaram se vieram do Instagram ou Facebook.</b>
+                  <p className="mt-1">Isso acontece quando há sinal de anúncio, como fbclid, mas o link não possui UTM da rede. Use os links gerados abaixo para separar com precisão.</p>
+                </Card>
+              )}
+
+              <Card className="hotbox-admin-card overflow-hidden">
+                <div className="border-b bg-zinc-950 p-5 text-white">
+                  <h2 className="text-lg font-black">Gerador de link UTM para campanhas</h2>
+                  <p className="mt-1 text-sm text-white/65">Use estes links nos anúncios. O Analytics identifica automaticamente origem, campanha e criativo.</p>
+                </div>
+                <div className="grid gap-4 p-5 lg:grid-cols-2">
+                  <div>
+                    <p className="mb-2 text-xs font-black uppercase text-zinc-500">Atalhos corretos de origem</p>
+                    <div className="mb-4 flex flex-wrap gap-2">
+                      <Button type="button" size="sm" variant="outline" onClick={() => applyUtmPreset("instagram", false)}>Instagram orgânico</Button>
+                      <Button type="button" size="sm" variant="outline" onClick={() => applyUtmPreset("instagram", true)}>Instagram anúncio</Button>
+                      <Button type="button" size="sm" variant="outline" onClick={() => applyUtmPreset("facebook", false)}>Facebook orgânico</Button>
+                      <Button type="button" size="sm" variant="outline" onClick={() => applyUtmPreset("facebook", true)}>Facebook anúncio</Button>
+                    </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div><label className="mb-1 block text-xs font-black uppercase text-zinc-500">Origem</label><Input value={utmSource} onChange={(e) => setUtmSource(e.target.value)} placeholder="instagram" /></div>
+                    <div><label className="mb-1 block text-xs font-black uppercase text-zinc-500">Tipo de tráfego</label><Input value={utmMedium} onChange={(e) => setUtmMedium(e.target.value)} placeholder="paid_social" /></div>
+                    <div><label className="mb-1 block text-xs font-black uppercase text-zinc-500">Nome da campanha</label><Input value={utmCampaign} onChange={(e) => setUtmCampaign(e.target.value)} placeholder="promo_costela_setembro" /></div>
+                    <div><label className="mb-1 block text-xs font-black uppercase text-zinc-500">Criativo / anúncio</label><Input value={utmContent} onChange={(e) => setUtmContent(e.target.value)} placeholder="video_costela_01" /></div>
+                  </div>
+                  </div>
+                  <div className="rounded-2xl border bg-[#fffaf0] p-4">
+                    <p className="text-xs font-black uppercase text-zinc-500">Link pronto</p>
+                    <p className="mt-2 break-all rounded-xl bg-white p-3 text-sm font-medium shadow-sm">{utmUrl}</p>
+                    <Button className="mt-3 w-full bg-zinc-950 font-black text-white hover:bg-zinc-800" onClick={copyUtm}><Copy className="mr-2 size-4" /> {utmCopied ? "Link copiado" : "Copiar link UTM"}</Button>
+                  </div>
+                </div>
+              </Card>
+
+              <Card className="hotbox-admin-card p-5">
+                <h2 className="text-lg font-black">Campanhas e resultados</h2>
+                <p className="mt-1 text-sm text-muted-foreground">Veja o que cada campanha gerou depois da visita: interesse, sacola, verificação de entrega, área atendida, plataformas e compras.</p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <select className="h-9 rounded-lg border bg-white px-3 text-sm" value={campaignOriginFilter} onChange={(e) => setCampaignOriginFilter(e.target.value)}><option value="all">Todas as origens</option>{originOptions.map((o) => <option key={o} value={o}>{o}</option>)}</select>
+                  <select className="h-9 rounded-lg border bg-white px-3 text-sm" value={campaignNameFilter} onChange={(e) => setCampaignNameFilter(e.target.value)}><option value="all">Todas as campanhas</option>{campaignOptions.map((c) => <option key={c} value={c}>{niceCampaign(c)}</option>)}</select>
+                  <select className="h-9 rounded-lg border bg-white px-3 text-sm" value={campaignResultFilter} onChange={(e) => setCampaignResultFilter(e.target.value)}><option value="all">Todos os resultados</option><option value="sales">Com compra</option><option value="traffic">Com entrada no cardápio</option><option value="no_sales">Entrou, mas não comprou</option><option value="delivery_abandon">Abandonou na entrega</option><option value="outside">Fora da área</option><option value="platform">Foi para plataforma parceira</option></select>
+                </div>
+                <div className="mt-4 overflow-x-auto rounded-2xl border">
+                  <table className="w-full text-sm"><thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500"><tr><th className="p-3">Campanha</th><th className="p-3">Canal</th><th className="p-3">Criativo</th><th className="p-3 text-right">Visitas</th><th className="p-3 text-right">Sacolas</th><th className="p-3 text-right">Verif. entrega</th><th className="p-3 text-right">Aprovadas</th><th className="p-3 text-right">Fora da área</th><th className="p-3 text-right">Plataformas</th><th className="p-3 text-right">Compras</th><th className="p-3 text-right">Conversão</th><th className="p-3 text-right">Vendas</th></tr></thead>
+                    <tbody>{filteredCampaignRows.length ? filteredCampaignRows.map((row) => <tr key={`${row.source}-${row.medium}-${row.campaign}-${row.content}`} className="border-t"><td className="p-3 font-bold">{niceCampaign(row.campaign)}</td><td className="p-3"><div className="font-bold">{trafficChannel({ source: row.source, medium: row.medium })}</div><div className="text-xs text-zinc-500">{niceMedium(row.medium)}</div></td><td className="p-3">{row.content ? niceCampaign(row.content) : "—"}</td><td className="p-3 text-right font-bold">{row.visits}</td><td className="p-3 text-right">{row.carts}</td><td className="p-3 text-right">{row.deliveryChecks}</td><td className="p-3 text-right text-emerald-700">{row.deliveryApproved}</td><td className="p-3 text-right text-red-600">{row.outsideArea}</td><td className="p-3 text-right">{row.platformRedirects}</td><td className="p-3 text-right font-bold">{row.purchases}</td><td className="p-3 text-right">{pct(row.purchases, row.visits)}</td><td className="p-3 text-right font-black">{brl(row.revenue)}</td></tr>) : <tr><td colSpan={12} className="p-8 text-center text-zinc-500">Nenhuma campanha encontrada com os filtros selecionados.</td></tr>}</tbody>
+                  </table>
+                </div>
+              </Card>
+            </div>
+          )}
+
+          {activeTab === "regions" && (
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <Card className="hotbox-admin-kpi p-4"><p className="text-xs font-black uppercase text-zinc-500">Sessões com região</p><p className="mt-2 text-3xl font-black">{new Set(events.filter((e) => e.event_name === "delivery_area_checked").map((e) => String(e.session_id))).size}</p><p className="text-xs text-zinc-500">CEP ou bairro realmente informado</p></Card>
+                <Card className="hotbox-admin-kpi p-4"><p className="text-xs font-black uppercase text-zinc-500">CEPs diferentes</p><p className="mt-2 text-3xl font-black">{new Set(regionRows.map((row) => row.cep).filter(Boolean)).size}</p><p className="text-xs text-zinc-500">consultados no período</p></Card>
+                <Card className="hotbox-admin-kpi p-4"><p className="text-xs font-black uppercase text-zinc-500">Fora da área</p><p className="mt-2 text-3xl font-black">{regionRows.reduce((sum, row) => sum + Number(row.outside || 0), 0)}</p><p className="text-xs text-zinc-500">oportunidades de expansão</p></Card>
+                <Card className="hotbox-admin-kpi p-4"><p className="text-xs font-black uppercase text-zinc-500">Ao vivo sem região</p><p className="mt-2 text-3xl font-black">{liveAwaitingRegion}</p><p className="text-xs text-zinc-500">estão confirmando a região depois da sacola</p></Card>
+              </div>
+
+              <Card className="border-blue-200 bg-blue-50 p-4 text-sm text-blue-950">
+                <b>Por que há mais visitas ao cardápio do que CEPs consultados?</b>
+                <p className="mt-1">Isso agora é esperado: o cliente entra no cardápio primeiro e só informa CEP/bairro depois que monta a sacola. Aqui você consegue medir separadamente quem chegou à verificação, quem foi aprovado, quem estava fora da área e quem seguiu para uma plataforma parceira.</p>
+              </Card>
+              <div className="grid gap-4 lg:grid-cols-3">
+                <Card className="hotbox-admin-card p-5 lg:col-span-2">
+                  <h2 className="text-lg font-black">Regiões que mais demonstram interesse</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">CEP e bairro são registrados somente quando o cliente já montou a sacola e avança para confirmar a entrega. O cardápio abre antes dessa etapa.</p>
+                  <div className="mt-4 flex flex-wrap gap-2"><Input className="max-w-xs" value={regionFilter} onChange={(e) => setRegionFilter(e.target.value)} placeholder="Filtrar CEP ou bairro" /><select className="h-9 rounded-lg border bg-white px-3 text-sm" value={regionStatusFilter} onChange={(e) => setRegionStatusFilter(e.target.value)}><option value="all">Todas as regiões</option><option value="inside">Área atendida</option><option value="outside">Fora da área</option><option value="platform">Foram para plataforma</option></select></div>
+                  <div className="mt-4 overflow-x-auto rounded-2xl border">
+                    <table className="w-full text-sm"><thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500"><tr><th className="p-3">CEP</th><th className="p-3">Bairro</th><th className="p-3 text-right">Consultas</th><th className="p-3 text-right">Área atendida</th><th className="p-3 text-right">Fora da área</th><th className="p-3 text-right">Plataformas</th><th className="p-3 text-right">Carrinhos</th><th className="p-3 text-right">Compras</th><th className="p-3 text-right">Conversão pós-validação</th></tr></thead>
+                      <tbody>{filteredRegionRows.length ? filteredRegionRows.map((row) => <tr key={`${row.cep}-${row.neighborhood}`} className="border-t"><td className="p-3 font-mono text-xs">{row.cep ? `${row.cep.slice(0,5)}-${row.cep.slice(5)}` : "—"}</td><td className="p-3 font-bold">{row.neighborhood}</td><td className="p-3 text-right">{row.checks}</td><td className="p-3 text-right font-bold text-emerald-700">{row.supported}</td><td className="p-3 text-right text-red-600">{row.outside}</td><td className="p-3 text-right">{row.platformRedirects}</td><td className="p-3 text-right">{row.carts}</td><td className="p-3 text-right font-bold">{row.purchases}</td><td className="p-3 text-right">{pct(row.purchases, row.supported)}</td></tr>) : <tr><td colSpan={9} className="p-8 text-center text-zinc-500">Nenhuma região encontrada com os filtros selecionados.</td></tr>}</tbody>
+                    </table>
+                  </div>
+                </Card>
+                <Card className="hotbox-admin-card p-5">
+                  <h2 className="font-black">Bairros com mais procura</h2>
+                  <p className="mt-1 text-xs text-zinc-500">Ajuda a decidir onde anunciar e onde pode valer expandir entrega.</p>
+                  <div className="mt-4 space-y-3">{regionNeighborhoodRows.length ? regionNeighborhoodRows.map((row, i) => <div key={row.neighborhood} className="flex items-center gap-3"><span className="grid size-8 place-items-center rounded-full bg-zinc-950 text-xs font-black text-[#ffcf00]">{i+1}</span><div className="min-w-0 flex-1"><p className="truncate font-bold">{row.neighborhood}</p><p className="text-xs text-zinc-500">{row.checks} consultas • {row.supported} atendidas • {row.purchases} compras{row.outside ? ` • ${row.outside} fora da área` : ""}{row.platformRedirects ? ` • ${row.platformRedirects} plataformas` : ""}</p></div></div>) : <p className="text-sm text-zinc-500">Sem consultas de região ainda.</p>}</div>
+                </Card>
+              </div>
+            </div>
+          )}
+
+          {activeTab === "behavior" && (
+            <div className="space-y-4">
+              <div className="grid gap-4 xl:grid-cols-[1.1fr_.9fr]">
+                <Card className="hotbox-admin-card p-5">
+                  <h2 className="text-lg font-black">Funil completo</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">Veja em qual etapa o cliente está desistindo.</p>
+                  <div className="mt-5 space-y-3">
+                    {funnel.map((step, index) => {
+                      const previous = index === 0 ? step.value : funnel[index - 1].value;
+                      const width = actualMenuSessions.length ? Math.max(3, (step.value / actualMenuSessions.length) * 100) : 0;
                       return (
-                        <DropdownMenuItem key={n.to} asChild className={active ? "bg-accent" : ""}>
-                          <Link to={n.to} className="flex items-center gap-2">
-                            <Icon className="size-4" /> {n.label}
-                          </Link>
-                        </DropdownMenuItem>
+                        <div key={step.label}>
+                          <div className="mb-1 flex items-end justify-between gap-3">
+                            <div><p className="font-bold">{step.label}</p><p className="text-xs text-zinc-500">{index === 0 ? step.help : `${pct(step.value, previous)} avançaram da etapa anterior`}</p></div>
+                            <span className="text-lg font-black">{step.value}</span>
+                          </div>
+                          <div className="h-2 overflow-hidden rounded-full bg-zinc-100"><div className="h-full rounded-full bg-zinc-950" style={{ width: `${width}%` }} /></div>
+                        </div>
                       );
                     })}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              );
-            })}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={signOut}
-              className="ml-auto shrink-0 text-background/70 hover:bg-background/10 hover:text-background"
-            >
-              <LogOut className="size-4" />
-            </Button>
-          </header>
-          <main className="flex-1 px-4 py-6">
-            <Outlet />
-          </main>
-        </>
-      )}
+                  </div>
+                </Card>
 
-      {liveBubble && (
-        <div
-          className="fixed bottom-24 right-4 z-[100] w-[min(360px,calc(100vw-2rem))] overflow-hidden rounded-2xl border bg-background shadow-2xl lg:bottom-5 lg:right-5"
-          role="status"
-          aria-live="polite"
-        >
-          <div
-            className={`h-1 w-full ${
-              liveBubble.kind === "cart" ? "bg-amber-500" : "bg-emerald-500"
-            }`}
-          />
+                <Card className="hotbox-admin-card p-5">
+                  <h2 className="text-lg font-black">Páginas mais vistas</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">Inclui página principal, produtos, carrinho, verificação de entrega e checkout.</p>
+                  <div className="mt-4 space-y-3">
+                    {groupPageViews().map(([page, data]) => (
+                      <div key={page} className="flex items-center justify-between gap-3 border-b pb-3 last:border-0">
+                        <p className="font-bold">{friendlyPagePath(page)}</p><b>{data.count}</b>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              </div>
 
-          <div className="flex items-start gap-3 p-4">
-            <span
-              className={`grid size-10 shrink-0 place-items-center rounded-xl ${
-                liveBubble.kind === "cart"
-                  ? "bg-amber-100 text-amber-800"
-                  : "bg-emerald-100 text-emerald-800"
-              }`}
-            >
-              {liveBubble.kind === "cart" ? (
-                <ShoppingCart className="size-5" />
-              ) : (
-                <Users className="size-5" />
-              )}
-            </span>
+              <div className="grid gap-4 xl:grid-cols-[1.1fr_.9fr]">
+                <Card className="hotbox-admin-card p-5">
+                  <h2 className="text-lg font-black">Produtos que mais despertam interesse</h2>
+                  <div className="mt-4 flex flex-wrap gap-2"><Input className="max-w-xs" value={productFilter} onChange={(e) => setProductFilter(e.target.value)} placeholder="Filtrar produto" /><select className="h-9 rounded-lg border bg-white px-3 text-sm" value={productActivityFilter} onChange={(e) => setProductActivityFilter(e.target.value)}><option value="all">Todos</option><option value="viewed">Com visualização</option><option value="cart">Adicionados à sacola</option><option value="high_interest">Interesse alto (20%+)</option></select></div>
+                  <div className="mt-4 overflow-x-auto rounded-2xl border">
+                    <table className="w-full text-sm"><thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500"><tr><th className="p-3">Produto</th><th className="p-3 text-right">Visualizações</th><th className="p-3 text-right">Adições à sacola</th><th className="p-3 text-right">Taxa de interesse</th></tr></thead>
+                      <tbody>{filteredTopProducts.length ? filteredTopProducts.map((row) => <tr key={row.name} className="border-t"><td className="p-3 font-bold">{row.name}</td><td className="p-3 text-right">{row.views}</td><td className="p-3 text-right">{row.carts}</td><td className="p-3 text-right">{pct(row.carts, row.views)}</td></tr>) : <tr><td colSpan={4} className="p-8 text-center text-zinc-500">Ainda não há visualizações de produtos suficientes.</td></tr>}</tbody>
+                    </table>
+                  </div>
+                </Card>
 
-            <div className="min-w-0 flex-1">
-              <p className="font-black leading-tight">{liveBubble.title}</p>
-              <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                {liveBubble.message}
-              </p>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setLiveBubble(null);
-                  if (liveBubbleTimerRef.current) {
-                    window.clearTimeout(liveBubbleTimerRef.current);
-                    liveBubbleTimerRef.current = null;
-                  }
-                  nav({ to: "/loja/analytics" });
-                }}
-                className="mt-2 text-xs font-bold text-primary hover:underline"
-              >
-                Ver no Analytics
-              </button>
+                <Card className="hotbox-admin-card p-5">
+                  <h2 className="text-lg font-black">Pagamentos e problemas</h2>
+                  <div className="mt-4 space-y-3">
+                    {paymentMethodRows.map(([method, count]) => <div key={method} className="flex justify-between rounded-xl bg-zinc-50 p-3"><span>{method}</span><b>{count}</b></div>)}
+                    <div className="flex justify-between rounded-xl bg-red-50 p-3 text-red-800"><span>Cartões não aprovados</span><b>{rejectedCardCount}</b></div>
+                    {rejectedCardCount > 0 ? <p className="text-xs text-zinc-500">Tentativas recusadas somaram {brl(rejectedCardValue)}.</p> : null}
+                  </div>
+                </Card>
+              </div>
             </div>
+          )}
 
-            <button
-              type="button"
-              onClick={() => {
-                setLiveBubble(null);
-                if (liveBubbleTimerRef.current) {
-                  window.clearTimeout(liveBubbleTimerRef.current);
-                  liveBubbleTimerRef.current = null;
-                }
-              }}
-              className="grid size-8 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
-              aria-label="Fechar aviso"
-            >
-              <X className="size-4" />
-            </button>
-          </div>
-        </div>
+          {activeTab === "journey" && (
+            <div className="space-y-4">
+              <Card className="hotbox-admin-card p-5">
+                <div className="flex flex-wrap items-start gap-3"><div><h2 className="text-lg font-black">Histórico de visitantes</h2><p className="mt-1 text-sm text-muted-foreground">Cada sessão mostra a jornada real: entrada no cardápio, produto, sacola, verificação de entrega, área fora, plataforma parceira, checkout, pagamento e compra.</p></div><div className="ml-auto w-full max-w-sm"><Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar nome, telefone, campanha ou pedido..." /></div></div>
+                <div className="mt-4 flex flex-wrap gap-2"><select className="h-9 rounded-lg border bg-white px-3 text-sm" value={journeyOriginFilter} onChange={(e) => setJourneyOriginFilter(e.target.value)}><option value="all">Todas as origens</option>{originOptions.map((o) => <option key={o} value={o}>{o}</option>)}</select><select className="h-9 rounded-lg border bg-white px-3 text-sm" value={journeyCampaignFilter} onChange={(e) => setJourneyCampaignFilter(e.target.value)}><option value="all">Todas as campanhas</option>{campaignOptions.map((c) => <option key={c} value={c}>{niceCampaign(c)}</option>)}</select><select className="h-9 rounded-lg border bg-white px-3 text-sm" value={journeySituationFilter} onChange={(e) => setJourneySituationFilter(e.target.value)}><option value="all">Todas as situações</option><option>Entrou no cardápio</option><option>Viu produto</option><option>Adicionou à sacola</option><option>Verificando entrega</option><option>Abandonou na verificação da entrega</option><option>Entrega confirmada</option><option>Fora da área própria</option><option>Foi para plataforma parceira</option><option>Iniciou checkout</option><option>Abandonou checkout</option><option>Cartão não aprovado</option><option>Comprou</option></select></div>
+                <div className="mt-4 overflow-x-auto rounded-2xl border">
+                  <table className="w-full text-sm">
+                    <thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500">
+                      <tr>
+                        <th className="p-3">Quando</th>
+                        <th className="p-3">Visitante</th>
+                        <th className="p-3">Telefone</th>
+                        <th className="p-3">Origem</th>
+                        <th className="p-3">Campanha</th>
+                        <th className="p-3">Situação</th>
+                        <th className="p-3 text-right">Recuperação</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {journey.length ? journey.map((s) => {
+                        const recovery = recoveryStatus(s);
+                        const whatsappHref = whatsappRecoveryHref(s.customer_phone, s.customer_name);
+                        return (
+                          <tr key={s.id} className="border-t align-middle">
+                            <td className="p-3 whitespace-nowrap">{dt(s.first_seen_at)}</td>
+                            <td className="p-3">
+                              <div className="font-bold">{visitorIdentityLabel(s)}</div>
+                              {s.customer_name && s.customer_phone ? <div className="text-xs text-zinc-500">Identificado durante o atendimento/checkout</div> : null}
+                            </td>
+                            <td className="p-3 whitespace-nowrap">
+                              {s.customer_phone ? (
+                                <span className="font-semibold">{formatCustomerPhone(s.customer_phone)}</span>
+                              ) : (
+                                <span className="text-zinc-400">Ainda não informado</span>
+                              )}
+                            </td>
+                            <td className="p-3">
+                              <div className="font-bold">{trafficChannel(s)}</div>
+                              <div className="text-xs text-zinc-500">{niceMedium(s.medium)}</div>
+                            </td>
+                            <td className="p-3">{s.campaign ? niceCampaign(s.campaign) : "—"}</td>
+                            <td className="p-3">
+                              {journeyStage(s) === "Comprou" ? <Badge className="bg-emerald-600">Comprou</Badge> :
+                               journeyStage(s) === "Cartão não aprovado" ? <Badge className="bg-red-600">Cartão não aprovado</Badge> :
+                               journeyStage(s) === "Abandonou checkout" ? <Badge className="bg-amber-500 text-zinc-950">Abandonou checkout</Badge> :
+                               journeyStage(s) === "Redirecionado ao iFood" ? <Badge className="bg-red-100 text-red-800">Redirecionado ao iFood</Badge> :
+                               journeyStage(s) === "Entrou no cardápio" ? <Badge className="bg-blue-600">Entrou no cardápio</Badge> :
+                               <Badge variant="secondary">{journeyStage(s)}</Badge>}
+                            </td>
+                            <td className="p-3 text-right">
+                              {whatsappHref && ["Abandonou checkout", "Cartão não aprovado"].includes(recovery) ? (
+                                <a href={whatsappHref} target="_blank" rel="noreferrer">
+                                  <Button size="sm" variant="outline" className="whitespace-nowrap border-emerald-200 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800">
+                                    <MessageCircle className="mr-2 size-4" />
+                                    Chamar no WhatsApp
+                                  </Button>
+                                </a>
+                              ) : s.customer_phone ? (
+                                <span className="text-xs text-zinc-400">Sem recuperação pendente</span>
+                              ) : (
+                                <span className="text-xs text-zinc-400">Sem telefone</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      }) : (
+                        <tr><td colSpan={7} className="p-8 text-center text-zinc-500">Nenhum visitante encontrado.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="mt-4 flex items-center justify-end gap-2"><Button size="sm" variant="outline" disabled={currentJourneyPage <= 1} onClick={() => setJourneyPage((v) => Math.max(1, v - 1))}>Anterior</Button><span className="text-xs font-bold">Página {currentJourneyPage} de {journeyTotalPages}</span><Button size="sm" variant="outline" disabled={currentJourneyPage >= journeyTotalPages} onClick={() => setJourneyPage((v) => Math.min(journeyTotalPages, v + 1))}>Próxima</Button></div>
+              </Card>
+              {rejectedCardCount > 0 && <Card className="hotbox-admin-danger p-5"><h2 className="font-black">Pagamentos no cartão que merecem atenção</h2><p className="mt-1 text-sm text-muted-foreground">{rejectedCardCount} tentativa(s) não aprovada(s), somando {brl(rejectedCardValue)} em tentativas de compra.</p></Card>}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
