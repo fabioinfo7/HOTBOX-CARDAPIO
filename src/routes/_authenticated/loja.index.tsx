@@ -32,6 +32,7 @@ import {
   Phone,
   Plus,
   PlusCircle,
+  Printer,
   RefreshCw,
   Search,
   ShoppingBag,
@@ -556,6 +557,11 @@ function OrderDrawer({
     onClose();
   }
 
+  function printOrderSummary() {
+    if (!order?.id) return;
+    requestAutoPrint(order.id, true);
+  }
+
   const address = order
     ? [order.address_street, order.address_number, order.address_complement, order.address_neighborhood, order.address_city]
         .filter(Boolean)
@@ -574,9 +580,18 @@ function OrderDrawer({
             </div>
             <p className="mt-1 truncate text-sm text-white/70">{order?.customer_name || "Carregando..."}</p>
           </div>
-          <Button size="icon" variant="ghost" className="rounded-full text-white hover:bg-white/10 hover:text-white" onClick={onClose}>
-            <X className="size-5" />
-          </Button>
+          <div className="flex items-center gap-3">
+            <Button
+              type="button"
+              onClick={printOrderSummary}
+              className="h-11 rounded-2xl bg-[#ffcf00] px-5 text-sm font-black text-zinc-950 shadow-[0_8px_24px_rgba(255,207,0,.28)] transition hover:bg-[#f4bf00]"
+            >
+              <Printer className="mr-2 size-4" /> Imprimir nota
+            </Button>
+            <Button size="icon" variant="ghost" className="rounded-full text-white hover:bg-white/10 hover:text-white" onClick={onClose}>
+              <X className="size-5" />
+            </Button>
+          </div>
         </div>
 
         {loading || !order ? (
