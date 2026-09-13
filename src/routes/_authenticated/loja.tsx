@@ -170,9 +170,8 @@ function AdminLayout() {
       const menuRows = (data || []).filter((row: any) => {
         const raw = String(row?.current_page_path || "/").split("?")[0].replace(/\/+$/, "") || "/";
         return (
-          raw === "/" ||
           raw === "/cardapio" ||
-          raw.startsWith("/cardapio/") ||
+          (raw.startsWith("/cardapio/") && !raw.startsWith("/cardapio/area-entrega")) ||
           raw === "/carrinho" ||
           raw === "/checkout" ||
           raw.startsWith("/produto/")
@@ -193,7 +192,6 @@ function AdminLayout() {
           raw.startsWith("/produto/") ? "vendo produto" :
           raw === "/carrinho" ? "no carrinho" :
           raw === "/checkout" ? "finalizando pedido" :
-          raw.startsWith("/cardapio/area-entrega") ? "informando CEP" :
           "na página principal";
         pageCounts.set(label, (pageCounts.get(label) || 0) + 1);
       }
@@ -497,6 +495,7 @@ function AdminLayout() {
         { to: "/loja/pedidos", label: "Histórico", icon: History },
         { to: "/loja/financeiro", label: "Financeiro", icon: TrendingUp },
         { to: "/loja/analytics", label: "Analytics 360", icon: BarChart3 },
+        { to: "/loja/reengajamento", label: "Recuperação de vendas", icon: TrendingUp },
         { to: "/loja/financeiro-cardapio", label: "Financeiro Cardápio", icon: WalletCards },
         { to: "/loja/fidelidade", label: "Clube HotBox", icon: Trophy },
         { to: "/loja/receber", label: "A Receber", icon: HandCoins },
