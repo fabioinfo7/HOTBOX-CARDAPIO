@@ -35,6 +35,7 @@ import {
   Instagram,
   Facebook,
   Globe2,
+  MessageCircle,
 } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/loja/analytics")({
@@ -224,6 +225,26 @@ function visitorIdentityLabel(session: SessionRow) {
   if (session.customer_name) return String(session.customer_name);
   if (session.customer_phone) return `Cliente ${String(session.customer_phone)}`;
   return "Visitante ainda não identificado";
+}
+
+function formatCustomerPhone(value: unknown) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return "";
+  const br = digits.startsWith("55") && digits.length >= 12 ? digits.slice(2) : digits;
+  if (br.length === 11) return `(${br.slice(0, 2)}) ${br.slice(2, 7)}-${br.slice(7)}`;
+  if (br.length === 10) return `(${br.slice(0, 2)}) ${br.slice(2, 6)}-${br.slice(6)}`;
+  return String(value || "");
+}
+
+function whatsappRecoveryHref(phone: unknown, customerName?: unknown) {
+  const raw = String(phone || "").replace(/\D/g, "");
+  if (!raw) return "";
+  const international = raw.startsWith("55") ? raw : `55${raw}`;
+  const name = String(customerName || "").trim();
+  const greeting = name
+    ? `Olá, ${name}! Aqui é da HotBox Delivery. Vi que você iniciou um pedido no nosso cardápio e estou passando para saber se posso te ajudar a finalizar 😊`
+    : "Olá! Aqui é da HotBox Delivery. Vi que você iniciou um pedido no nosso cardápio e estou passando para saber se posso te ajudar a finalizar 😊";
+  return `https://wa.me/${international}?text=${encodeURIComponent(greeting)}`;
 }
 
 function niceDevice(value: unknown) {
@@ -480,6 +501,40 @@ function AnalyticsPage() {
     (sum, e) => sum + Number(e.value || 0),
     0,
   );
+
+
+  const rejectedSessionIds = useMemo(
+    () =>
+      new Set(
+        events
+          .filter((event) => event.event_name === "payment_failed")
+          .map((event) => String(event.session_id || ""))
+          .filter(Boolean),
+      ),
+    [events],
+  );
+
+  const abandonedSessionIds = useMemo(() => {
+    const currentNow = Date.now();
+    return new Set(
+      sessions
+        .filter(
+          (session) =>
+            !session.converted &&
+            currentNow - new Date(session.last_seen_at).getTime() > 15 * 60000 &&
+            (eventSet.get(session.id)?.has("add_to_cart") ||
+              eventSet.get(session.id)?.has("checkout_started")),
+        )
+        .map((session) => String(session.id)),
+    );
+  }, [sessions, eventSet]);
+
+  function recoveryStatus(session: SessionRow) {
+    if (session.converted) return "Comprou";
+    if (rejectedSessionIds.has(String(session.id))) return "Cartão não aprovado";
+    if (abandonedSessionIds.has(String(session.id))) return "Abandonou checkout";
+    return "Não comprou";
+  }
 
   const metaSessions = sessions.filter((s) =>
     ["facebook", "instagram", "meta_ads"].includes(String(s.source || "")),
@@ -1229,10 +1284,74 @@ function AnalyticsPage() {
           {activeTab === "journey" && (
             <div className="space-y-4">
               <Card className="hotbox-admin-card p-5">
-                <div className="flex flex-wrap items-center gap-3"><div><h2 className="text-lg font-black">Histórico de visitantes</h2><p className="mt-1 text-sm text-muted-foreground">Use quando precisar investigar uma visita, campanha, pedido ou abandono específico.</p></div><div className="ml-auto w-full max-w-sm"><Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar cliente, campanha, pedido..." /></div></div>
+                <div className="flex flex-wrap items-center gap-3"><div><h2 className="text-lg font-black">Histórico de visitantes</h2><p className="mt-1 text-sm text-muted-foreground">Veja nome e telefone quando o cliente já tiver se identificado. Abandonos e cartões não aprovados com telefone podem ser recuperados pelo WhatsApp.</p></div><div className="ml-auto w-full max-w-sm"><Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar nome, telefone, campanha ou pedido..." /></div></div>
                 <div className="mt-4 overflow-x-auto rounded-2xl border">
-                  <table className="w-full text-sm"><thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500"><tr><th className="p-3">Quando</th><th className="p-3">Visitante</th><th className="p-3">Origem</th><th className="p-3">Campanha</th><th className="p-3">Situação</th></tr></thead>
-                    <tbody>{journey.length ? journey.map((s) => <tr key={s.id} className="border-t"><td className="p-3 whitespace-nowrap">{dt(s.first_seen_at)}</td><td className="p-3 font-bold">{visitorIdentityLabel(s)}</td><td className="p-3"><div className="font-bold">{trafficChannel(s)}</div><div className="text-xs text-zinc-500">{niceMedium(s.medium)}</div></td><td className="p-3">{s.campaign ? niceCampaign(s.campaign) : "—"}</td><td className="p-3">{s.converted ? <Badge className="bg-emerald-600">Comprou</Badge> : <Badge variant="secondary">Não comprou</Badge>}</td></tr>) : <tr><td colSpan={5} className="p-8 text-center text-zinc-500">Nenhum visitante encontrado.</td></tr>}</tbody>
+                  <table className="w-full text-sm">
+                    <thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500">
+                      <tr>
+                        <th className="p-3">Quando</th>
+                        <th className="p-3">Visitante</th>
+                        <th className="p-3">Telefone</th>
+                        <th className="p-3">Origem</th>
+                        <th className="p-3">Campanha</th>
+                        <th className="p-3">Situação</th>
+                        <th className="p-3 text-right">Recuperação</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {journey.length ? journey.map((s) => {
+                        const recovery = recoveryStatus(s);
+                        const whatsappHref = whatsappRecoveryHref(s.customer_phone, s.customer_name);
+                        return (
+                          <tr key={s.id} className="border-t align-middle">
+                            <td className="p-3 whitespace-nowrap">{dt(s.first_seen_at)}</td>
+                            <td className="p-3">
+                              <div className="font-bold">{visitorIdentityLabel(s)}</div>
+                              {s.customer_name && s.customer_phone ? <div className="text-xs text-zinc-500">Identificado durante o atendimento/checkout</div> : null}
+                            </td>
+                            <td className="p-3 whitespace-nowrap">
+                              {s.customer_phone ? (
+                                <span className="font-semibold">{formatCustomerPhone(s.customer_phone)}</span>
+                              ) : (
+                                <span className="text-zinc-400">Ainda não informado</span>
+                              )}
+                            </td>
+                            <td className="p-3">
+                              <div className="font-bold">{trafficChannel(s)}</div>
+                              <div className="text-xs text-zinc-500">{niceMedium(s.medium)}</div>
+                            </td>
+                            <td className="p-3">{s.campaign ? niceCampaign(s.campaign) : "—"}</td>
+                            <td className="p-3">
+                              {recovery === "Comprou" ? (
+                                <Badge className="bg-emerald-600">Comprou</Badge>
+                              ) : recovery === "Cartão não aprovado" ? (
+                                <Badge className="bg-red-600">Cartão não aprovado</Badge>
+                              ) : recovery === "Abandonou checkout" ? (
+                                <Badge className="bg-amber-500 text-zinc-950">Abandonou checkout</Badge>
+                              ) : (
+                                <Badge variant="secondary">Não comprou</Badge>
+                              )}
+                            </td>
+                            <td className="p-3 text-right">
+                              {whatsappHref && recovery !== "Comprou" ? (
+                                <a href={whatsappHref} target="_blank" rel="noreferrer">
+                                  <Button size="sm" variant="outline" className="whitespace-nowrap border-emerald-200 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800">
+                                    <MessageCircle className="mr-2 size-4" />
+                                    Chamar no WhatsApp
+                                  </Button>
+                                </a>
+                              ) : s.customer_phone ? (
+                                <span className="text-xs text-zinc-400">Sem recuperação pendente</span>
+                              ) : (
+                                <span className="text-xs text-zinc-400">Sem telefone</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      }) : (
+                        <tr><td colSpan={7} className="p-8 text-center text-zinc-500">Nenhum visitante encontrado.</td></tr>
+                      )}
+                    </tbody>
                   </table>
                 </div>
                 <div className="mt-4 flex items-center justify-end gap-2"><Button size="sm" variant="outline" disabled={currentJourneyPage <= 1} onClick={() => setJourneyPage((v) => Math.max(1, v - 1))}>Anterior</Button><span className="text-xs font-bold">Página {currentJourneyPage} de {journeyTotalPages}</span><Button size="sm" variant="outline" disabled={currentJourneyPage >= journeyTotalPages} onClick={() => setJourneyPage((v) => Math.min(journeyTotalPages, v + 1))}>Próxima</Button></div>
