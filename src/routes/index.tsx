@@ -759,6 +759,7 @@ function CustomerHome() {
   const [checkingCoupon, setCheckingCoupon] = useState(false);
 
   const [view, setView] = useState<View>("list");
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
 
   // HOTBOX_VIRTUAL_PAGE_TRACKING
   // O cardápio é uma SPA: detalhes, carrinho e checkout não mudam a URL real.
@@ -793,7 +794,6 @@ function CustomerHome() {
   const [query, setQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState("Batata");
   const [activeFilter, setActiveFilter] = useState<ActiveFilter>("todos");
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [detailQty, setDetailQty] = useState(1);
   const [detailNotes, setDetailNotes] = useState("");
   const [detailAddonIds, setDetailAddonIds] = useState<string[]>([]);
