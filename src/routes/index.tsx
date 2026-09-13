@@ -759,10 +759,16 @@ function CustomerHome() {
   const [checkingCoupon, setCheckingCoupon] = useState(false);
 
   const [view, setView] = useState<View>("list");
+  const [query, setQuery] = useState("");
+  const [activeCategory, setActiveCategory] = useState("Batata");
+  const [activeFilter, setActiveFilter] = useState<ActiveFilter>("todos");
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
 
   // HOTBOX_VIRTUAL_PAGE_TRACKING
   // O cardápio é uma SPA: detalhes, carrinho e checkout não mudam a URL real.
   // Por isso publicamos uma "página virtual" para o Analytics/presença ao vivo.
+  // IMPORTANTE: selectedProduct precisa estar declarado antes deste efeito,
+  // pois o array de dependências é avaliado imediatamente durante o render.
   useEffect(() => {
     let path = "/cardapio";
     let title = "Cardápio HotBox";
@@ -789,11 +795,6 @@ function CustomerHome() {
 
     setAnalyticsVirtualPage(path, title, true);
   }, [view, selectedProduct?.id, selectedProduct?.name, areaStatus]);
-
-  const [query, setQuery] = useState("");
-  const [activeCategory, setActiveCategory] = useState("Batata");
-  const [activeFilter, setActiveFilter] = useState<ActiveFilter>("todos");
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [detailQty, setDetailQty] = useState(1);
   const [detailNotes, setDetailNotes] = useState("");
   const [detailAddonIds, setDetailAddonIds] = useState<string[]>([]);
@@ -3630,6 +3631,9 @@ function CustomerHome() {
       </header>
 
       <main className="mx-auto max-w-2xl px-4 py-5">
+        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-950">
+          <b>Preços do delivery direto HotBox.</b> A disponibilidade e a taxa de entrega são confirmadas quando você finalizar a sacola. Nas plataformas parceiras, preços e condições podem ser diferentes.
+        </div>
         {!query && (activeCategory === "Tudo" || activeCategory === "Batata") && (
           <div className="mb-5">
             <CustomerLoyaltyClub
