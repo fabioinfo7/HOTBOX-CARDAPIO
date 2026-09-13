@@ -1,10 +1,10 @@
+import { logApi } from "./api-log.server";
 // Toda a lógica de comunicação com a API da iFood mora aqui, num lugar só,
 // pra ser reaproveitada tanto pelo webhook de teste/homologação quanto pelo
 // polling de produção — evita ter duas versões da mesma lógica que podem
 // divergir com o tempo. Cada etapa registra log em api_logs (/loja/logs),
 // pra nunca mais ficar no escuro quando algo não chegar ou falhar.
 
-import { logApi } from "./api-log.server";
 
 const IFOOD_AUTH_URL = "https://merchant-api.ifood.com.br/authentication/v1.0/oauth/token";
 const IFOOD_API_BASE = "https://merchant-api.ifood.com.br";

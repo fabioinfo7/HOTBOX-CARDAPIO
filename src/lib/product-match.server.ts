@@ -1,4 +1,5 @@
 
+
 // Casamento de nome de produto extraído pela IA com o cardápio real.
 //
 // Antes disso, a comparação era só "uma string contém a outra" — quebrava

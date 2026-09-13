@@ -1,3 +1,4 @@
+
 // Áudio do alarme como singleton fora do React.
 // Por que: navegadores só liberam play() de áudio com som depois de uma
 // interação real do usuário (clique/toque). Se a gente criar o <audio> só

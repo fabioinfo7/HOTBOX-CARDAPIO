@@ -1,5 +1,5 @@
-// HOTBOX_BUILD_20260905_SITE_CHECKOUT_NOTIFY_SERVER_ONLY
 import { sendWhatsappText } from "@/lib/whatsapp-send.server";
+// HOTBOX_BUILD_20260905_SITE_CHECKOUT_NOTIFY_SERVER_ONLY
 
 export async function notifyPaidSiteOrder(supabaseAdmin: any, orderId: string) {
   const { data: order } = await supabaseAdmin

@@ -1,4 +1,5 @@
 
+
 /**
  * Logo da HotBox embutida direto no código em base64 (sem depender do
  * pipeline de assets do Lovable). Uso: teste diagnóstico pra confirmar se o

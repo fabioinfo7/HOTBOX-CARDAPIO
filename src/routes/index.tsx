@@ -1,5 +1,4 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import hotboxLogoUrl from "@/assets/logo-hotbox.jpeg";
 import { useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { toast } from "sonner";
@@ -46,6 +45,7 @@ import { quoteSiteDelivery } from "@/lib/site-checkout.functions";
 import { getPublicTestimonialsFn } from "@/lib/satisfaction.functions";
 import { trackAnalytics, trackAnalyticsAndWait, analyticsIdentity, setAnalyticsVirtualPage } from "@/lib/analytics";
 import { MetaPixelInjector } from "@/components/meta-pixel-injector";
+import hotboxLogoUrl from "@/assets/logo-hotbox.jpeg";
 
 export const Route = createFileRoute("/")({
   component: CustomerHomeTracked,
@@ -145,6 +145,7 @@ type ActiveOrderSummary = {
   created_at: string;
   delivery_mode?: string | null;
 };
+
 
 const HOTBOX_LOGO_URL = hotboxLogoUrl;
 const WHATSAPP_URL = "https://wa.me/5521984296288?text=" + encodeURIComponent("Olá! Preciso de ajuda com meu pedido no cardápio digital da Hotbox.");

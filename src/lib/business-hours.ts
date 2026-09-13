@@ -1,3 +1,4 @@
+
 // Utilitário compartilhado de horário de atendimento — usado tanto no
 // webhook da IA (pra saber quando responder normalmente vs avisar que está
 // fechado) quanto nas telas do painel (pra mostrar o horário formatado, ex:

@@ -1,3 +1,4 @@
+
 // Lógica compartilhada de promoções — usada no cadastro (admin), no cardápio
 // digital (loja pública) e em qualquer outro lugar que precise saber "esse
 // produto está em promoção agora, e por qual preço?".

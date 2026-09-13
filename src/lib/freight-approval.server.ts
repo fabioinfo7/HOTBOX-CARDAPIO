@@ -1,3 +1,4 @@
+
 /**
  * Aprovação humana da taxa de entrega antes de a IA informar o valor ao cliente.
  *

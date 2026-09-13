@@ -1,3 +1,4 @@
+
 // Log central de tudo que acontece nas integrações externas (iFood, Evolution,
 // etc). Nunca deixa um log quebrar o fluxo principal — se o log falhar, só
 // registra no console e segue em frente.

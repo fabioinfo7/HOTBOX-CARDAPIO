@@ -1,3 +1,4 @@
+
 // Teste de fumaça (smoke test) dos cenários de pagamento que já quebraram de
 // verdade nessa conversa: falta de valor no enum, comparação de tipo errada,
 // forma de pagamento fora do formato esperado. Em vez de mockar o banco (o

@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-
 import hotboxLogoUrl from "@/assets/logo-hotbox.jpeg";
 import { MetaPixelInjector } from "@/components/meta-pixel-injector";
+
 export const Route = createFileRoute("/bio")({
   component: BioPage,
 });

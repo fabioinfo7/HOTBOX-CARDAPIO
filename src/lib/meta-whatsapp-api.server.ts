@@ -1,3 +1,4 @@
+
 // Toda a comunicação com a API oficial da Meta (WhatsApp Cloud API) mora
 // aqui. Isolado do restante — nenhuma função daqui é usada pela Evolution
 // API, e vice-versa. Quem decide qual dos dois é usado é sempre

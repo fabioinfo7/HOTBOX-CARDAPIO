@@ -1,6 +1,3 @@
-/* eslint-disable */
-// @ts-nocheck
-
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AuthenticatedEntregadorRouteImport } from './routes/_authenticated/entregador'
 import { Route as AuthenticatedLojaAnalyticsRouteImport } from './routes/_authenticated/loja.analytics'
@@ -55,6 +52,11 @@ import { Route as MeusPedidosRouteImport } from './routes/meus-pedidos'
 import { Route as ObrigadoRouteImport } from './routes/obrigado'
 import { Route as PedidoIdRouteImport } from './routes/pedido.$id'
 import { Route as PoliticaDePrivacidadeRouteImport } from './routes/politica-de-privacidade'
+import type { getRouter } from './router.tsx'
+import type { startInstance } from './start.ts'
+/* eslint-disable */
+// @ts-nocheck
+
 
 const AuthenticatedEntregadorRoute = AuthenticatedEntregadorRouteImport.update({
   id: '/entregador',
@@ -763,8 +765,6 @@ const rootRouteChildren = {
 
 export const routeTree = rootRouteImport._addFileChildren(rootRouteChildren)
 
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
 declare module '@tanstack/react-start' {
   interface Register {
     ssr: true

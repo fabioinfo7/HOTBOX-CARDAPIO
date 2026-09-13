@@ -1,3 +1,4 @@
+
 export const brl = (n: number | string | null | undefined) => {
   const v = Number(n ?? 0);
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });

@@ -1,3 +1,5 @@
+import { createFileRoute } from "@tanstack/react-router";
+import { sendWhatsappText } from "@/lib/whatsapp-send.server";
 // ============================================================
 // Endpoint: GET /api/protected/reengagement/process
 // Caminho:  src/routes/api/public/reengagement.process.ts
@@ -14,8 +16,6 @@
 //   x-internal-key: <INTERNAL_API_KEY>  (variável de ambiente no Supabase)
 // ============================================================
 
-import { createFileRoute } from "@tanstack/react-router";
-import { sendWhatsappText } from "@/lib/whatsapp-send.server";
 
 /** Intervalo aleatório entre envios para evitar ban (4–9 segundos) */
 const randomDelay = () =>

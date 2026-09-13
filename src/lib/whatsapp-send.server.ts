@@ -1,3 +1,10 @@
+import {
+  loadMetaConfig,
+  metaSendText,
+  metaSendMedia,
+  metaMarkReadWithTyping,
+  type MetaConfig,
+} from "./meta-whatsapp-api.server";
 // Ponto único de envio de mensagens de WhatsApp do sistema inteiro — usado
 // pelas respostas automáticas da IA (webhooks.evolution.ts), pelas respostas
 // manuais do painel (/loja/chat) e pelo broadcast (chat.functions.ts).
@@ -8,13 +15,6 @@
 // provedor não exige (nem arrisca) tocar na lógica de conversa/IA/pedidos,
 // só na camada de envio.
 
-import {
-  loadMetaConfig,
-  metaSendText,
-  metaSendMedia,
-  metaMarkReadWithTyping,
-  type MetaConfig,
-} from "./meta-whatsapp-api.server";
 
 export type EvoConfig = { url: string; instance: string; token: string };
 

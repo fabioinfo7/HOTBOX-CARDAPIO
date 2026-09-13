@@ -14,6 +14,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Info } from "lucide-react";
 import { toast } from "sonner";
+import { Plus, Trash2, Upload, Pencil, MapPinned, Save, ScanSearch, Ban, TriangleAlert } from "lucide-react";
+import { usePopulateZonas } from "@/lib/use-populate-zonas";
 
 /** Ícone "?" com dica ao passar o mouse (ou tocar, no celular) — explica em
  *  linguagem simples o que aquele termo/número quer dizer. Mesmo padrão já
@@ -32,8 +34,6 @@ function InfoTip({ text }: { text: string }) {
     </TooltipProvider>
   );
 }
-import { Plus, Trash2, Upload, Pencil, MapPinned, Save, ScanSearch, Ban, TriangleAlert } from "lucide-react";
-import { usePopulateZonas } from "@/lib/use-populate-zonas";
 
 export const Route = createFileRoute("/_authenticated/loja/zonas-entrega")({
   component: ZonasEntregaPage,

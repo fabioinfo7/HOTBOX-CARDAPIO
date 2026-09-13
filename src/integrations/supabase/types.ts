@@ -1,3 +1,4 @@
+
 // Generated from the project's Supabase SQL schema and migrations.
 // Do not place SQL in this file. Regenerate when the database schema changes.
 

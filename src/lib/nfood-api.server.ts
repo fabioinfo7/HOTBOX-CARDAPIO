@@ -1,3 +1,5 @@
+import { createHmac } from "node:crypto";
+import { logApi } from "./api-log.server";
 // Toda a lógica de comunicação com a API da 99Food mora aqui, num lugar só —
 // espelha o mesmo padrão do ifood-api.server.ts, mas 100% independente dele:
 // nenhuma função, tabela, coluna ou import é compartilhado com a integração
@@ -16,8 +18,6 @@
 // domínio diferente do esperado, basta corrigir no painel, sem precisar
 // mexer em código.
 
-import { createHmac } from "node:crypto";
-import { logApi } from "./api-log.server";
 
 // ============================================================
 // OAuth2 — client credentials, com cache do token no banco

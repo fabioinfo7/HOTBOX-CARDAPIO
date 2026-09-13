@@ -1,3 +1,4 @@
+import { createServerFn } from "@tanstack/react-start";
 // Varredura automática de ruas ao redor da loja.
 //
 // Roda em duas etapas separadas (chamadas diferentes) de propósito: buscar
@@ -8,7 +9,6 @@
 // serverless. Por isso o cliente busca a lista uma vez (fetchOverpassCandidatesFn)
 // e processa em lotes pequenos (resolveZonaBatchFn), com barra de progresso.
 
-import { createServerFn } from "@tanstack/react-start";
 
 export type ZonaCandidate = { rua: string; lat: number; lng: number; bairro?: string | null };
 function normalizeStreet(name: string): string {

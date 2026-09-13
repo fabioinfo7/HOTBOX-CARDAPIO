@@ -1,6 +1,6 @@
-// HOTBOX_BUILD_20260905_SITE_CHECKOUT_SERVER_SPLIT
 import { createServerFn } from "@tanstack/react-start";
 import { getEffectivePrice } from "@/lib/promotions";
+// HOTBOX_BUILD_20260905_SITE_CHECKOUT_SERVER_SPLIT
 
 export type SitePaymentKind = "online_pix" | "online_card" | "infinitepay" | "mercadopago" | "pagarme" | "efi" | "appmax" | "delivery_card" | "delivery_pix";
 

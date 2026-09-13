@@ -10,8 +10,8 @@ import {
 import { useEffect, type ReactNode } from "react";
 import { Toaster } from "sonner";
 import { AnalyticsTracker } from "@/components/analytics-tracker";
-
 import appCss from "../styles.css?url";
+
 function reportAppError(error: unknown, context: Record<string, unknown> = {}) {
   // Log local do erro de renderização — sem dependência de nenhum serviço externo.
   console.error("[app-error-boundary]", error, context);

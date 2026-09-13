@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 /**
  * HotBox Delivery — Meta Conversions API
  *
@@ -6,7 +7,6 @@
  * com SHA-256 antes do envio, conforme o padrão da Meta.
  */
 
-import { createHash } from "node:crypto";
 
 const GRAPH_VERSION = "v22.0";
 

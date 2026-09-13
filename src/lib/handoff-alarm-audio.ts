@@ -1,3 +1,4 @@
+
 // Áudio do alarme de "IA pediu atendimento humano" — singleton próprio,
 // separado do alarme de novos pedidos (src/lib/alarm-audio.ts).
 //

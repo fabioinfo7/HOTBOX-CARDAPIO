@@ -2,8 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Heart, Loader2, MessageSquareText, Star } from "lucide-react";
 import { getPublicFeedbackFn, submitPublicFeedbackFn } from "@/lib/satisfaction.functions";
-
 import hotboxLogoUrl from "@/assets/logo-hotbox.jpeg";
+
 
 const HOTBOX_LOGO_URL = hotboxLogoUrl;
 
