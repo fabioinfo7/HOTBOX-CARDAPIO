@@ -3630,9 +3630,6 @@ function CustomerHome() {
       </header>
 
       <main className="mx-auto max-w-2xl px-4 py-5">
-        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-950">
-          <b>Preços do delivery direto HotBox.</b> A disponibilidade e a taxa de entrega são confirmadas quando você finalizar a sacola. Nas plataformas parceiras, preços e condições podem ser diferentes.
-        </div>
         {!query && (activeCategory === "Tudo" || activeCategory === "Batata") && (
           <div className="mb-5">
             <CustomerLoyaltyClub
