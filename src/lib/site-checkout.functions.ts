@@ -326,11 +326,28 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
       return { error: "Forma de pagamento inválida." };
     }
 
-    const { data: cfg } = await supabaseAdmin
+    // Primeiro tenta o schema atual (roteamento separado para Pix/cartão).
+    // Se o banco ainda estiver na versão anterior e não possuir
+    // digital_pix_provider/digital_card_provider, recuamos para o schema legado
+    // em vez de impedir a abertura do checkout Mercado Pago.
+    const fullConfig = await supabaseAdmin
       .from("store_config")
       .select("digital_payment_provider,digital_pix_provider,digital_card_provider,infinitepay_enabled,infinitepay_handle,mercadopago_enabled,mercadopago_public_key,mercadopago_access_token,pagarme_enabled,pagarme_public_key,pagarme_secret_key,efi_enabled,efi_client_id,efi_client_secret,efi_payee_code,efi_pix_key,efi_pix_certificate_base64,appmax_enabled,appmax_merchant_client_id,appmax_merchant_client_secret,appmax_external_id,digital_menu_card_enabled,digital_menu_pix_enabled,digital_menu_pay_on_delivery_enabled,digital_menu_pay_on_delivery_card_enabled,digital_menu_pay_on_delivery_pix_enabled,digital_menu_scheduling_enabled,manual_store_status,business_hours_enabled,business_hours,business_hours_closed_message,digital_menu_closed_reservations_enabled,delivery_pricing_mode,store_lat,store_lng,google_maps_api_key,delivery_fee_tiers,default_delivery_fee,fixed_delivery_city")
       .eq("id", 1)
       .maybeSingle();
+
+    let cfg: any = fullConfig.data;
+    if (fullConfig.error && /digital_(pix|card)_provider|schema cache|column/i.test(String(fullConfig.error.message || ""))) {
+      const legacyConfig = await supabaseAdmin
+        .from("store_config")
+        .select("digital_payment_provider,infinitepay_enabled,infinitepay_handle,mercadopago_enabled,mercadopago_public_key,mercadopago_access_token,digital_menu_card_enabled,digital_menu_pix_enabled,digital_menu_pay_on_delivery_enabled,digital_menu_pay_on_delivery_card_enabled,digital_menu_pay_on_delivery_pix_enabled,digital_menu_scheduling_enabled,manual_store_status,business_hours_enabled,business_hours,business_hours_closed_message,digital_menu_closed_reservations_enabled,delivery_pricing_mode,store_lat,store_lng,google_maps_api_key,delivery_fee_tiers,default_delivery_fee,fixed_delivery_city")
+        .eq("id", 1)
+        .maybeSingle();
+      if (legacyConfig.error) return { error: legacyConfig.error.message || "Não foi possível carregar as configurações de pagamento." };
+      cfg = legacyConfig.data;
+    } else if (fullConfig.error) {
+      return { error: fullConfig.error.message || "Não foi possível carregar as configurações de pagamento." };
+    }
 
     const storeOpenNow = storeIsOpenNow(cfg);
     let isStoreReservation = false;
