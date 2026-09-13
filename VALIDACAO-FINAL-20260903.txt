@@ -1,0 +1,20 @@
+HOTBOX — VALIDAÇÃO FINAL DA CONSOLIDAÇÃO
+========================================
+
+CORREÇÕES DESTA CONSOLIDAÇÃO
+- Menu lateral atualizado com Financeiro Cardápio e Clube HotBox.
+- /loja/financeiro-cardapio registrado no routeTree.
+- Mercado Pago + InfinitePay presentes e selecionáveis nas Configurações > Pagamentos.
+- Financeiro do Cardápio preparado para Mercado Pago + InfinitePay.
+- Logo do painel/cardápio deixa de depender apenas de /public: cópia foi colocada em src/assets e importada pelo bundle nas telas principais.
+- Pre-flight automático adicionado antes do build. Se arquivos/rotas críticas sumirem, o deploy falha em vez de publicar uma versão regressiva.
+
+VALIDAÇÕES EXECUTADAS NESTE AMBIENTE
+- 160 arquivos TS/TSX passaram por validação sintática do TypeScript: 0 erros sintáticos.
+- Arquivos críticos de Mercado Pago, InfinitePay, Clube HotBox, Financeiro Cardápio e logo: presentes.
+- Rotas críticas verificadas no routeTree: Financeiro Cardápio, Fidelidade, Mercado Pago webhook, InfinitePay webhook e Obrigado.
+- Pre-flight: OK.
+
+LIMITAÇÃO DO AMBIENTE DE GERAÇÃO
+- npm install não concluiu dentro do limite de execução deste ambiente; por isso o build Vite completo não pôde ser executado aqui.
+- No Railway, `npm run build` executará primeiro o novo pre-flight e depois o Vite. Caso falte qualquer peça crítica, o deploy deve parar em vez de publicar incompleto.

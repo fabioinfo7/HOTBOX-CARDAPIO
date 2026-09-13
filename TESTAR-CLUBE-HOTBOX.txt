@@ -1,0 +1,22 @@
+TESTE OBRIGATÓRIO — CLUBE HOTBOX
+
+1. Abra o cardápio sem login: deve continuar funcionando normalmente.
+2. Clique em Entrar no Clube > Google: login deve voltar para o cardápio.
+3. Faça um pedido logado e pague pela InfinitePay.
+4. Confirme que o pedido entrou no sistema normalmente.
+5. Marque o pedido como entregue.
+6. Reabra/atualize o cardápio logado: Forno HotBox deve mostrar +1 pedido.
+7. Para testar rapidamente sem fazer 10 vendas, em /loja/fidelidade altere temporariamente a meta para 1.
+8. Entregue um novo pedido logado: deve surgir um cupom HB-FIEL-XXXXXXXX.
+9. Adicione uma batata participante ao carrinho e use o cupom.
+10. O desconto deve ser exatamente 1 unidade de batata; a taxa de entrega permanece.
+11. Pague o checkout.
+12. No card do pedido, deve aparecer faixa verde grande: CLIENTE FIEL — TEM DIREITO A UMA BATATA GRÁTIS.
+13. Tente usar o mesmo cupom novamente: deve ser recusado.
+14. Verifique /loja/fidelidade: recompensa deve aparecer como usada e o progresso do novo ciclo deve continuar.
+15. Volte a meta para 10 após o teste.
+
+TESTE DE SEGURANÇA
+- Copie um cupom HB-FIEL de uma conta e tente usar em outra conta: deve ser recusado.
+- Inicie um checkout com o cupom em uma aba e tente usar o mesmo código em outra: deve ficar reservado e impedir uso duplo.
+- Se o checkout expirar/falhar, depois de atualizar o Clube o cupom deve ficar disponível novamente.

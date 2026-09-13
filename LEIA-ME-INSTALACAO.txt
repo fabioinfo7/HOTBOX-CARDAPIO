@@ -1,0 +1,93 @@
+HOTBOX DELIVERY — MERCADO PAGO + INFINITEPAY COM TROCA MANUAL
+=============================================================
+
+OBJETIVO
+- Manter a InfinitePay instalada e funcional.
+- Adicionar Mercado Pago Checkout Transparente.
+- Permitir escolher manualmente, em Configurações > Pagamentos, qual provedor atende NOVOS checkouts.
+- O cliente NÃO escolhe a empresa: vê apenas Pix ou cartão.
+- Evitar fallback automático para reduzir risco de cobrança duplicada.
+- Manter pagamentos já iniciados presos ao provedor original mesmo se o administrador trocar o provedor ativo.
+- Atualizar Recebimentos do Cardápio Digital para conciliar Mercado Pago + InfinitePay.
+
+ARQUIVOS DO PACOTE
+1) supabase/migrations/20260903060000_dual_gateway_mercadopago.sql   NOVO
+2) src/lib/mercadopago.functions.ts                                  NOVO
+3) src/components/mercadopago-payment.tsx                            NOVO
+4) src/routes/api/public/webhooks.mercadopago.ts                     NOVO
+5) src/routes/index.tsx                                               SUBSTITUIR
+6) src/lib/site-checkout.functions.ts                                 SUBSTITUIR
+7) src/lib/infinitepay.functions.ts                                   SUBSTITUIR
+8) src/routes/api/public/webhooks.infinitepay.ts                      SUBSTITUIR
+9) src/routes/_authenticated/loja.config.tsx                          SUBSTITUIR
+10) src/lib/digital-menu-finance.functions.ts                        SUBSTITUIR
+11) src/routes/_authenticated/loja.financeiro-cardapio.tsx           SUBSTITUIR
+12) src/routes/obrigado.tsx                                          SUBSTITUIR
+
+O QUE NÃO FOI ALTERADO
+- Fluxo WhatsApp / IA.
+- Pedidos manuais.
+- Evolution API.
+- Validação de CEP/bairro e redirecionamento para iFood.
+- Clube HotBox e regra de fidelidade.
+- Cupons promocionais.
+- Regra de só gerar pedido operacional após pagamento confirmado.
+- Financeiro Geral / Fluxo de Caixa: continuam recebendo o pedido pago normalmente.
+- Correção do login Google que preserva o CEP durante o OAuth foi mantida no index.tsx.
+
+CAMADAS DE SEGURANÇA / CONSISTÊNCIA
+1. O preço final é recalculado no backend da HotBox; o navegador não define o valor cobrado.
+2. Cada checkout grava payment_provider. Trocar o provedor no painel NÃO muda uma cobrança já iniciada.
+3. Mercado Pago usa X-Idempotency-Key por checkout/tentativa para reduzir cobrança duplicada em clique repetido ou timeout.
+4. Device ID do Mercado Pago é enviado para melhorar análise de risco/aprovação.
+5. Cartão usa 3DS 2.0 em modo optional: só abre confirmação do banco quando necessária.
+6. O webhook nunca libera pedido confiando apenas no payload recebido: o backend consulta o pagamento diretamente no Mercado Pago.
+7. Antes de criar o pedido, são conferidos: status APPROVED, moeda BRL, valor exato e external_reference/checkout_id.
+8. finalize_site_checkout_paid usa lock + order_id para idempotência: o mesmo pagamento não cria dois pedidos.
+9. Access Token do Mercado Pago não é enviado ao navegador. A página pública recebe apenas Public Key e flags seguras.
+10. InfinitePay continua usando payment_check e token próprio do webhook.
+11. Pagamentos em andamento continuam verificáveis mesmo depois de troca manual do provedor ativo.
+12. Recompensa do Clube fica reservada por checkout e volta a AVAILABLE se o checkout for cancelado antes do pagamento.
+
+EXPERIÊNCIA DO CLIENTE
+MERCADO PAGO ATIVO:
+- Cliente finaliza os dados da HotBox.
+- Clica em pagar.
+- Pix/cartão abre DENTRO da HotBox.
+- Pix: QR Code + Copia e Cola aparece no próprio site; confirmação automática.
+- Cartão: formulário seguro do Mercado Pago; 3DS só quando o banco solicitar.
+- Após confirmação, pedido entra no sistema e o WhatsApp é avisado.
+
+INFINITEPAY ATIVA:
+- Fluxo atual é preservado e o cliente é enviado ao checkout da InfinitePay.
+- Confirmação continua usando payment_check antes de gerar o pedido.
+
+TROCA MANUAL
+Configurações > Pagamentos > Provedor ativo do cardápio digital.
+- Mercado Pago
+- InfinitePay
+A mudança vale apenas para checkouts criados DEPOIS de salvar.
+
+CREDENCIAIS MERCADO PAGO
+Necessárias:
+- Public Key de produção
+- Access Token de produção
+Não são necessários Client ID/Client Secret para este fluxo de pagamento próprio.
+
+WEBHOOK MERCADO PAGO
+O sistema informa uma notification_url com token próprio da HotBox em cada pagamento criado.
+Endpoint interno:
+https://hotbox.up.railway.app/api/public/webhooks/mercadopago
+O token secreto é gerado no banco e não fica exposto no painel público.
+
+PARCELAMENTO
+Para delivery de ticket baixo, o padrão recomendado no pacote é 1x.
+Pode ser alterado no painel para 2x, 3x, 6x ou 12x.
+
+VALIDAÇÃO FEITA NESTE PACOTE
+- Sintaxe TypeScript/TSX dos 11 arquivos de código validada com TypeScript transpileModule.
+- O pacote não altera package.json: Mercado Pago JS/Bricks é carregado pelo SDK oficial no navegador.
+- O SQL é incremental: não apaga histórico InfinitePay.
+
+IMPORTANTE
+Faça os testes de TESTES-OBRIGATORIOS.txt antes de abrir o Mercado Pago para todos os clientes.
