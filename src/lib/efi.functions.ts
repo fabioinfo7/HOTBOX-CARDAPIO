@@ -181,8 +181,9 @@ export const createEfiPayment = createServerFn({ method: "POST" })
     if (!checkout || checkout.payment_provider !== "efi") return { ok: false, error: "Checkout Efí não encontrado." } as const;
     if (checkout.order_id) return { ok: true, approved: true, order_id: checkout.order_id } as const;
     if (new Date(checkout.expires_at).getTime() < Date.now()) return { ok: false, error: "Este checkout expirou. Refaça o pedido." } as const;
-    const expectedMethod = String(checkout.payment_kind || "").endsWith("_pix") ? "pix" : "card";
-    if (data.method !== expectedMethod) return { ok: false, error: "Forma de pagamento diferente da selecionada." } as const;
+    const kind = String(checkout.payment_kind || "");
+    const expectedMethod = kind.endsWith("_pix") ? "pix" : kind.endsWith("_card") ? "card" : null;
+    if (expectedMethod && data.method !== expectedMethod) return { ok: false, error: "Forma de pagamento diferente da selecionada." } as const;
 
     if (data.method === "pix") {
       if (!cfg.pixKey || !cfg.certificateBase64) return { ok: false, error: "Pix Efí precisa da chave Pix e do certificado P12 configurados." } as const;
