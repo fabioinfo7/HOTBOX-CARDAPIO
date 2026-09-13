@@ -41,7 +41,7 @@ import { AppmaxPayment } from "@/components/appmax-payment";
 import { quoteLoyaltyReward } from "@/lib/loyalty.functions";
 import { quoteSiteDelivery } from "@/lib/site-checkout.functions";
 import { getPublicTestimonialsFn } from "@/lib/satisfaction.functions";
-import { trackAnalytics, analyticsIdentity, setAnalyticsVirtualPage } from "@/lib/analytics";
+import { trackAnalytics, trackAnalyticsAndWait, analyticsIdentity, setAnalyticsVirtualPage } from "@/lib/analytics";
 import { MetaPixelInjector } from "@/components/meta-pixel-injector";
 
 export const Route = createFileRoute("/")({
@@ -960,6 +960,29 @@ function CustomerHome() {
     deliveryPricingMode,
   ]);
 
+  // HOTBOX_MENU_ACCESS_GRANTED
+  // Só conta como acesso ao cardápio depois que a área de entrega foi validada.
+  // Quem apenas abre a tela do CEP ou é redirecionado ao iFood fica fora dessa métrica.
+  useEffect(() => {
+    if (areaStatus !== "supported") return;
+    try {
+      const ids = analyticsIdentity();
+      const key = `hb_menu_access_${ids.session_id}`;
+      if (sessionStorage.getItem(key)) return;
+      sessionStorage.setItem(key, "1");
+    } catch {
+      // segue sem dedupe se o navegador bloquear storage
+    }
+    const saved = readAreaAccess();
+    trackAnalytics("menu_access_granted", {
+      event_category: "funnel",
+      properties: {
+        cep: onlyDigits(saved?.cep || form.cep || accessCep || "").slice(0, 8) || null,
+        neighborhood: String(saved?.neighborhood || form.neighborhood || validatedNeighborhood || "").trim() || null,
+      },
+    });
+  }, [areaStatus, accessCep, form.cep, form.neighborhood, validatedNeighborhood]);
+
   useEffect(() => {
     getPublicTestimonialsFn()
       .then((result: any) => {
@@ -1149,13 +1172,22 @@ function CustomerHome() {
 
 
 
-  function redirectOutsideArea() {
+  async function redirectOutsideArea(details?: { cep?: string | null; neighborhood?: string | null }) {
     const target = ifoodStoreLink.trim();
-    if (target) {
-      window.location.replace(target);
-      return;
-    }
-    window.location.replace(WHATSAPP_URL);
+    const cleanCep = onlyDigits(details?.cep || accessCep || form.cep || "").slice(0, 8);
+    const neighborhood = String(details?.neighborhood || validatedNeighborhood || form.neighborhood || "").trim();
+    const destination = target ? "ifood" : "whatsapp";
+
+    await trackAnalyticsAndWait(target ? "ifood_redirect_outside_area" : "outside_area_redirect_whatsapp", {
+      event_category: "delivery_region",
+      properties: {
+        cep: cleanCep || null,
+        neighborhood: neighborhood || null,
+        destination,
+      },
+    });
+
+    window.location.replace(target || WHATSAPP_URL);
   }
   async function checkDeliveryArea(
     neighborhood: string,
@@ -1308,7 +1340,7 @@ function CustomerHome() {
           pricingMode: quote?.pricingMode || null,
           source: "cep",
         });
-        redirectOutsideArea();
+        void redirectOutsideArea({ cep, neighborhood: unsupportedNeighborhood });
         return;
       }
       if (quote?.quoteUnavailable) {
@@ -1376,6 +1408,15 @@ function CustomerHome() {
             cep,
             neighborhood: supportedNeighborhood || current.neighborhood,
           }));
+          trackDeliveryRegion({
+            cep,
+            neighborhood: supportedNeighborhood,
+            city: form.city || null,
+            supported: true,
+            fee: Number.isFinite(fee) ? fee : 0,
+            pricingMode: manualCepQuote?.pricingMode || "neighborhood",
+            source: "cep",
+          });
           setAreaStatus(
             manualCepQuote?.needsNumber ? "needs_number" : "supported",
           );
@@ -1418,7 +1459,7 @@ function CustomerHome() {
           pricingMode: quote?.pricingMode || null,
           source: "bairro_manual",
         });
-        redirectOutsideArea();
+        void redirectOutsideArea({ cep: accessCep || form.cep || null, neighborhood });
         return;
       }
       if (quote?.needsNumber || quote?.pricingMode === "distance") {
@@ -2338,7 +2379,7 @@ function CustomerHome() {
       console.error(err);
       const message = String(err?.message || "Não foi possível iniciar o pagamento.");
       trackAnalytics("checkout_error", { event_category: "error", value: total, payment_method: paymentChoice === "online" ? paymentProvider : paymentChoice, properties: { message: message.slice(0,300) } });
-      if (/fora da área|fora da area|bairro|entrega/i.test(message)) redirectOutsideArea();
+      if (/fora da área|fora da area|bairro|entrega/i.test(message)) void redirectOutsideArea();
       toast.error(message);
     } finally {
       setPlacing(false);
