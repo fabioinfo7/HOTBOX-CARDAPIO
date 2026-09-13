@@ -1134,6 +1134,33 @@ function CustomerHome() {
     return `O horário de entrega para ${name} encerrou às ${deliveryCutoffTime} (horário de Brasília). Não é possível finalizar pedidos para este bairro agora.`;
   }
 
+  function trackDeliveryRegion(input: {
+    cep?: string | null;
+    neighborhood?: string | null;
+    city?: string | null;
+    supported?: boolean;
+    fee?: number | null;
+    pricingMode?: string | null;
+    source?: "cep" | "bairro_manual";
+  }) {
+    const cleanCep = onlyDigits(input.cep || "").slice(0, 8);
+    const neighborhood = String(input.neighborhood || "").trim();
+    if (!cleanCep && !neighborhood) return;
+
+    trackAnalytics("delivery_area_checked", {
+      event_category: "delivery_region",
+      properties: {
+        cep: cleanCep || null,
+        neighborhood: neighborhood || null,
+        city: String(input.city || "").trim() || null,
+        supported: input.supported !== false,
+        delivery_fee: input.fee == null ? null : Number(input.fee),
+        pricing_mode: input.pricingMode || null,
+        lookup_source: input.source || "cep",
+      },
+    });
+  }
+
   async function validateCepAccess() {
     const cep = onlyDigits(accessCep);
     if (cep.length !== 8) {
@@ -1183,12 +1210,31 @@ function CustomerHome() {
           neighborhood: supportedNeighborhood,
           city: address.localidade || current.city,
         }));
+        trackDeliveryRegion({
+          cep,
+          neighborhood: supportedNeighborhood,
+          city: address.localidade || null,
+          supported: true,
+          fee: quote?.fee == null ? null : Number(quote.fee),
+          pricingMode: "distance",
+          source: "cep",
+        });
         setAreaStatus("needs_number");
         setAreaMessage("Para calcular a taxa por quilometragem com precisão, informe o número do endereço.");
         return;
       }
       if (!quote?.supported) {
-        setValidatedNeighborhood(String(quote?.neighborhood || address?.bairro || ""));
+        const unsupportedNeighborhood = String(quote?.neighborhood || address?.bairro || "");
+        setValidatedNeighborhood(unsupportedNeighborhood);
+        trackDeliveryRegion({
+          cep,
+          neighborhood: unsupportedNeighborhood,
+          city: address?.localidade || null,
+          supported: false,
+          fee: null,
+          pricingMode: quote?.pricingMode || null,
+          source: "cep",
+        });
         redirectOutsideArea();
         return;
       }
@@ -1223,6 +1269,15 @@ function CustomerHome() {
         outsideDeliveryHours: quote?.outsideDeliveryHours === true,
         schedulingEnabled: quote?.schedulingEnabled === true,
         savedAt: Date.now(),
+      });
+      trackDeliveryRegion({
+        cep,
+        neighborhood: supportedNeighborhood,
+        city: address.localidade || null,
+        supported: true,
+        fee: Number.isFinite(fee) ? fee : 0,
+        pricingMode: quote?.pricingMode || "neighborhood",
+        source: "cep",
       });
       setAreaStatus("supported");
       setAreaMessage("");
@@ -1282,6 +1337,14 @@ function CustomerHome() {
       applyDeliveryWindowFromQuote(quote);
       if (!quote?.supported) {
         setValidatedNeighborhood(neighborhood);
+        trackDeliveryRegion({
+          cep: accessCep || form.cep || null,
+          neighborhood,
+          supported: false,
+          fee: null,
+          pricingMode: quote?.pricingMode || null,
+          source: "bairro_manual",
+        });
         redirectOutsideArea();
         return;
       }
@@ -1308,6 +1371,14 @@ function CustomerHome() {
         outsideDeliveryHours: quote?.outsideDeliveryHours === true,
         schedulingEnabled: quote?.schedulingEnabled === true,
         savedAt: Date.now(),
+      });
+      trackDeliveryRegion({
+        cep: accessCep || form.cep || null,
+        neighborhood: supportedNeighborhood,
+        supported: true,
+        fee: Number.isFinite(fee) ? fee : 0,
+        pricingMode: "neighborhood",
+        source: "bairro_manual",
       });
       setAreaStatus("supported");
       setAreaMessage("");
