@@ -4,6 +4,9 @@ const VISITOR_KEY = "hb_analytics_visitor";
 const SESSION_KEY = "hb_analytics_session";
 const LAST_KEY = "hb_analytics_last";
 const SESSION_TIMEOUT = 30 * 60 * 1000;
+const ATTRIBUTION_KEY = "hb_analytics_attribution_v2";
+const VIRTUAL_PAGE_PATH_KEY = "__hotboxAnalyticsVirtualPagePath";
+const VIRTUAL_PAGE_TITLE_KEY = "__hotboxAnalyticsVirtualPageTitle";
 
 function uid(prefix: string) {
   try {
@@ -88,12 +91,12 @@ function attribution() {
   const ref = document.referrer || "";
   const explicitSourceRaw = q.get("utm_source") || q.get("source");
   const explicitSource = String(explicitSourceRaw || "").trim().toLowerCase();
+  const explicitMedium = String(q.get("utm_medium") || "").trim().toLowerCase();
   const fbclid = q.get("fbclid");
 
   let source = explicitSource || "direct";
-  let medium = q.get("utm_medium") || (ref ? "referral" : "none");
+  let medium = explicitMedium || (ref ? "referral" : "none");
 
-  // Prioridade: quando o próprio link informa a origem, respeitamos essa informação.
   if (explicitSource) {
     if (["fb", "facebook", "facebook_ads"].includes(explicitSource)) {
       source = "facebook";
@@ -102,15 +105,22 @@ function attribution() {
     } else if (["meta", "meta_ads", "metaads"].includes(explicitSource)) {
       source = "meta_ads";
     }
+
+    // UTM explícita sempre vence. Isso permite separar organicamente
+    // Instagram/Facebook de anúncios com precisão.
+    if (!explicitMedium) {
+      if (/(_ads|ads)$/.test(explicitSource)) medium = "paid_social";
+      else medium = ref ? "referral" : "social";
+    }
   } else if (/instagram\.com|l\.instagram\.com/i.test(ref)) {
     source = "instagram";
-    medium = fbclid ? "paid_social" : "social";
-  } else if (/facebook\.com|fb\.com/i.test(ref)) {
+    medium = fbclid ? "paid_social" : "organic_social";
+  } else if (/facebook\.com|fb\.com|l\.facebook\.com/i.test(ref)) {
     source = "facebook";
-    medium = fbclid ? "paid_social" : "social";
+    medium = fbclid ? "paid_social" : "organic_social";
   } else if (fbclid) {
-    // O fbclid prova que o clique passou pela Meta, mas sozinho não informa
-    // com segurança se veio do Facebook ou do Instagram.
+    // O fbclid confirma tráfego de anúncio Meta, mas sozinho NÃO revela
+    // com segurança se o anúncio foi exibido no Instagram ou Facebook.
     source = "meta_ads";
     medium = "paid_social";
   } else if (/google\./i.test(ref)) {
@@ -121,7 +131,7 @@ function attribution() {
     medium = "social";
   }
 
-  return {
+  const current = {
     referrer: ref || null,
     source,
     medium,
@@ -134,6 +144,29 @@ function attribution() {
       q.get("ttclid") ||
       q.get("msclkid"),
   };
+
+  // Mantém a primeira atribuição da sessão. Assim uma navegação interna,
+  // OAuth ou alteração de tela não transforma uma visita do Instagram em "direta".
+  try {
+    const existingRaw = sessionStorage.getItem(ATTRIBUTION_KEY);
+    const hasCampaignSignal =
+      Boolean(explicitSource) ||
+      Boolean(explicitMedium) ||
+      Boolean(fbclid) ||
+      Boolean(ref);
+
+    if (hasCampaignSignal || !existingRaw) {
+      sessionStorage.setItem(ATTRIBUTION_KEY, JSON.stringify(current));
+      return current;
+    }
+
+    const existing = JSON.parse(existingRaw);
+    if (existing && typeof existing === "object") return existing;
+  } catch {
+    // Analytics nunca pode bloquear a navegação.
+  }
+
+  return current;
 }
 
 function deviceInfo() {
@@ -387,6 +420,65 @@ function trackMetaPixel(
 }
 
 
+function currentAnalyticsPage() {
+  if (typeof window === "undefined") {
+    return { page_path: "/", page_title: "" };
+  }
+  const w = window as any;
+  return {
+    page_path:
+      String(w[VIRTUAL_PAGE_PATH_KEY] || "").trim() ||
+      `${window.location.pathname}${window.location.search}`,
+    page_title:
+      String(w[VIRTUAL_PAGE_TITLE_KEY] || "").trim() ||
+      document.title,
+  };
+}
+
+function sendAnalyticsPresenceNow() {
+  if (typeof window === "undefined" || document.visibilityState !== "visible") return;
+  if (/^\/(loja|admin|entregador)(\/|$)/.test(window.location.pathname)) return;
+
+  const ids = analyticsIdentity();
+  const page = currentAnalyticsPage();
+  void trackAnalyticsPresence({
+    data: {
+      ...ids,
+      page_path: page.page_path,
+      page_title: page.page_title,
+    },
+  }).catch(() => {
+    // Presença não pode quebrar a experiência.
+  });
+}
+
+export function setAnalyticsVirtualPage(
+  page_path: string,
+  page_title?: string | null,
+  emitPageView = false,
+) {
+  if (typeof window === "undefined") return;
+
+  const w = window as any;
+  const nextPath = String(page_path || "").trim() || "/";
+  const nextTitle = String(page_title || "").trim() || document.title;
+  const previousPath = String(w[VIRTUAL_PAGE_PATH_KEY] || "").trim();
+
+  w[VIRTUAL_PAGE_PATH_KEY] = nextPath;
+  w[VIRTUAL_PAGE_TITLE_KEY] = nextTitle;
+
+  sendAnalyticsPresenceNow();
+
+  if (emitPageView && previousPath !== nextPath) {
+    trackAnalytics("page_view", {
+      event_category: "navigation",
+      page_path: nextPath,
+      page_title: nextTitle,
+      properties: { virtual_page: true },
+    });
+  }
+}
+
 function startLivePresenceTracking() {
   if (typeof window === "undefined") return;
   if (/^\/(loja|admin|entregador)(\/|$)/.test(window.location.pathname)) return;
@@ -398,16 +490,7 @@ function startLivePresenceTracking() {
   const sendPresence = () => {
     if (document.visibilityState !== "visible") return;
 
-    const ids = analyticsIdentity();
-    void trackAnalyticsPresence({
-      data: {
-        ...ids,
-        page_path: `${window.location.pathname}${window.location.search}`,
-        page_title: document.title,
-      },
-    }).catch(() => {
-      // Presença ao vivo nunca pode atrapalhar a navegação ou o checkout.
-    });
+    sendAnalyticsPresenceNow();
   };
 
   sendPresence();
@@ -465,8 +548,8 @@ export function trackAnalytics(
     event_category: extra.event_category || "engagement",
     page_path:
       extra.page_path ||
-      `${window.location.pathname}${window.location.search}`,
-    page_title: extra.page_title || document.title,
+      currentAnalyticsPage().page_path,
+    page_title: extra.page_title || currentAnalyticsPage().page_title,
     ...enrichedExtra,
   } as AnalyticsEventInput;
 
