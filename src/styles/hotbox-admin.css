@@ -1,0 +1,192 @@
+
+:root {
+  --hotbox-bg: #f7f4ee;
+  --hotbox-surface: #ffffff;
+  --hotbox-surface-soft: #fbf8f2;
+  --hotbox-border: #eadfce;
+  --hotbox-text: #171717;
+  --hotbox-muted: #6f6a62;
+  --hotbox-yellow: #ffc800;
+  --hotbox-red: #e53935;
+  --hotbox-orange: #f97316;
+  --hotbox-green: #0f766e;
+  --hotbox-shadow: 0 14px 40px rgba(34, 24, 10, 0.08);
+}
+
+.hotbox-admin-shell {
+  min-height: 100%;
+  background:
+    radial-gradient(circle at 8% 0%, rgba(255, 200, 0, .10), transparent 28%),
+    radial-gradient(circle at 100% 6%, rgba(229, 57, 53, .07), transparent 24%),
+    var(--hotbox-bg);
+  color: var(--hotbox-text);
+}
+
+.hotbox-admin-page {
+  width: 100%;
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 22px;
+}
+
+.hotbox-admin-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.hotbox-admin-title-wrap {
+  min-width: 0;
+}
+
+.hotbox-admin-title {
+  margin: 0;
+  font-size: clamp(1.5rem, 2vw, 2.25rem);
+  line-height: 1.05;
+  font-weight: 950;
+  letter-spacing: -0.035em;
+}
+
+.hotbox-admin-subtitle {
+  margin-top: 7px;
+  max-width: 900px;
+  color: var(--hotbox-muted);
+  font-size: .88rem;
+  line-height: 1.55;
+}
+
+.hotbox-admin-card {
+  border: 1px solid var(--hotbox-border);
+  border-radius: 22px;
+  background: var(--hotbox-surface);
+  box-shadow: var(--hotbox-shadow);
+}
+
+.hotbox-admin-card-soft {
+  border: 1px solid var(--hotbox-border);
+  border-radius: 18px;
+  background: var(--hotbox-surface-soft);
+}
+
+.hotbox-admin-section {
+  padding: 18px;
+}
+
+.hotbox-admin-section-title {
+  font-weight: 900;
+  letter-spacing: -0.015em;
+}
+
+.hotbox-admin-kpi {
+  border: 1px solid var(--hotbox-border);
+  border-radius: 20px;
+  background: linear-gradient(180deg, #fff, #fffaf1);
+  box-shadow: 0 10px 28px rgba(44, 32, 12, .06);
+}
+
+.hotbox-admin-table-wrap {
+  overflow: hidden;
+  border: 1px solid var(--hotbox-border);
+  border-radius: 18px;
+  background: white;
+}
+
+.hotbox-admin-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--hotbox-border);
+  border-radius: 18px;
+  background: rgba(255,255,255,.92);
+  box-shadow: 0 8px 24px rgba(41, 31, 14, .05);
+}
+
+.hotbox-admin-chip {
+  border: 1px solid #e8dcc8;
+  background: #fffaf0;
+  color: #4a4032;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: .72rem;
+  font-weight: 800;
+}
+
+.hotbox-admin-accent {
+  background: linear-gradient(135deg, #151515 0%, #272015 55%, #3d2a00 100%);
+  color: white;
+  border: 1px solid rgba(255,200,0,.3);
+  box-shadow: 0 16px 40px rgba(0,0,0,.16);
+}
+
+.hotbox-admin-accent .hotbox-admin-subtitle,
+.hotbox-admin-accent .text-muted-foreground {
+  color: rgba(255,255,255,.72) !important;
+}
+
+.hotbox-admin-accent .hotbox-admin-chip {
+  background: rgba(255,255,255,.08);
+  border-color: rgba(255,255,255,.16);
+  color: #fff;
+}
+
+.hotbox-admin-danger {
+  border-color: rgba(229,57,53,.28);
+  background: linear-gradient(180deg, #fff, #fff7f6);
+}
+
+.hotbox-admin-success {
+  border-color: rgba(15,118,110,.25);
+  background: linear-gradient(180deg, #fff, #f3fffb);
+}
+
+.hotbox-admin-grid-4 {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(4, minmax(0,1fr));
+}
+
+.hotbox-admin-grid-3 {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0,1fr));
+}
+
+.hotbox-admin-grid-2 {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0,1fr));
+}
+
+.hotbox-admin-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #eadfce 12%, #eadfce 88%, transparent);
+}
+
+.hotbox-admin-empty {
+  display: grid;
+  place-items: center;
+  min-height: 180px;
+  border: 1px dashed #ddcfba;
+  border-radius: 18px;
+  background: #fffaf2;
+  color: #776f65;
+  text-align: center;
+  padding: 28px;
+}
+
+@media (max-width: 1100px) {
+  .hotbox-admin-grid-4 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .hotbox-admin-grid-3 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+}
+
+@media (max-width: 720px) {
+  .hotbox-admin-page { padding: 14px; }
+  .hotbox-admin-header { flex-direction: column; align-items: stretch; }
+  .hotbox-admin-grid-4,
+  .hotbox-admin-grid-3,
+  .hotbox-admin-grid-2 { grid-template-columns: 1fr; }
+}
