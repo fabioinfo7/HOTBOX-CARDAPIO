@@ -45,7 +45,6 @@ import { quoteSiteDelivery } from "@/lib/site-checkout.functions";
 import { getPublicTestimonialsFn } from "@/lib/satisfaction.functions";
 import { trackAnalytics, trackAnalyticsAndWait, analyticsIdentity, setAnalyticsVirtualPage } from "@/lib/analytics";
 import { MetaPixelInjector } from "@/components/meta-pixel-injector";
-import hotboxLogoUrl from "@/assets/logo-hotbox.jpeg";
 
 export const Route = createFileRoute("/")({
   component: CustomerHomeTracked,
@@ -146,6 +145,7 @@ type ActiveOrderSummary = {
   delivery_mode?: string | null;
 };
 
+import hotboxLogoUrl from "@/assets/logo-hotbox.jpeg";
 
 const HOTBOX_LOGO_URL = hotboxLogoUrl;
 const WHATSAPP_URL = "https://wa.me/5521984296288?text=" + encodeURIComponent("Olá! Preciso de ajuda com meu pedido no cardápio digital da Hotbox.");
@@ -760,6 +760,19 @@ function CustomerHome() {
 
   const [view, setView] = useState<View>("list");
 
+  const [query, setQuery] = useState("");
+  const [activeCategory, setActiveCategory] = useState("Batata");
+  const [activeFilter, setActiveFilter] = useState<ActiveFilter>("todos");
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [detailQty, setDetailQty] = useState(1);
+  const [detailNotes, setDetailNotes] = useState("");
+  const [detailAddonIds, setDetailAddonIds] = useState<string[]>([]);
+  const [detailAddonQty, setDetailAddonQty] = useState<Record<string, number>>({});
+  const [detailOrderBumpId, setDetailOrderBumpId] = useState<string | null>(null);
+  const [detailReturnView, setDetailReturnView] = useState<"list" | "cart" | "checkout">("list");
+  const [addonGroupsByProduct, setAddonGroupsByProduct] = useState<Record<string, AddonGroup[]>>({});
+  const [orderBumps, setOrderBumps] = useState<OrderBump[]>([]);
+
   // HOTBOX_VIRTUAL_PAGE_TRACKING
   // O cardápio é uma SPA: detalhes, carrinho e checkout não mudam a URL real.
   // Por isso publicamos uma "página virtual" para o Analytics/presença ao vivo.
@@ -789,19 +802,6 @@ function CustomerHome() {
 
     setAnalyticsVirtualPage(path, title, true);
   }, [view, selectedProduct?.id, selectedProduct?.name, areaStatus]);
-
-  const [query, setQuery] = useState("");
-  const [activeCategory, setActiveCategory] = useState("Batata");
-  const [activeFilter, setActiveFilter] = useState<ActiveFilter>("todos");
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  const [detailQty, setDetailQty] = useState(1);
-  const [detailNotes, setDetailNotes] = useState("");
-  const [detailAddonIds, setDetailAddonIds] = useState<string[]>([]);
-  const [detailAddonQty, setDetailAddonQty] = useState<Record<string, number>>({});
-  const [detailOrderBumpId, setDetailOrderBumpId] = useState<string | null>(null);
-  const [detailReturnView, setDetailReturnView] = useState<"list" | "cart" | "checkout">("list");
-  const [addonGroupsByProduct, setAddonGroupsByProduct] = useState<Record<string, AddonGroup[]>>({});
-  const [orderBumps, setOrderBumps] = useState<OrderBump[]>([]);
 
   const [form, setForm] = useState({
     name: "",
