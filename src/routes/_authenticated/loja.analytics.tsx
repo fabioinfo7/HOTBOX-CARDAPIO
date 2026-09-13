@@ -106,6 +106,9 @@ const PAYMENT_LABEL: Record<string, string> = {
 
 const EVENT_LABEL: Record<string, string> = {
   page_view: "Entrou em uma página",
+  menu_access_granted: "Entrou de verdade no cardápio",
+  ifood_redirect_outside_area: "Redirecionado ao iFood por área não atendida",
+  outside_area_redirect_whatsapp: "Fora da área — direcionado ao WhatsApp",
   product_view: "Abriu um produto",
   add_to_cart: "Colocou produto na sacola",
   order_bump_added: "Aceitou uma oferta extra",
@@ -370,6 +373,18 @@ function AnalyticsPage() {
   const [utmCampaign, setUtmCampaign] = useState("");
   const [utmContent, setUtmContent] = useState("");
   const [utmCopied, setUtmCopied] = useState(false);
+  const [livePageFilter, setLivePageFilter] = useState("all");
+  const [liveOriginFilter, setLiveOriginFilter] = useState("all");
+  const [campaignOriginFilter, setCampaignOriginFilter] = useState("all");
+  const [campaignNameFilter, setCampaignNameFilter] = useState("all");
+  const [campaignResultFilter, setCampaignResultFilter] = useState("all");
+  const [regionFilter, setRegionFilter] = useState("");
+  const [regionStatusFilter, setRegionStatusFilter] = useState("all");
+  const [productFilter, setProductFilter] = useState("");
+  const [productActivityFilter, setProductActivityFilter] = useState("all");
+  const [journeyOriginFilter, setJourneyOriginFilter] = useState("all");
+  const [journeyCampaignFilter, setJourneyCampaignFilter] = useState("all");
+  const [journeySituationFilter, setJourneySituationFilter] = useState("all");
 
   async function loadLive() {
     const cutoff = new Date(Date.now() - 45 * 1000).toISOString();
@@ -442,7 +457,7 @@ function AnalyticsPage() {
 
   useEffect(() => {
     setJourneyPage(1);
-  }, [search, days]);
+  }, [search, days, journeyOriginFilter, journeyCampaignFilter, journeySituationFilter]);
 
   const eventSet = useMemo(() => {
     const by = new Map<string, Set<string>>();
@@ -460,9 +475,72 @@ function AnalyticsPage() {
       names.some((n) => eventSet.get(s.id)?.has(n)),
     ).length;
 
-  const visitors = new Set(sessions.map((s) => s.visitor_id)).size;
-  const converted = sessions.filter((s) => s.converted).length;
-  const revenue = sessions.reduce(
+  const menuAccessSessionIds = useMemo(() => {
+    const ids = new Set<string>();
+    const insideEvents = new Set([
+      "menu_access_granted", "product_view", "add_to_cart", "order_bump_added", "cart_opened",
+      "checkout_started", "checkout_created", "checkout_submitted", "payment_selected", "payment_started",
+      "payment_redirect", "payment_failed", "purchase", "order_created",
+    ]);
+    for (const event of events) {
+      const id = String(event.session_id || "");
+      if (!id) continue;
+      const page = canonicalPageKey(event.page_path || event.properties?.page_path || "/");
+      if (insideEvents.has(String(event.event_name)) || page === "/cardapio" || page === "/carrinho" || page === "/checkout" || page.startsWith("/produto/")) ids.add(id);
+    }
+    return ids;
+  }, [events]);
+  const ifoodRedirectSessionIds = useMemo(
+    () => new Set(events.filter((e) => e.event_name === "ifood_redirect_outside_area").map((e) => String(e.session_id || "")).filter(Boolean)),
+    [events],
+  );
+  const deliveryCheckedSessionIds = useMemo(
+    () => new Set(events.filter((e) => e.event_name === "delivery_area_checked").map((e) => String(e.session_id || "")).filter(Boolean)),
+    [events],
+  );
+
+  const cardapioEntrySessionIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const event of events) {
+      const id = String(event.session_id || "");
+      if (!id) continue;
+      const page = canonicalPageKey(event.page_path || event.properties?.page_path || "/");
+      if (
+        page === "/cardapio/area-entrega" ||
+        page === "/cardapio" ||
+        page === "/carrinho" ||
+        page === "/checkout" ||
+        page.startsWith("/produto/") ||
+        ["delivery_area_checked", "menu_access_granted", "ifood_redirect_outside_area"].includes(String(event.event_name))
+      ) ids.add(id);
+    }
+    return ids;
+  }, [events]);
+
+  const actualMenuSessions = useMemo(
+    () => sessions.filter((s) => menuAccessSessionIds.has(String(s.id))),
+    [sessions, menuAccessSessionIds],
+  );
+
+  const cepOnlySessions = useMemo(() => {
+    const currentNow = Date.now();
+    return sessions.filter((s) => {
+      const id = String(s.id);
+      if (!cardapioEntrySessionIds.has(id)) return false;
+      if (menuAccessSessionIds.has(id) || ifoodRedirectSessionIds.has(id)) return false;
+      const inactiveMs = currentNow - new Date(s.last_seen_at || s.first_seen_at).getTime();
+      return inactiveMs > 5 * 60000;
+    });
+  }, [sessions, cardapioEntrySessionIds, menuAccessSessionIds, ifoodRedirectSessionIds]);
+
+  const ifoodRedirectSessions = useMemo(
+    () => sessions.filter((s) => ifoodRedirectSessionIds.has(String(s.id))),
+    [sessions, ifoodRedirectSessionIds],
+  );
+
+  const visitors = new Set(actualMenuSessions.map((s) => s.visitor_id)).size;
+  const converted = actualMenuSessions.filter((s) => s.converted).length;
+  const revenue = actualMenuSessions.reduce(
     (a, s) => a + Number(s.revenue || 0),
     0,
   );
@@ -485,7 +563,7 @@ function AnalyticsPage() {
   ]);
   const now = Date.now();
 
-  const abandoned = sessions.filter(
+  const abandoned = actualMenuSessions.filter(
     (s) =>
       !s.converted &&
       now - new Date(s.last_seen_at).getTime() > 15 * 60000 &&
@@ -536,10 +614,10 @@ function AnalyticsPage() {
     return "Não comprou";
   }
 
-  const metaSessions = sessions.filter((s) =>
+  const metaSessions = actualMenuSessions.filter((s) =>
     ["facebook", "instagram", "meta_ads"].includes(String(s.source || "")),
   );
-  const facebookSessions = sessions.filter(
+  const facebookSessions = actualMenuSessions.filter(
     (s) => String(s.source || "") === "facebook",
   );
   const metaPurchases = metaSessions.filter((s) => s.converted);
@@ -552,7 +630,7 @@ function AnalyticsPage() {
 
   const channelRows = useMemo(() => {
     const grouped = new Map<string, { visits: number; purchases: number; revenue: number }>();
-    for (const session of sessions) {
+    for (const session of actualMenuSessions) {
       const channel = trafficChannel(session);
       const row = grouped.get(channel) || { visits: 0, purchases: 0, revenue: 0 };
       row.visits += 1;
@@ -563,7 +641,7 @@ function AnalyticsPage() {
     return [...grouped.entries()]
       .map(([channel, data]) => ({ channel, ...data }))
       .sort((a, b) => b.visits - a.visits);
-  }, [sessions]);
+  }, [actualMenuSessions]);
 
   const channelTotals = useMemo(() => {
     const get = (name: string) => channelRows.find((row) => row.channel === name) || { visits: 0, purchases: 0, revenue: 0 };
@@ -592,8 +670,16 @@ function AnalyticsPage() {
     return map;
   }, [events]);
 
-  const liveWithRegion = liveSessions.filter((session) => latestRegionBySession.has(String(session.id))).length;
-  const liveAwaitingRegion = Math.max(0, liveSessions.length - liveWithRegion);
+  const liveMenuSessions = useMemo(() => liveSessions.filter((session) => {
+    const raw = canonicalPageKey(session.current_page_path || session.entry_path || "/");
+    return menuAccessSessionIds.has(String(session.id)) && raw !== "/cardapio/area-entrega";
+  }), [liveSessions, menuAccessSessionIds]);
+  const liveCepSessions = useMemo(() => liveSessions.filter((session) => {
+    const raw = canonicalPageKey(session.current_page_path || session.entry_path || "/");
+    return raw === "/cardapio/area-entrega" && !menuAccessSessionIds.has(String(session.id));
+  }), [liveSessions, menuAccessSessionIds]);
+  const liveWithRegion = liveMenuSessions.filter((session) => latestRegionBySession.has(String(session.id))).length;
+  const liveAwaitingRegion = liveCepSessions.length;
 
   const topProducts = useMemo(() => {
     const grouped = new Map<string, { views: number; carts: number; value: number }>();
@@ -612,20 +698,29 @@ function AnalyticsPage() {
       .slice(0, 12);
   }, [events]);
 
+  const filteredTopProducts = useMemo(() => topProducts.filter((row) => {
+    const matchesText = !productFilter.trim() || row.name.toLowerCase().includes(productFilter.trim().toLowerCase());
+    const matchesActivity = productActivityFilter === "all" ||
+      (productActivityFilter === "viewed" && row.views > 0) ||
+      (productActivityFilter === "cart" && row.carts > 0) ||
+      (productActivityFilter === "high_interest" && row.views > 0 && row.carts / row.views >= 0.2);
+    return matchesText && matchesActivity;
+  }), [topProducts, productFilter, productActivityFilter]);
+
   const paymentMethodRows = useMemo(() => {
     const grouped = new Map<string, number>();
-    for (const session of sessions.filter((s) => s.converted)) {
+    for (const session of actualMenuSessions.filter((s) => s.converted)) {
       const key = nicePayment(session.payment_method);
       grouped.set(key, (grouped.get(key) || 0) + 1);
     }
     return [...grouped.entries()].sort((a, b) => b[1] - a[1]);
-  }, [sessions]);
+  }, [actualMenuSessions]);
 
 
   const liveByPage = useMemo(() => {
     const grouped = new Map<string, number>();
 
-    for (const session of liveSessions) {
+    for (const session of liveMenuSessions) {
       const key = canonicalPageKey(
         session.current_page_path || session.entry_path || "/",
       );
@@ -633,15 +728,15 @@ function AnalyticsPage() {
     }
 
     return [...grouped.entries()].sort((a, b) => b[1] - a[1]);
-  }, [liveSessions]);
+  }, [liveMenuSessions]);
 
-  const liveIdentified = liveSessions.filter(
+  const liveIdentified = liveMenuSessions.filter(
     (session) => session.customer_name || session.customer_phone,
   ).length;
 
 
   const liveRows = useMemo(() => {
-    return liveSessions
+    return liveMenuSessions
       .map((session) => {
         const region = latestRegionBySession.get(String(session.id));
         return {
@@ -653,7 +748,19 @@ function AnalyticsPage() {
         };
       })
       .sort((a, b) => new Date(b.presence_last_seen_at || 0).getTime() - new Date(a.presence_last_seen_at || 0).getTime());
-  }, [liveSessions, latestRegionBySession]);
+  }, [liveMenuSessions, latestRegionBySession]);
+
+  const filteredLiveRows = useMemo(() => liveRows.filter((row) => {
+    const pageKey = canonicalPageKey(row.current_page_path || row.entry_path || "/");
+    const origin = trafficChannel(row);
+    const matchesPage = livePageFilter === "all" ||
+      (livePageFilter === "product" && pageKey.startsWith("/produto/")) ||
+      (livePageFilter === "cart" && pageKey === "/carrinho") ||
+      (livePageFilter === "checkout" && pageKey === "/checkout") ||
+      (livePageFilter === "menu" && pageKey === "/cardapio");
+    const matchesOrigin = liveOriginFilter === "all" || origin === liveOriginFilter;
+    return matchesPage && matchesOrigin;
+  }), [liveRows, livePageFilter, liveOriginFilter]);
 
   function groupSessions(field: string) {
     const m = new Map<
@@ -661,7 +768,7 @@ function AnalyticsPage() {
       { count: number; conv: number; revenue: number }
     >();
 
-    sessions.forEach((s) => {
+    actualMenuSessions.forEach((s) => {
       const k = String(s[field] || "Não identificado");
       const x = m.get(k) || {
         count: 0,
@@ -730,24 +837,29 @@ function AnalyticsPage() {
       .slice(0, 12);
   }
 
+  function journeyStage(session: SessionRow) {
+    const id = String(session.id);
+    if (session.converted) return "Comprou";
+    if (rejectedSessionIds.has(id)) return "Cartão não aprovado";
+    if (abandonedSessionIds.has(id)) return "Abandonou checkout";
+    if (ifoodRedirectSessionIds.has(id)) return "Redirecionado ao iFood";
+    if (menuAccessSessionIds.has(id)) return "Entrou no cardápio";
+    if (deliveryCheckedSessionIds.has(id)) return "Parou na validação da área";
+    return "Saiu antes de informar o CEP";
+  }
+
+  const originOptions = useMemo(() => Array.from(new Set(sessions.map((s) => trafficChannel(s)))).sort(), [sessions]);
+  const campaignOptions = useMemo(() => Array.from(new Set(sessions.map((s) => String(s.campaign || "").trim()).filter(Boolean))).sort(), [sessions]);
+
   const filteredJourney = sessions.filter((s) => {
     const q = search.trim().toLowerCase();
-    if (!q) return true;
-
-    return [
-      s.customer_name,
-      s.customer_phone,
-      s.source,
-      s.medium,
-      s.campaign,
-      s.order_id,
-      s.checkout_id,
-      s.visitor_id,
-    ].some((v) =>
-      String(v || "")
-        .toLowerCase()
-        .includes(q),
-    );
+    const matchesSearch = !q || [
+      s.customer_name, s.customer_phone, s.source, s.medium, s.campaign, s.order_id, s.checkout_id, s.visitor_id,
+    ].some((v) => String(v || "").toLowerCase().includes(q));
+    const matchesOrigin = journeyOriginFilter === "all" || trafficChannel(s) === journeyOriginFilter;
+    const matchesCampaign = journeyCampaignFilter === "all" || String(s.campaign || "") === journeyCampaignFilter;
+    const matchesSituation = journeySituationFilter === "all" || journeyStage(s) === journeySituationFilter;
+    return matchesSearch && matchesOrigin && matchesCampaign && matchesSituation;
   });
 
   const journeyTotalPages = Math.max(
@@ -764,9 +876,9 @@ function AnalyticsPage() {
 
   const funnel = [
     {
-      label: "Pessoas que entraram",
-      value: sessions.length,
-      help: "Cada entrada no cardápio ou na Bio dentro do período escolhido.",
+      label: "Entraram de verdade no cardápio",
+      value: actualMenuSessions.length,
+      help: "Só conta depois que o cliente valida a área e entra na página principal. A tela do CEP e redirecionamentos ao iFood ficam de fora.",
     },
     {
       label: "Abriram algum produto",
@@ -803,14 +915,14 @@ function AnalyticsPage() {
       help: "Quantidade aproximada de pessoas diferentes que acessaram suas páginas.",
     },
     {
-      title: "Entradas no cardápio",
-      value: sessions.length,
+      title: "Entradas reais no cardápio",
+      value: actualMenuSessions.length,
       icon: Eye,
       help: "Uma mesma pessoa pode entrar mais de uma vez em momentos diferentes.",
     },
     {
       title: "Compras concluídas",
-      value: `${converted} (${pct(converted, sessions.length)})`,
+      value: `${converted} (${pct(converted, actualMenuSessions.length)})`,
       icon: CheckCircle2,
       help: "Mostra quantas visitas terminaram em compra.",
     },
@@ -864,58 +976,82 @@ function AnalyticsPage() {
     !health?.client_events_error;
 
   const campaignRows = useMemo(() => {
-    const grouped = new Map<string, { source: string; medium: string; campaign: string; content: string; visits: number; purchases: number; revenue: number }>();
+    const grouped = new Map<string, { source: string; medium: string; campaign: string; content: string; visits: number; cepOnly: number; ifoodRedirects: number; purchases: number; revenue: number }>();
     for (const session of sessions) {
+      const id = String(session.id);
+      if (!cardapioEntrySessionIds.has(id)) continue;
       const campaign = String(session.campaign || "").trim();
       if (!campaign) continue;
       const source = String(session.source || "direct");
       const medium = String(session.medium || "");
       const content = String(session.content || "");
       const key = `${source}::${medium}::${campaign}::${content}`;
-      const row = grouped.get(key) || { source, medium, campaign, content, visits: 0, purchases: 0, revenue: 0 };
-      row.visits += 1;
-      if (session.converted) row.purchases += 1;
-      row.revenue += Number(session.revenue || 0);
+      const row = grouped.get(key) || { source, medium, campaign, content, visits: 0, cepOnly: 0, ifoodRedirects: 0, purchases: 0, revenue: 0 };
+      if (menuAccessSessionIds.has(id)) row.visits += 1;
+      else if (ifoodRedirectSessionIds.has(id)) row.ifoodRedirects += 1;
+      else row.cepOnly += 1;
+      if (session.converted && menuAccessSessionIds.has(id)) row.purchases += 1;
+      if (menuAccessSessionIds.has(id)) row.revenue += Number(session.revenue || 0);
       grouped.set(key, row);
     }
-    return [...grouped.values()].sort((a, b) => b.purchases - a.purchases || b.visits - a.visits).slice(0, 40);
-  }, [sessions]);
+    return [...grouped.values()].sort((a, b) => b.purchases - a.purchases || b.visits - a.visits);
+  }, [sessions, cardapioEntrySessionIds, menuAccessSessionIds, ifoodRedirectSessionIds]);
+
+  const filteredCampaignRows = useMemo(() => campaignRows.filter((row) => {
+    const channel = trafficChannel({ source: row.source, medium: row.medium });
+    const matchesOrigin = campaignOriginFilter === "all" || channel === campaignOriginFilter;
+    const matchesCampaign = campaignNameFilter === "all" || row.campaign === campaignNameFilter;
+    const matchesResult = campaignResultFilter === "all" ||
+      (campaignResultFilter === "sales" && row.purchases > 0) ||
+      (campaignResultFilter === "traffic" && row.visits > 0) ||
+      (campaignResultFilter === "no_sales" && row.visits > 0 && row.purchases === 0) ||
+      (campaignResultFilter === "cep_only" && row.cepOnly > 0) ||
+      (campaignResultFilter === "ifood" && row.ifoodRedirects > 0);
+    return matchesOrigin && matchesCampaign && matchesResult;
+  }), [campaignRows, campaignOriginFilter, campaignNameFilter, campaignResultFilter]);
 
   const regionRows = useMemo(() => {
-    const purchaseSessions = new Set(sessions.filter((s) => s.converted).map((s) => String(s.id)));
+    const purchaseSessions = new Set(actualMenuSessions.filter((s) => s.converted).map((s) => String(s.id)));
     const cartSessions = new Set(events.filter((e) => ["add_to_cart", "order_bump_added"].includes(String(e.event_name))).map((e) => String(e.session_id)));
     const latestBySession = new Map<string, any>();
-
     for (const event of events) {
       if (event.event_name !== "delivery_area_checked") continue;
       const sessionId = String(event.session_id || "");
       if (!sessionId || latestBySession.has(sessionId)) continue;
       latestBySession.set(sessionId, event);
     }
-
     const grouped = new Map<string, any>();
     for (const [sessionId, event] of latestBySession.entries()) {
       const cep = String(event.properties?.cep || "").replace(/\D/g, "").slice(0, 8);
       const neighborhood = String(event.properties?.neighborhood || "Não identificado").trim() || "Não identificado";
       const supported = event.properties?.supported !== false;
       const key = `${cep || "sem_cep"}::${neighborhood.toLowerCase()}`;
-      const row = grouped.get(key) || { cep, neighborhood, visits: 0, carts: 0, purchases: 0, outside: 0 };
-      row.visits += 1;
-      if (cartSessions.has(sessionId)) row.carts += 1;
+      const row = grouped.get(key) || { cep, neighborhood, menuEntries: 0, carts: 0, purchases: 0, outside: 0, checks: 0 };
+      row.checks += 1;
+      if (supported && menuAccessSessionIds.has(sessionId)) row.menuEntries += 1;
+      if (!supported || ifoodRedirectSessionIds.has(sessionId)) row.outside += 1;
+      if (cartSessions.has(sessionId) && menuAccessSessionIds.has(sessionId)) row.carts += 1;
       if (purchaseSessions.has(sessionId)) row.purchases += 1;
-      if (!supported) row.outside += 1;
       grouped.set(key, row);
     }
+    return [...grouped.values()].sort((a, b) => (b.menuEntries + b.outside) - (a.menuEntries + a.outside));
+  }, [events, actualMenuSessions, menuAccessSessionIds, ifoodRedirectSessionIds]);
 
-    return [...grouped.values()].sort((a, b) => b.visits - a.visits).slice(0, 30);
-  }, [events, sessions]);
+  const filteredRegionRows = useMemo(() => regionRows.filter((row) => {
+    const q = regionFilter.trim().toLowerCase();
+    const matchesText = !q || String(row.neighborhood).toLowerCase().includes(q) || String(row.cep).includes(q.replace(/\D/g, ""));
+    const matchesStatus = regionStatusFilter === "all" ||
+      (regionStatusFilter === "inside" && row.menuEntries > 0) ||
+      (regionStatusFilter === "outside" && row.outside > 0);
+    return matchesText && matchesStatus;
+  }), [regionRows, regionFilter, regionStatusFilter]);
 
   const regionNeighborhoodRows = useMemo(() => {
     const grouped = new Map<string, { neighborhood: string; visits: number; purchases: number; outside: number }>();
     for (const row of regionRows) {
       const key = row.neighborhood.toLowerCase();
       const current = grouped.get(key) || { neighborhood: row.neighborhood, visits: 0, purchases: 0, outside: 0 };
-      current.visits += row.visits;
+      current.visits += row.menuEntries;
       current.purchases += row.purchases;
       current.outside += row.outside;
       grouped.set(key, current);
@@ -984,14 +1120,14 @@ function AnalyticsPage() {
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Card className="hotbox-admin-kpi p-4">
-          <p className="text-xs font-bold uppercase text-zinc-500">Pessoas que entraram</p>
+          <p className="text-xs font-bold uppercase text-zinc-500">Pessoas no cardápio</p>
           <p className="mt-2 text-3xl font-black">{visitors}</p>
-          <p className="mt-1 text-xs text-zinc-500">{sessions.length} visitas no período</p>
+          <p className="mt-1 text-xs text-zinc-500">{actualMenuSessions.length} entradas após validar a área</p>
         </Card>
         <Card className="hotbox-admin-kpi p-4">
           <p className="text-xs font-bold uppercase text-zinc-500">Compras concluídas</p>
           <p className="mt-2 text-3xl font-black">{converted}</p>
-          <p className="mt-1 text-xs text-zinc-500">Conversão de {pct(converted, sessions.length)}</p>
+          <p className="mt-1 text-xs text-zinc-500">Conversão de {pct(converted, actualMenuSessions.length)}</p>
         </Card>
         <Card className="hotbox-admin-kpi p-4">
           <p className="text-xs font-bold uppercase text-zinc-500">Vendas rastreadas</p>
@@ -999,9 +1135,9 @@ function AnalyticsPage() {
           <p className="mt-1 text-xs text-zinc-500">Ticket médio {brl(avgTicket)}</p>
         </Card>
         <Card className="hotbox-admin-kpi p-4">
-          <p className="text-xs font-bold uppercase text-zinc-500">Precisam de atenção</p>
-          <p className="mt-2 text-3xl font-black">{abandoned + rejectedCardCount}</p>
-          <p className="mt-1 text-xs text-zinc-500">{abandoned} abandonos • {rejectedCardCount} cartões recusados</p>
+          <p className="text-xs font-bold uppercase text-zinc-500">Antes do cardápio</p>
+          <p className="mt-2 text-3xl font-black">{cepOnlySessions.length + ifoodRedirectSessions.length}</p>
+          <p className="mt-1 text-xs text-zinc-500">{cepOnlySessions.length} saíram no CEP • {ifoodRedirectSessions.length} foram ao iFood</p>
         </Card>
       </div>
 
@@ -1041,9 +1177,9 @@ function AnalyticsPage() {
                     <Badge variant="secondary">{days === 1 ? "Hoje" : `${days} dias`}</Badge>
                   </div>
                   <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                    <div className="rounded-2xl bg-zinc-50 p-4"><p className="text-xs font-black uppercase text-zinc-500">Conversão</p><p className="mt-2 text-2xl font-black">{pct(converted, sessions.length)}</p><p className="text-xs text-zinc-500">{converted} compras</p></div>
+                    <div className="rounded-2xl bg-zinc-50 p-4"><p className="text-xs font-black uppercase text-zinc-500">Conversão</p><p className="mt-2 text-2xl font-black">{pct(converted, actualMenuSessions.length)}</p><p className="text-xs text-zinc-500">{converted} compras</p></div>
                     <div className="rounded-2xl bg-zinc-50 p-4"><p className="text-xs font-black uppercase text-zinc-500">Ticket médio</p><p className="mt-2 text-2xl font-black">{brl(avgTicket)}</p><p className="text-xs text-zinc-500">{brl(revenue)} rastreados</p></div>
-                    <div className="rounded-2xl bg-zinc-50 p-4"><p className="text-xs font-black uppercase text-zinc-500">Sacola</p><p className="mt-2 text-2xl font-black">{addCart}</p><p className="text-xs text-zinc-500">{pct(addCart, sessions.length)} das visitas</p></div>
+                    <div className="rounded-2xl bg-zinc-50 p-4"><p className="text-xs font-black uppercase text-zinc-500">Sacola</p><p className="mt-2 text-2xl font-black">{addCart}</p><p className="text-xs text-zinc-500">{pct(addCart, actualMenuSessions.length)} das visitas</p></div>
                     <div className="rounded-2xl bg-zinc-50 p-4"><p className="text-xs font-black uppercase text-zinc-500">Abandonos</p><p className="mt-2 text-2xl font-black">{abandoned}</p><p className="text-xs text-zinc-500">sem compra após intenção</p></div>
                   </div>
 
@@ -1063,10 +1199,10 @@ function AnalyticsPage() {
                 <div className="space-y-4">
                   <Card className="hotbox-admin-accent p-5">
                     <div className="flex items-center justify-between gap-3">
-                      <div><p className="text-xs font-black uppercase text-[#ffcf00]">Agora no cardápio</p><p className="mt-1 text-4xl font-black">{liveSessions.length}</p></div>
+                      <div><p className="text-xs font-black uppercase text-[#ffcf00]">Agora dentro do cardápio</p><p className="mt-1 text-4xl font-black">{liveMenuSessions.length}</p></div>
                       <Users className="size-8 text-[#ffcf00]" />
                     </div>
-                    <p className="mt-3 text-sm text-white/70">{liveWithRegion} com região identificada • {liveAwaitingRegion} ainda na etapa do CEP ou sem região nesta sessão.</p>
+                    <p className="mt-3 text-sm text-white/70">Aqui só entram pessoas que já validaram a área. {liveAwaitingRegion} pessoa(s) estão na tela de CEP e ficam fora desta contagem.</p>
                     {liveByPage.slice(0, 4).map(([page, count]) => (
                       <div key={page} className="mt-2 flex justify-between rounded-xl bg-white/10 px-3 py-2 text-sm">
                         <span>{friendlyPagePath(page)}</span><b>{count}</b>
@@ -1084,15 +1220,25 @@ function AnalyticsPage() {
                   </Card>
                 </div>
               </div>
+
+              <Card className="hotbox-admin-card p-5">
+                <div className="flex items-start justify-between gap-4"><div><h2 className="text-lg font-black">O que aconteceu antes do cardápio</h2><p className="mt-1 text-sm text-muted-foreground">Essa separação evita inflar a métrica de acesso. Só a coluna verde conta como entrada real no cardápio.</p></div><Badge variant="secondary">funil de entrada</Badge></div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-2xl border bg-zinc-50 p-4"><p className="text-xs font-black uppercase text-zinc-500">Chegaram à etapa do CEP</p><p className="mt-2 text-3xl font-black">{cardapioEntrySessionIds.size}</p><p className="text-xs text-zinc-500">inclui quem ainda não entrou</p></div>
+                  <div className="rounded-2xl border border-zinc-200 bg-white p-4"><p className="text-xs font-black uppercase text-zinc-500">Saíram antes de entrar</p><p className="mt-2 text-3xl font-black">{cepOnlySessions.length}</p><p className="text-xs text-zinc-500">não contam como acesso ao cardápio</p></div>
+                  <div className="rounded-2xl border border-red-200 bg-red-50 p-4"><p className="text-xs font-black uppercase text-red-700">Redirecionados ao iFood</p><p className="mt-2 text-3xl font-black text-red-700">{ifoodRedirectSessions.length}</p><p className="text-xs text-red-600">fora da nossa área de entrega</p></div>
+                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4"><p className="text-xs font-black uppercase text-emerald-700">Entradas reais no cardápio</p><p className="mt-2 text-3xl font-black text-emerald-700">{actualMenuSessions.length}</p><p className="text-xs text-emerald-700">base oficial das métricas de conversão</p></div>
+                </div>
+              </Card>
             </div>
           )}
 
           {activeTab === "live" && (
             <div className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                <Card className="hotbox-admin-kpi p-4"><p className="text-xs font-black uppercase text-zinc-500">Ao vivo agora</p><p className="mt-2 text-3xl font-black">{liveSessions.length}</p><p className="text-xs text-zinc-500">últimos 45 segundos</p></Card>
+                <Card className="hotbox-admin-kpi p-4"><p className="text-xs font-black uppercase text-zinc-500">Dentro do cardápio agora</p><p className="mt-2 text-3xl font-black">{liveMenuSessions.length}</p><p className="text-xs text-zinc-500">só após validar a área</p></Card>
                 <Card className="hotbox-admin-kpi p-4"><p className="text-xs font-black uppercase text-zinc-500">Com região</p><p className="mt-2 text-3xl font-black">{liveWithRegion}</p><p className="text-xs text-zinc-500">CEP/bairro desta sessão</p></Card>
-                <Card className="hotbox-admin-kpi p-4"><p className="text-xs font-black uppercase text-zinc-500">Aguardando CEP</p><p className="mt-2 text-3xl font-black">{liveAwaitingRegion}</p><p className="text-xs text-zinc-500">ainda não validaram região nesta sessão</p></Card>
+                <Card className="hotbox-admin-kpi p-4"><p className="text-xs font-black uppercase text-zinc-500">Na tela do CEP</p><p className="mt-2 text-3xl font-black">{liveAwaitingRegion}</p><p className="text-xs text-zinc-500">não contam como acesso ao cardápio</p></Card>
                 <Card className="hotbox-admin-kpi p-4"><p className="text-xs font-black uppercase text-zinc-500">Identificados</p><p className="mt-2 text-3xl font-black">{liveIdentified}</p><p className="text-xs text-zinc-500">nome ou telefone conhecido</p></Card>
               </div>
 
@@ -1100,16 +1246,20 @@ function AnalyticsPage() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h2 className="text-lg font-black">Onde cada pessoa está agora</h2>
-                    <p className="mt-1 text-sm text-muted-foreground">Produto, carrinho, checkout, validação de CEP ou página principal são atualizados em tempo real.</p>
+                    <p className="mt-1 text-sm text-muted-foreground">Mostra apenas quem já validou a área e entrou de verdade no cardápio. Tela de CEP não entra nesta tabela.</p>
                   </div>
                   <Badge variant="secondary">atualiza a cada 10s</Badge>
                 </div>
                 {liveError ? <div className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{liveError}</div> : null}
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <select className="h-9 rounded-lg border bg-white px-3 text-sm" value={livePageFilter} onChange={(e) => setLivePageFilter(e.target.value)}><option value="all">Todas as páginas</option><option value="menu">Página principal</option><option value="product">Produto</option><option value="cart">Carrinho</option><option value="checkout">Checkout</option></select>
+                  <select className="h-9 rounded-lg border bg-white px-3 text-sm" value={liveOriginFilter} onChange={(e) => setLiveOriginFilter(e.target.value)}><option value="all">Todas as origens</option>{originOptions.map((o) => <option key={o} value={o}>{o}</option>)}</select>
+                </div>
                 <div className="mt-4 overflow-x-auto rounded-2xl border">
                   <table className="w-full text-sm">
                     <thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500"><tr><th className="p-3">Página atual</th><th className="p-3">Origem</th><th className="p-3">Região</th><th className="p-3">Visitante</th><th className="p-3">Último sinal</th></tr></thead>
                     <tbody>
-                      {liveRows.length ? liveRows.map((row) => (
+                      {filteredLiveRows.length ? filteredLiveRows.map((row) => (
                         <tr key={row.id} className="border-t">
                           <td className="p-3 font-bold">{row.currentPageLabel}</td>
                           <td className="p-3">{row.channelLabel}</td>
@@ -1180,11 +1330,16 @@ function AnalyticsPage() {
               </Card>
 
               <Card className="hotbox-admin-card p-5">
-                <h2 className="text-lg font-black">Campanhas que trouxeram resultado</h2>
-                <p className="mt-1 text-sm text-muted-foreground">Prioriza visitas, compras e vendas. Campanhas sem UTM não aparecem aqui.</p>
+                <h2 className="text-lg font-black">Campanhas e resultados</h2>
+                <p className="mt-1 text-sm text-muted-foreground">Separa quem só chegou ao CEP, quem entrou no cardápio e quem foi redirecionado ao iFood.</p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <select className="h-9 rounded-lg border bg-white px-3 text-sm" value={campaignOriginFilter} onChange={(e) => setCampaignOriginFilter(e.target.value)}><option value="all">Todas as origens</option>{originOptions.map((o) => <option key={o} value={o}>{o}</option>)}</select>
+                  <select className="h-9 rounded-lg border bg-white px-3 text-sm" value={campaignNameFilter} onChange={(e) => setCampaignNameFilter(e.target.value)}><option value="all">Todas as campanhas</option>{campaignOptions.map((c) => <option key={c} value={c}>{niceCampaign(c)}</option>)}</select>
+                  <select className="h-9 rounded-lg border bg-white px-3 text-sm" value={campaignResultFilter} onChange={(e) => setCampaignResultFilter(e.target.value)}><option value="all">Todos os resultados</option><option value="sales">Com compra</option><option value="traffic">Com entrada no cardápio</option><option value="no_sales">Entrou, mas não comprou</option><option value="cep_only">Parou no CEP</option><option value="ifood">Redirecionado ao iFood</option></select>
+                </div>
                 <div className="mt-4 overflow-x-auto rounded-2xl border">
-                  <table className="w-full text-sm"><thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500"><tr><th className="p-3">Campanha</th><th className="p-3">Canal</th><th className="p-3">Criativo</th><th className="p-3 text-right">Visitas</th><th className="p-3 text-right">Compras</th><th className="p-3 text-right">Conversão</th><th className="p-3 text-right">Vendas</th></tr></thead>
-                    <tbody>{campaignRows.length ? campaignRows.map((row) => <tr key={`${row.source}-${row.campaign}`} className="border-t"><td className="p-3 font-bold">{niceCampaign(row.campaign)}</td><td className="p-3"><div className="font-bold">{trafficChannel({ source: row.source, medium: row.medium })}</div><div className="text-xs text-zinc-500">{niceMedium(row.medium)}</div></td><td className="p-3">{row.content ? niceCampaign(row.content) : "—"}</td><td className="p-3 text-right">{row.visits}</td><td className="p-3 text-right font-bold">{row.purchases}</td><td className="p-3 text-right">{pct(row.purchases, row.visits)}</td><td className="p-3 text-right font-black">{brl(row.revenue)}</td></tr>) : <tr><td colSpan={7} className="p-8 text-center text-zinc-500">Ainda não há campanhas com UTM registradas neste período.</td></tr>}</tbody>
+                  <table className="w-full text-sm"><thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500"><tr><th className="p-3">Campanha</th><th className="p-3">Canal</th><th className="p-3">Criativo</th><th className="p-3 text-right">Pararam no CEP</th><th className="p-3 text-right">iFood</th><th className="p-3 text-right">Entradas reais</th><th className="p-3 text-right">Compras</th><th className="p-3 text-right">Conversão</th><th className="p-3 text-right">Vendas</th></tr></thead>
+                    <tbody>{filteredCampaignRows.length ? filteredCampaignRows.map((row) => <tr key={`${row.source}-${row.medium}-${row.campaign}-${row.content}`} className="border-t"><td className="p-3 font-bold">{niceCampaign(row.campaign)}</td><td className="p-3"><div className="font-bold">{trafficChannel({ source: row.source, medium: row.medium })}</div><div className="text-xs text-zinc-500">{niceMedium(row.medium)}</div></td><td className="p-3">{row.content ? niceCampaign(row.content) : "—"}</td><td className="p-3 text-right text-zinc-500">{row.cepOnly}</td><td className="p-3 text-right text-red-600">{row.ifoodRedirects}</td><td className="p-3 text-right font-bold">{row.visits}</td><td className="p-3 text-right font-bold">{row.purchases}</td><td className="p-3 text-right">{pct(row.purchases, row.visits)}</td><td className="p-3 text-right font-black">{brl(row.revenue)}</td></tr>) : <tr><td colSpan={9} className="p-8 text-center text-zinc-500">Nenhuma campanha encontrada com os filtros selecionados.</td></tr>}</tbody>
                   </table>
                 </div>
               </Card>
@@ -1202,15 +1357,16 @@ function AnalyticsPage() {
 
               <Card className="border-blue-200 bg-blue-50 p-4 text-sm text-blue-950">
                 <b>Por que o número de pessoas ao vivo pode ser maior que o número de CEPs?</b>
-                <p className="mt-1">Uma pessoa aparece ao vivo assim que abre o cardápio, inclusive enquanto ainda está na tela de informar CEP. Depois que valida a região, o CEP/bairro passa a ser ligado à sessão. CEP salvo de uma visita anterior agora também é registrado na sessão atual.</p>
+                <p className="mt-1">A tela de CEP é rastreada separadamente. Só depois da validação positiva a sessão passa a contar como entrada no cardápio. Fora da área e redirecionamentos ao iFood também ficam separados.</p>
               </Card>
               <div className="grid gap-4 lg:grid-cols-3">
                 <Card className="hotbox-admin-card p-5 lg:col-span-2">
                   <h2 className="text-lg font-black">Regiões que mais demonstram interesse</h2>
                   <p className="mt-1 text-sm text-muted-foreground">CEP e bairro são registrados quando o visitante consulta a área de entrega. Não tentamos adivinhar o CEP por IP.</p>
+                  <div className="mt-4 flex flex-wrap gap-2"><Input className="max-w-xs" value={regionFilter} onChange={(e) => setRegionFilter(e.target.value)} placeholder="Filtrar CEP ou bairro" /><select className="h-9 rounded-lg border bg-white px-3 text-sm" value={regionStatusFilter} onChange={(e) => setRegionStatusFilter(e.target.value)}><option value="all">Todas as regiões</option><option value="inside">Entraram no cardápio</option><option value="outside">Fora da área / iFood</option></select></div>
                   <div className="mt-4 overflow-x-auto rounded-2xl border">
-                    <table className="w-full text-sm"><thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500"><tr><th className="p-3">CEP</th><th className="p-3">Bairro</th><th className="p-3 text-right">Consultas</th><th className="p-3 text-right">Carrinhos</th><th className="p-3 text-right">Compras</th><th className="p-3 text-right">Conversão</th></tr></thead>
-                      <tbody>{regionRows.length ? regionRows.map((row) => <tr key={`${row.cep}-${row.neighborhood}`} className="border-t"><td className="p-3 font-mono text-xs">{row.cep ? `${row.cep.slice(0,5)}-${row.cep.slice(5)}` : "—"}</td><td className="p-3 font-bold">{row.neighborhood}</td><td className="p-3 text-right">{row.visits}</td><td className="p-3 text-right">{row.carts}</td><td className="p-3 text-right font-bold">{row.purchases}</td><td className="p-3 text-right">{pct(row.purchases, row.visits)}</td></tr>) : <tr><td colSpan={6} className="p-8 text-center text-zinc-500">Os dados começam a aparecer quando os visitantes consultarem CEP ou bairro no cardápio.</td></tr>}</tbody>
+                    <table className="w-full text-sm"><thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500"><tr><th className="p-3">CEP</th><th className="p-3">Bairro</th><th className="p-3 text-right">Consultas</th><th className="p-3 text-right">Entraram no cardápio</th><th className="p-3 text-right">Fora da área/iFood</th><th className="p-3 text-right">Carrinhos</th><th className="p-3 text-right">Compras</th><th className="p-3 text-right">Conversão</th></tr></thead>
+                      <tbody>{filteredRegionRows.length ? filteredRegionRows.map((row) => <tr key={`${row.cep}-${row.neighborhood}`} className="border-t"><td className="p-3 font-mono text-xs">{row.cep ? `${row.cep.slice(0,5)}-${row.cep.slice(5)}` : "—"}</td><td className="p-3 font-bold">{row.neighborhood}</td><td className="p-3 text-right">{row.checks}</td><td className="p-3 text-right font-bold">{row.menuEntries}</td><td className="p-3 text-right text-red-600">{row.outside}</td><td className="p-3 text-right">{row.carts}</td><td className="p-3 text-right font-bold">{row.purchases}</td><td className="p-3 text-right">{pct(row.purchases, row.menuEntries)}</td></tr>) : <tr><td colSpan={8} className="p-8 text-center text-zinc-500">Nenhuma região encontrada com os filtros selecionados.</td></tr>}</tbody>
                     </table>
                   </div>
                 </Card>
@@ -1232,7 +1388,7 @@ function AnalyticsPage() {
                   <div className="mt-5 space-y-3">
                     {funnel.map((step, index) => {
                       const previous = index === 0 ? step.value : funnel[index - 1].value;
-                      const width = sessions.length ? Math.max(3, (step.value / sessions.length) * 100) : 0;
+                      const width = actualMenuSessions.length ? Math.max(3, (step.value / actualMenuSessions.length) * 100) : 0;
                       return (
                         <div key={step.label}>
                           <div className="mb-1 flex items-end justify-between gap-3">
@@ -1262,9 +1418,10 @@ function AnalyticsPage() {
               <div className="grid gap-4 xl:grid-cols-[1.1fr_.9fr]">
                 <Card className="hotbox-admin-card p-5">
                   <h2 className="text-lg font-black">Produtos que mais despertam interesse</h2>
+                  <div className="mt-4 flex flex-wrap gap-2"><Input className="max-w-xs" value={productFilter} onChange={(e) => setProductFilter(e.target.value)} placeholder="Filtrar produto" /><select className="h-9 rounded-lg border bg-white px-3 text-sm" value={productActivityFilter} onChange={(e) => setProductActivityFilter(e.target.value)}><option value="all">Todos</option><option value="viewed">Com visualização</option><option value="cart">Adicionados à sacola</option><option value="high_interest">Interesse alto (20%+)</option></select></div>
                   <div className="mt-4 overflow-x-auto rounded-2xl border">
                     <table className="w-full text-sm"><thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500"><tr><th className="p-3">Produto</th><th className="p-3 text-right">Visualizações</th><th className="p-3 text-right">Adições à sacola</th><th className="p-3 text-right">Taxa de interesse</th></tr></thead>
-                      <tbody>{topProducts.length ? topProducts.map((row) => <tr key={row.name} className="border-t"><td className="p-3 font-bold">{row.name}</td><td className="p-3 text-right">{row.views}</td><td className="p-3 text-right">{row.carts}</td><td className="p-3 text-right">{pct(row.carts, row.views)}</td></tr>) : <tr><td colSpan={4} className="p-8 text-center text-zinc-500">Ainda não há visualizações de produtos suficientes.</td></tr>}</tbody>
+                      <tbody>{filteredTopProducts.length ? filteredTopProducts.map((row) => <tr key={row.name} className="border-t"><td className="p-3 font-bold">{row.name}</td><td className="p-3 text-right">{row.views}</td><td className="p-3 text-right">{row.carts}</td><td className="p-3 text-right">{pct(row.carts, row.views)}</td></tr>) : <tr><td colSpan={4} className="p-8 text-center text-zinc-500">Ainda não há visualizações de produtos suficientes.</td></tr>}</tbody>
                     </table>
                   </div>
                 </Card>
@@ -1284,7 +1441,8 @@ function AnalyticsPage() {
           {activeTab === "journey" && (
             <div className="space-y-4">
               <Card className="hotbox-admin-card p-5">
-                <div className="flex flex-wrap items-center gap-3"><div><h2 className="text-lg font-black">Histórico de visitantes</h2><p className="mt-1 text-sm text-muted-foreground">Veja nome e telefone quando o cliente já tiver se identificado. Abandonos e cartões não aprovados com telefone podem ser recuperados pelo WhatsApp.</p></div><div className="ml-auto w-full max-w-sm"><Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar nome, telefone, campanha ou pedido..." /></div></div>
+                <div className="flex flex-wrap items-start gap-3"><div><h2 className="text-lg font-black">Histórico de visitantes</h2><p className="mt-1 text-sm text-muted-foreground">Cada sessão mostra se a pessoa parou no CEP, foi ao iFood, entrou no cardápio, abandonou, teve cartão recusado ou comprou.</p></div><div className="ml-auto w-full max-w-sm"><Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar nome, telefone, campanha ou pedido..." /></div></div>
+                <div className="mt-4 flex flex-wrap gap-2"><select className="h-9 rounded-lg border bg-white px-3 text-sm" value={journeyOriginFilter} onChange={(e) => setJourneyOriginFilter(e.target.value)}><option value="all">Todas as origens</option>{originOptions.map((o) => <option key={o} value={o}>{o}</option>)}</select><select className="h-9 rounded-lg border bg-white px-3 text-sm" value={journeyCampaignFilter} onChange={(e) => setJourneyCampaignFilter(e.target.value)}><option value="all">Todas as campanhas</option>{campaignOptions.map((c) => <option key={c} value={c}>{niceCampaign(c)}</option>)}</select><select className="h-9 rounded-lg border bg-white px-3 text-sm" value={journeySituationFilter} onChange={(e) => setJourneySituationFilter(e.target.value)}><option value="all">Todas as situações</option><option>Entrou no cardápio</option><option>Saiu antes de informar o CEP</option><option>Parou na validação da área</option><option>Redirecionado ao iFood</option><option>Abandonou checkout</option><option>Cartão não aprovado</option><option>Comprou</option></select></div>
                 <div className="mt-4 overflow-x-auto rounded-2xl border">
                   <table className="w-full text-sm">
                     <thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500">
@@ -1322,18 +1480,15 @@ function AnalyticsPage() {
                             </td>
                             <td className="p-3">{s.campaign ? niceCampaign(s.campaign) : "—"}</td>
                             <td className="p-3">
-                              {recovery === "Comprou" ? (
-                                <Badge className="bg-emerald-600">Comprou</Badge>
-                              ) : recovery === "Cartão não aprovado" ? (
-                                <Badge className="bg-red-600">Cartão não aprovado</Badge>
-                              ) : recovery === "Abandonou checkout" ? (
-                                <Badge className="bg-amber-500 text-zinc-950">Abandonou checkout</Badge>
-                              ) : (
-                                <Badge variant="secondary">Não comprou</Badge>
-                              )}
+                              {journeyStage(s) === "Comprou" ? <Badge className="bg-emerald-600">Comprou</Badge> :
+                               journeyStage(s) === "Cartão não aprovado" ? <Badge className="bg-red-600">Cartão não aprovado</Badge> :
+                               journeyStage(s) === "Abandonou checkout" ? <Badge className="bg-amber-500 text-zinc-950">Abandonou checkout</Badge> :
+                               journeyStage(s) === "Redirecionado ao iFood" ? <Badge className="bg-red-100 text-red-800">Redirecionado ao iFood</Badge> :
+                               journeyStage(s) === "Entrou no cardápio" ? <Badge className="bg-blue-600">Entrou no cardápio</Badge> :
+                               <Badge variant="secondary">{journeyStage(s)}</Badge>}
                             </td>
                             <td className="p-3 text-right">
-                              {whatsappHref && recovery !== "Comprou" ? (
+                              {whatsappHref && ["Abandonou checkout", "Cartão não aprovado"].includes(recovery) ? (
                                 <a href={whatsappHref} target="_blank" rel="noreferrer">
                                   <Button size="sm" variant="outline" className="whitespace-nowrap border-emerald-200 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800">
                                     <MessageCircle className="mr-2 size-4" />
