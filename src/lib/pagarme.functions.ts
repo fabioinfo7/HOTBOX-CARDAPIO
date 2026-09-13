@@ -196,8 +196,9 @@ export const createPagarmePayment = createServerFn({ method: "POST" })
     if (!["created", "payment_pending", "payment_failed"].includes(String(checkout.status))) return { ok: false, error: "Este checkout não está mais disponível." } as const;
     if (new Date(checkout.expires_at).getTime() < Date.now()) return { ok: false, error: "Este checkout expirou. Refaça o pedido." } as const;
 
-    const expectedMethod = String(checkout.payment_kind || "").endsWith("_pix") ? "pix" : "card";
-    if (expectedMethod !== data.method) return { ok: false, error: "A forma de pagamento deste checkout foi alterada. Volte e selecione novamente." } as const;
+    const kind = String(checkout.payment_kind || "");
+    const expectedMethod = kind.endsWith("_pix") ? "pix" : kind.endsWith("_card") ? "card" : null;
+    if (expectedMethod && data.method !== expectedMethod) return { ok: false, error: "Forma de pagamento diferente da selecionada." } as const;
 
     const email = normalizeEmail(data.email);
     const document = digits(data.document);
