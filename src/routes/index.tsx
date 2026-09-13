@@ -135,7 +135,7 @@ type CartItem = {
 type View = "list" | "detail" | "cart" | "delivery_check" | "checkout";
 type ActiveFilter = "ativos" | "inativos" | "todos";
 type CheckoutPayment = "infinitepay" | "mercadopago" | "pagarme" | "efi" | "appmax";
-type PaymentChoice = "online" | "online_pix" | "online_card" | "delivery_card" | "delivery_pix";
+type PaymentChoice = "online_pix" | "online_card" | "delivery_card" | "delivery_pix";
 type AreaStatus = "idle" | "checking" | "needs_number" | "supported" | "unsupported" | "error";
 
 type ActiveOrderSummary = {
@@ -710,14 +710,14 @@ function CustomerHome() {
   const [paymentAvailable, setPaymentAvailable] = useState(false);
   const [mercadoPagoPublicKey, setMercadoPagoPublicKey] = useState("");
   const [mercadoPagoMaxInstallments, setMercadoPagoMaxInstallments] = useState(1);
-  const [mpCheckout, setMpCheckout] = useState<{ id: string; total: number; method: "pix" | "card" | "both" } | null>(null);
+  const [mpCheckout, setMpCheckout] = useState<{ id: string; total: number; method: "pix" | "card" } | null>(null);
   const [pagarmePublicKey, setPagarmePublicKey] = useState("");
   const [pagarmeMaxInstallments, setPagarmeMaxInstallments] = useState(1);
-  const [pagarmeCheckout, setPagarmeCheckout] = useState<{ id: string; total: number; method: "pix" | "card" | "both" } | null>(null);
+  const [pagarmeCheckout, setPagarmeCheckout] = useState<{ id: string; total: number; method: "pix" | "card" } | null>(null);
   const [efiPayeeCode, setEfiPayeeCode] = useState("");
   const [efiEnvironment, setEfiEnvironment] = useState<"sandbox" | "production">("sandbox");
   const [efiMaxInstallments, setEfiMaxInstallments] = useState(1);
-  const [efiCheckout, setEfiCheckout] = useState<{ id: string; total: number; method: "pix" | "card" | "both" } | null>(null);
+  const [efiCheckout, setEfiCheckout] = useState<{ id: string; total: number; method: "pix" | "card" } | null>(null);
   const [appmaxCheckout, setAppmaxCheckout] = useState<{ id: string; total: number; method: "pix" | "card" } | null>(null);
   const [appmaxExternalId, setAppmaxExternalId] = useState("");
   const [appmaxMaxInstallments, setAppmaxMaxInstallments] = useState(1);
@@ -727,7 +727,7 @@ function CustomerHome() {
   const [payOnDeliveryEnabled, setPayOnDeliveryEnabled] = useState(false);
   const [payOnDeliveryCardEnabled, setPayOnDeliveryCardEnabled] = useState(true);
   const [payOnDeliveryPixEnabled, setPayOnDeliveryPixEnabled] = useState(true);
-  const [paymentChoice, setPaymentChoice] = useState<PaymentChoice | null>(null);
+  const [paymentChoice, setPaymentChoice] = useState<PaymentChoice>("online_pix");
   const [digitalMenuEnabled, setDigitalMenuEnabled] = useState(true);
   const [publicStoreStatus, setPublicStoreStatus] = useState<PublicStoreStatus | null>(null);
   const [, setStoreClockTick] = useState(0);
@@ -1128,19 +1128,9 @@ function CustomerHome() {
       const loadedCardProvider = normalizeProvider(pay.card_provider || pay.provider);
       setPixProvider(loadedPixProvider);
       setCardProvider(loadedCardProvider);
-      // Compatibilidade com bancos que ainda usam a RPC antiga do checkout.
-      // A RPC antiga retorna apenas `provider` + `payment_available`; sem este
-      // fallback Pix/cartão ficavam falsos e o botão nunca abria o Brick.
-      const legacyPaymentAvailable = pay.payment_available === true;
-      const loadedPixAvailable = typeof pay.pix_payment_available === "boolean"
-        ? pay.pix_payment_available === true
-        : legacyPaymentAvailable;
-      const loadedCardAvailable = typeof pay.card_payment_available === "boolean"
-        ? pay.card_payment_available === true
-        : legacyPaymentAvailable;
-      setPixPaymentAvailable(loadedPixAvailable);
-      setCardPaymentAvailable(loadedCardAvailable);
-      setPaymentAvailable(legacyPaymentAvailable || loadedPixAvailable || loadedCardAvailable);
+      setPixPaymentAvailable(pay.pix_payment_available === true);
+      setCardPaymentAvailable(pay.card_payment_available === true);
+      setPaymentAvailable(pay.payment_available === true);
       setMercadoPagoPublicKey(String(pay.mercadopago_public_key || ""));
       setMercadoPagoMaxInstallments(Math.min(12, Math.max(1, Number(pay.mercadopago_max_installments || 1))));
       setPagarmePublicKey(String(pay.pagarme_public_key || ""));
@@ -1153,18 +1143,19 @@ function CustomerHome() {
       setPayOnDeliveryEnabled(pay.pay_on_delivery_enabled === true);
       setPayOnDeliveryCardEnabled(pay.pay_on_delivery_card_enabled !== false);
       setPayOnDeliveryPixEnabled(pay.pay_on_delivery_pix_enabled !== false);
-      const canPixOnline = (data as any)?.digital_menu_pix_enabled !== false && loadedPixAvailable;
-      const canCardOnline = (data as any)?.digital_menu_card_enabled !== false && loadedCardAvailable;
-      // O checkout começa sem forma pré-selecionada. Ao tocar em “Escolher forma
-      // de pagamento”, abrimos o checkout transparente do provedor configurado.
-      setPaymentChoice(null);
-      const unifiedProvider = canPixOnline && canCardOnline && loadedPixProvider === loadedCardProvider
-        ? loadedPixProvider
-        : canCardOnline
-          ? loadedCardProvider
-          : loadedPixProvider;
-      setPaymentProvider(unifiedProvider);
-      setForm((current) => ({ ...current, payment: unifiedProvider }));
+      const canPixOnline = (data as any)?.digital_menu_pix_enabled !== false && pay.pix_payment_available === true;
+      const canCardOnline = (data as any)?.digital_menu_card_enabled !== false && pay.card_payment_available === true;
+      if (canPixOnline) {
+        setPaymentChoice("online_pix");
+        setPaymentProvider(loadedPixProvider);
+        setForm((current) => ({ ...current, payment: loadedPixProvider }));
+      } else if (canCardOnline) {
+        setPaymentChoice("online_card");
+        setPaymentProvider(loadedCardProvider);
+        setForm((current) => ({ ...current, payment: loadedCardProvider }));
+      } else if (pay.pay_on_delivery_enabled === true) {
+        setPaymentChoice(pay.pay_on_delivery_card_enabled !== false ? "delivery_card" : "delivery_pix");
+      }
 
       const groups = (groupResult?.data || []) as AddonGroup[];
       const options = (optionResult?.data || []) as AddonOption[];
@@ -1202,7 +1193,8 @@ function CustomerHome() {
   useEffect(() => {
     if (form.deliveryMode === "pickup") {
       if (paymentChoice === "delivery_card" || paymentChoice === "delivery_pix") {
-        setPaymentChoice(null);
+        if (pixEnabled && pixPaymentAvailable) setPaymentChoice("online_pix");
+        else if (cardEnabled && cardPaymentAvailable) setPaymentChoice("online_card");
       }
       setScheduleAccepted(false);
     }
@@ -2293,24 +2285,6 @@ function CustomerHome() {
   const removeItem = (idx: number) => setCart((c) => c.filter((_, ix) => ix !== idx));
 
   function requestPlaceOrder() {
-    // Fluxo original: o botão principal abre diretamente o checkout transparente
-    // configurado. Pix/cartão são escolhidos dentro do checkout do provedor.
-    if (!paymentChoice) {
-      const sameOnlineProvider = pixProvider === cardProvider;
-      const canPix = pixEnabled && pixPaymentAvailable;
-      const canCard = cardEnabled && cardPaymentAvailable;
-      if ((canPix || canCard) && sameOnlineProvider) {
-        void placeOrder(false, "online");
-        return;
-      }
-      // Se cada forma estiver roteada para um gateway diferente, não existe um
-      // único checkout capaz de representar os dois. Nesse caso mostramos as
-      // opções para o cliente escolher qual gateway deve ser aberto.
-      scrollToCheckoutSection("payment-section");
-      toast.info("Escolha Pix ou cartão para abrir o checkout seguro correspondente.");
-      return;
-    }
-
     const storeOpenNow = isStoreOpenByBusinessHours(publicStoreStatus);
     const isReservation =
       !storeOpenNow &&
@@ -2335,13 +2309,8 @@ function CustomerHome() {
 
   async function placeOrder(reservationConfirmedNow = false, forcedPaymentChoice?: PaymentChoice) {
     const selectedPaymentChoice = forcedPaymentChoice || paymentChoice;
-    if (!selectedPaymentChoice) {
-      scrollToCheckoutSection("payment-section");
-      toast.info("Escolha a forma de pagamento para continuar.");
-      return;
-    }
     const selectedProvider: CheckoutPayment = selectedPaymentChoice === "online_pix" ? pixProvider : selectedPaymentChoice === "online_card" ? cardProvider : paymentProvider;
-    const selectedOnlineAvailable = selectedPaymentChoice === "online" ? paymentAvailable : selectedPaymentChoice === "online_pix" ? pixPaymentAvailable : selectedPaymentChoice === "online_card" ? cardPaymentAvailable : false;
+    const selectedOnlineAvailable = selectedPaymentChoice === "online_pix" ? pixPaymentAvailable : selectedPaymentChoice === "online_card" ? cardPaymentAvailable : false;
     if (!cart.length) return toast.error("Seu carrinho está vazio");
     if (!form.name || !form.phone) return toast.error("Preencha nome e telefone");
     if (isDelivery && (!form.street || !form.number || !form.neighborhood)) return toast.error("Preencha rua, número e bairro");
@@ -2368,13 +2337,13 @@ function CustomerHome() {
     if (isDelivery && outsideDeliveryHours && schedulingEnabled && !scheduleAccepted) {
       return toast.error("Confirme o agendamento para o próximo horário disponível antes de finalizar.");
     }
-    if ((selectedPaymentChoice === "online" || selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card") && !selectedOnlineAvailable) return toast.error("Esta forma de pagamento online está indisponível no momento");
+    if ((selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card") && !selectedOnlineAvailable) return toast.error("Esta forma de pagamento online está indisponível no momento");
     if ((selectedPaymentChoice === "delivery_card" || selectedPaymentChoice === "delivery_pix") && !isDelivery) return toast.error("Pagamento na entrega só está disponível quando você escolhe entrega.");
     if (selectedPaymentChoice === "delivery_card" && (!payOnDeliveryEnabled || !payOnDeliveryCardEnabled)) return toast.error("Cartão na entrega está indisponível.");
     if (selectedPaymentChoice === "delivery_pix" && (!payOnDeliveryEnabled || !payOnDeliveryPixEnabled)) return toast.error("Pix na entrega está indisponível.");
 
     trackAnalytics("checkout_started", {
-      event_category: "commerce", value: total, customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: selectedPaymentChoice === "online" || selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card" ? selectedProvider : selectedPaymentChoice,
+      event_category: "commerce", value: total, customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card" ? selectedProvider : selectedPaymentChoice,
       properties: metaCommerceProperties({
         reservation:
           !isStoreOpenByBusinessHours(publicStoreStatus) &&
@@ -2397,7 +2366,7 @@ function CustomerHome() {
           address_neighborhood: isDelivery ? form.neighborhood || null : null,
           address_city: isDelivery ? form.city || null : null,
           address_cep: isDelivery ? form.cep || null : null,
-          payment_kind: selectedPaymentChoice === "online" ? selectedProvider : selectedPaymentChoice,
+          payment_kind: selectedPaymentChoice,
           scheduled: isDelivery && outsideDeliveryHours && schedulingEnabled && scheduleAccepted,
           store_reservation: !storeOpenNow && publicStoreStatus?.closed_reservations_enabled === true && closedStoreReservationMode,
           reservation_date: !storeOpenNow && closedStoreReservationMode ? reservationDate : null,
@@ -2415,7 +2384,7 @@ function CustomerHome() {
       });
       if (created?.error) throw new Error(created.error);
       if (!created?.checkout?.id) throw new Error("Checkout não criado");
-      trackAnalytics("checkout_created", { event_category: "commerce", checkout_id: String(created.checkout.id), order_id: created?.order_id ? String(created.order_id) : null, customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: selectedPaymentChoice === "online" || selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card" ? selectedProvider : selectedPaymentChoice, value: Number(created.checkout.total || total), properties: { pay_on_delivery: Boolean(created?.pay_on_delivery), provider: created.checkout.payment_provider || selectedProvider } });
+      trackAnalytics("checkout_created", { event_category: "commerce", checkout_id: String(created.checkout.id), order_id: created?.order_id ? String(created.order_id) : null, customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card" ? selectedProvider : selectedPaymentChoice, value: Number(created.checkout.total || total), properties: { pay_on_delivery: Boolean(created?.pay_on_delivery), provider: created.checkout.payment_provider || selectedProvider } });
 
       if (created?.pay_on_delivery && created?.order_id) {
         trackAnalytics("purchase", {
@@ -2443,8 +2412,7 @@ function CustomerHome() {
       }
 
       const provider: CheckoutPayment = created.checkout.payment_provider === "mercadopago" ? "mercadopago" : created.checkout.payment_provider === "pagarme" ? "pagarme" : created.checkout.payment_provider === "efi" ? "efi" : created.checkout.payment_provider === "appmax" ? "appmax" : "infinitepay";
-      const createdKind = String(created.checkout.payment_kind || "");
-      const onlineMethod: "pix" | "card" | "both" = createdKind.endsWith("_card") ? "card" : createdKind.endsWith("_pix") ? "pix" : "both";
+      const onlineMethod: "pix" | "card" = String(created.checkout.payment_kind || "").endsWith("_card") ? "card" : "pix";
       if (provider === "pagarme") {
         setPaymentProvider("pagarme");
         setForm((current) => ({ ...current, payment: "pagarme" }));
@@ -2526,7 +2494,7 @@ function CustomerHome() {
     } catch (err: any) {
       console.error(err);
       const message = String(err?.message || "Não foi possível iniciar o pagamento.");
-      trackAnalytics("checkout_error", { event_category: "error", value: total, payment_method: selectedPaymentChoice === "online" || selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card" ? selectedProvider : selectedPaymentChoice, properties: { message: message.slice(0,300) } });
+      trackAnalytics("checkout_error", { event_category: "error", value: total, payment_method: selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card" ? selectedProvider : selectedPaymentChoice, properties: { message: message.slice(0,300) } });
       if (/fora da área|fora da area|bairro|entrega/i.test(message)) void redirectOutsideArea();
       toast.error(message);
     } finally {
@@ -2739,8 +2707,22 @@ function CustomerHome() {
           <div className="absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-2xl bg-white/95 p-1.5 shadow-lg backdrop-blur">
             <img src={HOTBOX_LOGO_URL} alt="HotBox Delivery" className="size-9 rounded-xl object-contain" />
           </div>
+          <div className="absolute right-4 top-4 z-10 inline-flex items-center gap-1.5 rounded-full bg-black/65 px-3 py-2 text-xs font-black text-white shadow-lg backdrop-blur">
+            <Clock className="size-3.5" />
+            40 - 60 Minutos
+          </div>
           {p.image_url ? (
-            <img src={p.image_url} alt={p.name} className="h-64 w-full object-cover sm:h-80" />
+            isBeverageProduct(p) ? (
+              <div className="grid h-64 w-full place-items-center bg-white sm:h-80">
+                <NormalizedBeverageImage
+                  src={p.image_url}
+                  alt={p.name}
+                  className="h-56 w-56 max-w-[78%] object-contain sm:h-64 sm:w-64"
+                />
+              </div>
+            ) : (
+              <img src={p.image_url} alt={p.name} className="h-64 w-full object-cover sm:h-80" />
+            )
           ) : (
             <div className="grid h-64 w-full place-items-center bg-muted text-sm text-muted-foreground sm:h-80">
               Sem foto
@@ -2771,18 +2753,6 @@ function CustomerHome() {
               <p className="mt-1 text-2xl font-extrabold text-primary">{brl(eff.price)}</p>
             );
           })()}
-
-          {deliveryTime && (
-            <div className="mt-3 flex items-center gap-3 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sky-950">
-              <span className="grid size-9 shrink-0 place-items-center rounded-full bg-sky-100">
-                <Clock className="size-4" />
-              </span>
-              <div>
-                <p className="text-xs font-black uppercase tracking-wide">Previsão de entrega</p>
-                <p className="text-sm font-bold">{deliveryTime}-{deliveryTime + 15} minutos</p>
-              </div>
-            </div>
-          )}
 
           {publicReviews.length > 0 && (
             <button
@@ -2819,7 +2789,7 @@ function CustomerHome() {
                 const min = Math.max(0, Number(group.min_select || 0), group.required ? 1 : 0);
                 const max = Math.max(1, Number(group.max_select || 1));
                 return (
-                  <div key={group.id} className="overflow-hidden rounded-[22px] border border-black/5 bg-white shadow-sm">
+                  <div key={group.id} className={`overflow-hidden rounded-[22px] border border-black/5 bg-white shadow-sm ${group.active !== true ? "grayscale opacity-55" : ""}`}>
                     <div className="flex items-start justify-between gap-3 border-b bg-zinc-50/80 px-4 py-3">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
@@ -2831,6 +2801,11 @@ function CustomerHome() {
                           }`}>
                             {group.required ? "Obrigatório" : "Opcional"}
                           </span>
+                          {group.active !== true && (
+                            <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-zinc-600">
+                              Indisponível
+                            </span>
+                          )}
                         </div>
                         {(group.display_subtitle || group.description) && <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{group.display_subtitle || group.description}</p>}
                         <p className="mt-1 text-[10px] font-semibold text-zinc-400">
@@ -2847,25 +2822,40 @@ function CustomerHome() {
                     <div className="divide-y">
                       {group.options.map((option) => {
                         const optionId = String(option.id);
-                        const quantity = addonQty(optionId);
+                        const availability = addonOptionAvailability(option, group);
+                        const unavailable = !availability.available;
+                        const quantity = unavailable ? 0 : addonQty(optionId);
                         const selected = quantity > 0;
                         const unitPrice = effectiveAddonOptionPrice(option);
                         return (
                           <div
                             key={option.id}
-                            className={`flex items-center gap-3 px-4 py-3 transition ${selected ? "bg-amber-50/60" : "bg-white"}`}
+                            className={`flex items-center gap-3 px-4 py-3 transition ${
+                              unavailable
+                                ? "bg-zinc-50 grayscale opacity-55"
+                                : selected
+                                  ? "bg-amber-50/60"
+                                  : "bg-white"
+                            }`}
                           >
                             <button
                               type="button"
                               onClick={() => toggleDetailAddon(group, option)}
-                              className={`grid size-6 shrink-0 place-items-center border-2 ${
+                              disabled={unavailable}
+                              className={`grid size-6 shrink-0 place-items-center border-2 disabled:cursor-not-allowed ${
                                 group.max_select === 1 ? "rounded-full" : "rounded-lg"
                               } ${
                                 selected
                                   ? "border-primary bg-primary text-primary-foreground"
                                   : "border-zinc-300 bg-white"
                               }`}
-                              aria-label={selected ? `Remover ${option.display_name || option.name}` : `Adicionar ${option.display_name || option.name}`}
+                              aria-label={
+                                unavailable
+                                  ? `${option.display_name || option.name} indisponível`
+                                  : selected
+                                    ? `Remover ${option.display_name || option.name}`
+                                    : `Adicionar ${option.display_name || option.name}`
+                              }
                             >
                               {selected && <CheckCircle2 className="size-4" />}
                             </button>
@@ -2889,13 +2879,14 @@ function CustomerHome() {
                             <button
                               type="button"
                               onClick={() => toggleDetailAddon(group, option)}
-                              className="min-w-0 flex-1 text-left"
+                              disabled={unavailable}
+                              className="min-w-0 flex-1 text-left disabled:cursor-not-allowed"
                             >
                               <div className="flex flex-wrap items-center gap-1.5">
                                 <p className="text-sm font-bold text-zinc-900">{option.display_name || option.name}</p>
-                                {option.linked_product_id && (
-                                  <span className="rounded-full bg-sky-50 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-sky-700">
-                                    Produto do cardápio
+                                {unavailable && (
+                                  <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-zinc-600">
+                                    Esgotado
                                   </span>
                                 )}
                               </div>
@@ -2910,8 +2901,8 @@ function CustomerHome() {
                                 <button
                                   type="button"
                                   onClick={() => setDetailAddonQuantity(group, option, quantity - 1)}
-                                  disabled={quantity <= 0}
-                                  className="grid size-7 place-items-center rounded-full text-zinc-700 disabled:opacity-30"
+                                  disabled={unavailable || quantity <= 0}
+                                  className="grid size-7 place-items-center rounded-full text-zinc-700 disabled:cursor-not-allowed disabled:opacity-30"
                                   aria-label={`Diminuir ${option.display_name || option.name}`}
                                 >
                                   <Minus className="size-3.5" />
@@ -3071,6 +3062,7 @@ function CustomerHome() {
       </div>
     </div>
   ));
+
 
   const reservationPaymentConfirmModal = (showReservationPaymentConfirm && (
     <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/65 px-4">
@@ -3794,15 +3786,7 @@ function CustomerHome() {
               />
             ) : (
               <div className="space-y-3">
-                <div className="rounded-2xl border bg-white p-4 shadow-sm">
-                  <p className="text-sm font-black">Pagamento seguro</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {pixProvider === cardProvider && paymentAvailable
-                      ? "Toque em “Escolher forma de pagamento” abaixo. O checkout transparente abrirá aqui para você escolher Pix ou cartão com segurança."
-                      : "Pix e cartão estão configurados em gateways diferentes. Escolha abaixo qual forma deseja usar."}
-                  </p>
-                </div>
-                {pixProvider !== cardProvider && pixEnabled && pixPaymentAvailable && (
+                {pixEnabled && pixPaymentAvailable && (
                   <button
                     type="button"
                     onClick={() => { setPaymentChoice("online_pix"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "pix", value: total, quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: pixProvider }) }); scrollToCheckoutSection("checkout-action"); }}
@@ -3818,7 +3802,7 @@ function CustomerHome() {
                   </button>
                 )}
 
-                {pixProvider !== cardProvider && cardEnabled && cardPaymentAvailable && (
+                {cardEnabled && cardPaymentAvailable && (
                   <button
                     type="button"
                     onClick={() => { setPaymentChoice("online_card"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "card", value: total, quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: cardProvider }) }); scrollToCheckoutSection("checkout-action"); }}
@@ -3889,7 +3873,6 @@ function CustomerHome() {
                 onClick={requestPlaceOrder}
                 disabled={
                   placing ||
-                  (paymentChoice === "online" && !paymentAvailable) ||
                   (paymentChoice === "online_pix" && (!pixEnabled || !pixPaymentAvailable)) ||
                   (paymentChoice === "online_card" && (!cardEnabled || !cardPaymentAvailable)) ||
                   (paymentChoice === "delivery_card" && (!payOnDeliveryEnabled || !payOnDeliveryCardEnabled)) ||
@@ -3908,7 +3891,7 @@ function CustomerHome() {
                           ? "Pagar com Pix"
                           : paymentChoice === "online_card"
                             ? "Pagar com cartão"
-                            : "Escolher forma de pagamento"}
+                            : "Continuar para pagamento"}
                 </span>
                 <span>{brl(total)}</span>
               </Button>
@@ -4019,6 +4002,9 @@ function CustomerHome() {
       </header>
 
       <main className="mx-auto max-w-2xl px-4 py-5">
+        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-950">
+          <b>Preços do delivery direto HotBox.</b> A disponibilidade e a taxa de entrega são confirmadas quando você finalizar a sacola. Nas plataformas parceiras, preços e condições podem ser diferentes.
+        </div>
         {!query && (activeCategory === "Tudo" || activeCategory === "Batata") && (
           <div className="mb-5">
             <CustomerLoyaltyClub
