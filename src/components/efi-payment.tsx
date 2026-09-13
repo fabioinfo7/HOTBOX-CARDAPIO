@@ -14,7 +14,7 @@ type Props = {
   amount: number;
   payeeCode: string;
   environment: "sandbox" | "production";
-  method: EfiMethod;
+  method: EfiMethod | "both";
   maxInstallments?: number;
   customerName: string;
   customerEmail?: string | null;
@@ -29,6 +29,8 @@ const digits = (v: unknown) => String(v ?? "").replace(/\D/g, "");
 const cardNumberMask = (v: string) => digits(v).slice(0, 19).replace(/(.{4})/g, "$1 ").trim();
 
 export function EfiPayment({ checkoutId, amount, payeeCode, environment, method, maxInstallments=1, customerName, customerEmail, customerPhone, billingAddress, supportWhatsappUrl, onPaid, onCancel, onSwitchToPix }: Props) {
+  const [selectedMethod,setSelectedMethod]=useState<EfiMethod>(method === "pix" ? "pix" : "card");
+  const activeMethod:EfiMethod=method === "both" ? selectedMethod : method;
   const [email,setEmail]=useState(String(customerEmail||""));
   const [document,setDocument]=useState("");
   const [number,setNumber]=useState("");
@@ -41,7 +43,7 @@ export function EfiPayment({ checkoutId, amount, payeeCode, environment, method,
   const [checking,setChecking]=useState(false);
   const [pending,setPending]=useState<{qrCode?:string|null;qrCodeUrl?:string|null;status?:string|null}|null>(null);
   const [rejected,setRejected]=useState("");
-  const needsBillingFields=method==="card"&&!billingAddress;
+  const needsBillingFields=activeMethod==="card"&&!billingAddress;
   const installmentOptions=useMemo(()=>Array.from({length:Math.min(12,Math.max(1,Number(maxInstallments||1)))},(_,i)=>i+1),[maxInstallments]);
 
   useEffect(()=>{
@@ -78,16 +80,16 @@ export function EfiPayment({ checkoutId, amount, payeeCode, environment, method,
 
   async function pay(){
     if(loading) return;
-    if(method==="card"&&!/\S+@\S+\.\S+/.test(email.trim())) return toast.error("Informe um e-mail válido.");
-    if(method==="card"&&digits(document).length!==11) return toast.error("Informe um CPF válido.");
-    if(method==="card"&&needsBillingFields&&(!billing.street.trim()||!billing.number.trim()||!billing.neighborhood.trim()||!billing.city.trim()||digits(billing.cep).length!==8)) return toast.error("Preencha o endereço de cobrança.");
+    if(activeMethod==="card"&&!/\S+@\S+\.\S+/.test(email.trim())) return toast.error("Informe um e-mail válido.");
+    if(activeMethod==="card"&&digits(document).length!==11) return toast.error("Informe um CPF válido.");
+    if(activeMethod==="card"&&needsBillingFields&&(!billing.street.trim()||!billing.number.trim()||!billing.neighborhood.trim()||!billing.city.trim()||digits(billing.cep).length!==8)) return toast.error("Preencha o endereço de cobrança.");
     setLoading(true);setRejected("");
     try{
-      const paymentToken=method==="card"?await tokenizeCard():null;
-      const result:any=await createEfiPayment({data:{checkoutId,method,paymentToken,email:email.trim(),document:digits(document),installments,billingAddress:method==="card"?billing:null}});
+      const paymentToken=activeMethod==="card"?await tokenizeCard():null;
+      const result:any=await createEfiPayment({data:{checkoutId,method:activeMethod,paymentToken,email:email.trim(),document:digits(document),installments,billingAddress:activeMethod==="card"?billing:null}});
       if(!result?.ok){
         const message=result?.error||"Pagamento não aprovado.";
-        if(result?.rejected&&method==="card"){
+        if(result?.rejected&&activeMethod==="card"){
           setRejected(message);
           trackAnalytics("payment_failed",{event_category:"payment",checkout_id:checkoutId,payment_method:"card",value:amount,properties:{provider:"efi",payment_type:"card",reason_friendly:message}});
           return;
@@ -117,20 +119,24 @@ export function EfiPayment({ checkoutId, amount, payeeCode, environment, method,
   </div>;
 
   if(pending) return <div className="space-y-4 rounded-3xl border bg-white p-5 shadow-sm">
-    {method==="pix"?<><div className="text-center"><div className="mx-auto grid size-12 place-items-center rounded-2xl bg-emerald-100 text-emerald-700"><QrCode className="size-6"/></div><h3 className="mt-3 font-black">Pix Efí gerado</h3><p className="text-sm text-muted-foreground">Pague e aguarde a confirmação automática.</p></div>{pending.qrCodeUrl&&<img src={pending.qrCodeUrl} alt="QR Code Pix Efí" className="mx-auto size-56 rounded-2xl border bg-white p-2"/>}{pending.qrCode&&<div className="rounded-2xl bg-zinc-50 p-3"><p className="mb-2 text-xs font-bold text-zinc-500">Pix Copia e Cola</p><div className="flex gap-2"><Input readOnly value={pending.qrCode}/><Button type="button" variant="outline" onClick={()=>{navigator.clipboard.writeText(pending.qrCode||"");toast.success("Pix copiado")}}><Copy className="size-4"/></Button></div></div>}</>:<div className="text-center"><Loader2 className="mx-auto size-8 animate-spin"/><h3 className="mt-3 font-black">Confirmando seu cartão</h3><p className="text-sm text-muted-foreground">Normalmente leva poucos segundos.</p></div>}
+    {activeMethod==="pix"?<><div className="text-center"><div className="mx-auto grid size-12 place-items-center rounded-2xl bg-emerald-100 text-emerald-700"><QrCode className="size-6"/></div><h3 className="mt-3 font-black">Pix Efí gerado</h3><p className="text-sm text-muted-foreground">Pague e aguarde a confirmação automática.</p></div>{pending.qrCodeUrl&&<img src={pending.qrCodeUrl} alt="QR Code Pix Efí" className="mx-auto size-56 rounded-2xl border bg-white p-2"/>}{pending.qrCode&&<div className="rounded-2xl bg-zinc-50 p-3"><p className="mb-2 text-xs font-bold text-zinc-500">Pix Copia e Cola</p><div className="flex gap-2"><Input readOnly value={pending.qrCode}/><Button type="button" variant="outline" onClick={()=>{navigator.clipboard.writeText(pending.qrCode||"");toast.success("Pix copiado")}}><Copy className="size-4"/></Button></div></div>}</>:<div className="text-center"><Loader2 className="mx-auto size-8 animate-spin"/><h3 className="mt-3 font-black">Confirmando seu cartão</h3><p className="text-sm text-muted-foreground">Normalmente leva poucos segundos.</p></div>}
     <Button type="button" variant="outline" className="w-full rounded-xl" onClick={manualCheck} disabled={checking}>{checking?<Loader2 className="mr-2 size-4 animate-spin"/>:<RefreshCw className="mr-2 size-4"/>}Verificar pagamento</Button>
   </div>;
 
   return <div className="space-y-4 rounded-3xl border bg-white p-5 shadow-sm">
-    <div className="flex items-center justify-between gap-3"><div><h3 className="font-black">{method==="pix"?"Pagar com Pix":"Pagar com cartão"}</h3><p className="text-xs text-muted-foreground">Pagamento processado com segurança pela Efí.</p></div><ShieldCheck className="size-5 text-emerald-600"/></div>
-    {method==="card"&&<>
+    {method === "both" && <div className="grid grid-cols-2 gap-2 rounded-xl bg-zinc-100 p-1">
+      <button type="button" onClick={()=>{setSelectedMethod("card");setRejected("")}} className={`rounded-lg px-3 py-2 text-sm font-black ${activeMethod==="card"?"bg-white shadow-sm":"text-zinc-600"}`}><CreditCard className="mr-1 inline size-4"/> Cartão</button>
+      <button type="button" onClick={()=>{setSelectedMethod("pix");setRejected("")}} className={`rounded-lg px-3 py-2 text-sm font-black ${activeMethod==="pix"?"bg-white shadow-sm":"text-zinc-600"}`}><QrCode className="mr-1 inline size-4"/> Pix</button>
+    </div>}
+    <div className="flex items-center justify-between gap-3"><div><h3 className="font-black">{activeMethod==="pix"?"Pagar com Pix":"Pagar com cartão"}</h3><p className="text-xs text-muted-foreground">Pagamento processado com segurança pela Efí.</p></div><ShieldCheck className="size-5 text-emerald-600"/></div>
+    {activeMethod==="card"&&<>
       <div className="grid gap-3 sm:grid-cols-2"><div><Label>E-mail</Label><Input value={email} onChange={e=>setEmail(e.target.value)} inputMode="email"/></div><div><Label>CPF</Label><Input value={document} onChange={e=>setDocument(digits(e.target.value).slice(0,11))} inputMode="numeric"/></div></div>
       <div><Label>Número do cartão</Label><Input value={number} onChange={e=>setNumber(cardNumberMask(e.target.value))} inputMode="numeric" autoComplete="cc-number" placeholder="0000 0000 0000 0000"/></div>
       <div><Label>Nome no cartão</Label><Input value={holder} onChange={e=>setHolder(e.target.value)} autoComplete="cc-name"/></div>
       <div className="grid grid-cols-3 gap-3"><div><Label>Validade</Label><Input value={expiry} onChange={e=>setExpiry(e.target.value.replace(/[^0-9/]/g,"").slice(0,7))} placeholder="MM/AA" autoComplete="cc-exp"/></div><div><Label>CVV</Label><Input value={cvv} onChange={e=>setCvv(digits(e.target.value).slice(0,4))} inputMode="numeric" autoComplete="cc-csc"/></div><div><Label>Parcelas</Label><select className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={installments} onChange={e=>setInstallments(Number(e.target.value))}>{installmentOptions.map(n=><option key={n} value={n}>{n}x</option>)}</select></div></div>
       {needsBillingFields&&<div className="grid gap-3 rounded-2xl bg-zinc-50 p-4 sm:grid-cols-2"><div className="sm:col-span-2 text-xs font-black uppercase text-zinc-500">Endereço de cobrança</div><Input placeholder="Rua" value={billing.street} onChange={e=>setBilling({...billing,street:e.target.value})}/><Input placeholder="Número" value={billing.number} onChange={e=>setBilling({...billing,number:e.target.value})}/><Input placeholder="Bairro" value={billing.neighborhood} onChange={e=>setBilling({...billing,neighborhood:e.target.value})}/><Input placeholder="CEP" value={billing.cep} onChange={e=>setBilling({...billing,cep:digits(e.target.value).slice(0,8)})}/></div>}
     </>}
-    <Button type="button" className="w-full rounded-xl" onClick={pay} disabled={loading}>{loading?<Loader2 className="mr-2 size-4 animate-spin"/>:method==="pix"?<QrCode className="mr-2 size-4"/>:<CreditCard className="mr-2 size-4"/>}{method==="pix"?"Gerar Pix":`Pagar R$ ${amount.toFixed(2).replace(".",",")}`}</Button>
+    <Button type="button" className="w-full rounded-xl" onClick={pay} disabled={loading}>{loading?<Loader2 className="mr-2 size-4 animate-spin"/>:activeMethod==="pix"?<QrCode className="mr-2 size-4"/>:<CreditCard className="mr-2 size-4"/>}{activeMethod==="pix"?"Gerar Pix":`Pagar R$ ${amount.toFixed(2).replace(".",",")}`}</Button>
     <Button type="button" variant="ghost" className="w-full" onClick={onCancel}>Voltar</Button>
     <p className="text-center text-[11px] text-muted-foreground">Os dados do cartão são tokenizados pela biblioteca oficial da Efí e não ficam armazenados na HotBox.</p>
   </div>;
