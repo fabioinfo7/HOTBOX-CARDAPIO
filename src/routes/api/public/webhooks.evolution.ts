@@ -957,6 +957,26 @@ function isExplicitDraftItemChangeIntent(text: string | null | undefined): boole
   return /\b(?:tira|tirar|retira|retirar|remove|remover|exclui|excluir|cancela|cancelar|troca|trocar|substitui|substituir|muda|mudar|altera|alterar|corrige|corrigir|diminui|diminuir|reduz|reduzir|aumenta|aumentar|acrescenta|acrescentar|adiciona|adicionar|mais uma|mais um|recomecar|esquecer.*pedido)\b/.test(t);
 }
 
+function isDestructiveDraftItemChangeIntent(text: string | null | undefined): boolean {
+  const t = normalizeStreet(String(text ?? ""));
+  if (!t) return false;
+  return /\b(?:tira|tirar|retira|retirar|remove|remover|exclui|excluir|cancela|cancelar|troca|trocar|substitui|substituir|recomecar|esquecer.*pedido)\b/.test(t);
+}
+
+function mergeDraftItemPreservingCommercialData(oldItem: DraftItem, incomingItem: DraftItem): DraftItem {
+  const incomingAddons = Array.isArray(incomingItem.addons) ? incomingItem.addons : [];
+  const oldAddons = Array.isArray(oldItem.addons) ? oldItem.addons : [];
+  return {
+    ...oldItem,
+    ...incomingItem,
+    notes:
+      incomingItem.notes != null && String(incomingItem.notes).trim() !== ""
+        ? incomingItem.notes
+        : oldItem.notes ?? null,
+    addons: incomingAddons.length ? incomingAddons : oldAddons,
+  };
+}
+
 function normalizeDraftItems(items: any): DraftItem[] {
   if (!Array.isArray(items)) return [];
   return items
@@ -986,7 +1006,7 @@ function normalizeDraftItems(items: any): DraftItem[] {
 function reconcileDraftItems(existingRaw: DraftItem[] | null | undefined, incomingRaw: any, userText: string): DraftItem[] {
   const existing = normalizeDraftItems(existingRaw ?? []);
   const incoming = normalizeDraftItems(incomingRaw);
-  const destructiveChangeAllowed = isExplicitDraftItemChangeIntent(userText);
+  const destructiveChangeAllowed = isDestructiveDraftItemChangeIntent(userText);
 
   if (!destructiveChangeAllowed) {
     if (!incoming.length && existing.length) return existing;
@@ -996,15 +1016,17 @@ function reconcileDraftItems(existingRaw: DraftItem[] | null | undefined, incomi
     for (const item of incoming) {
       const key = normalizeStreet(item.product_name);
       const idx = merged.findIndex((old) => normalizeStreet(old.product_name) === key);
-      if (idx >= 0) merged[idx] = { ...merged[idx], ...item };
+      if (idx >= 0) merged[idx] = mergeDraftItemPreservingCommercialData(merged[idx], item);
       else merged.push(item);
     }
     return merged;
   }
 
-  // Alteração/remoção foi realmente pedida pelo cliente: nessa situação a lista
-  // COMPLETA retornada pela ferramenta pode substituir a anterior, inclusive [].
-  return incoming;
+  const byName = new Map(existing.map((item) => [normalizeStreet(item.product_name), item]));
+  return incoming.map((item) => {
+    const old = byName.get(normalizeStreet(item.product_name));
+    return old ? mergeDraftItemPreservingCommercialData(old, item) : item;
+  });
 }
 
 function isSimpleConversationAffirmative(text: string): boolean {
@@ -1191,6 +1213,117 @@ function significantProductTokens(name: string): string[] {
   return normalizeStreet(name).split(/\s+/).filter((x) => x.length >= 3 && !stop.has(x));
 }
 
+function hasPaidAddonIntent(text: string): boolean {
+  const t = normalizeStreet(text);
+  return /\\b(?:adicional|adiciona|adicionar|acrescenta|acrescentar|coloca|colocar|bota|botar|extra|com)\\b/.test(t);
+}
+
+async function persistPaidAddonMemoryFromTurn(
+  supabaseAdmin: any,
+  conversationId: string,
+  userText: string,
+  draft: Draft,
+): Promise<void> {
+  if (!draft.items?.length || !hasPaidAddonIntent(userText)) return;
+
+  const normalizedText = normalizeStreet(userText);
+  const { findProductMatch } = await import("@/lib/product-match.server");
+
+  const { data: products } = await supabaseAdmin
+    .from("products")
+    .select("id,name,active")
+    .eq("active", true);
+  const productList = products ?? [];
+  if (!productList.length) return;
+
+  const draftMatches = draft.items
+    .map((item, index) => ({ index, item, product: findProductMatch(productList, item.product_name) }))
+    .filter((row) => row.product?.id);
+
+  const productIds = draftMatches.map((row) => row.product.id);
+  if (!productIds.length) return;
+
+  const [{ data: links }, { data: groups }, { data: options }] = await Promise.all([
+    supabaseAdmin.from("product_addon_groups").select("product_id,group_id").in("product_id", productIds),
+    supabaseAdmin.from("menu_addon_groups").select("id,active").eq("active", true),
+    supabaseAdmin
+      .from("menu_addon_options")
+      .select("id,group_id,name,display_name,price,linked_product_id,use_linked_product_price,active")
+      .eq("active", true),
+  ]);
+
+  const activeGroups = new Set((groups ?? []).map((g: any) => String(g.id)));
+  const optionsByGroup = new Map<string, any[]>();
+  for (const option of options ?? []) {
+    if (!activeGroups.has(String(option.group_id))) continue;
+    const list = optionsByGroup.get(String(option.group_id)) ?? [];
+    list.push(option);
+    optionsByGroup.set(String(option.group_id), list);
+  }
+
+  const optionsByProduct = new Map<string, any[]>();
+  for (const link of links ?? []) {
+    const list = optionsByProduct.get(String(link.product_id)) ?? [];
+    list.push(...(optionsByGroup.get(String(link.group_id)) ?? []));
+    optionsByProduct.set(String(link.product_id), list);
+  }
+
+  const targetAll = /\\b(?:em todas|em todos|nas duas|nos dois|em cada|para todas|pra todas)\\b/.test(normalizedText);
+  let changed = false;
+  const nextItems = normalizeDraftItems(draft.items);
+
+  for (const row of draftMatches) {
+    const productTokens = significantProductTokens(String(row.product.name || ""));
+    const mentionsThisProduct = productTokens.some(
+      (token) => token.length >= 5 && new RegExp(`\\b${token}\\b`).test(normalizedText),
+    );
+
+    // Se há um único item, "coloca bacon" se refere a ele.
+    // Se há vários, exige mencionar o produto ou indicar que vale para todos.
+    if (draftMatches.length > 1 && !targetAll && !mentionsThisProduct) continue;
+
+    const available = optionsByProduct.get(String(row.product.id)) ?? [];
+    for (const option of available) {
+      const display = String(option.display_name || option.name || "").trim();
+      if (!display) continue;
+      const qty = extractAddonQuantityFromNotes(userText, display);
+      if (qty <= 0) continue;
+
+      const existing = Array.isArray(nextItems[row.index].addons) ? nextItems[row.index].addons! : [];
+      const normalizedDisplay = normalizeStreet(display);
+      const found = existing.findIndex((addon) => {
+        const key = normalizeStreet(addon.name);
+        return key === normalizedDisplay || key.includes(normalizedDisplay) || normalizedDisplay.includes(key);
+      });
+
+      if (found >= 0) {
+        if (Number(existing[found].quantity || 1) !== qty) {
+          existing[found] = { ...existing[found], name: display, quantity: qty };
+          changed = true;
+        }
+      } else {
+        existing.push({ name: display, quantity: qty });
+        changed = true;
+      }
+      nextItems[row.index].addons = existing;
+    }
+  }
+
+  if (!changed) return;
+
+  draft.items = nextItems;
+  draft.awaiting_final_confirmation = false;
+  const { error } = await supabaseAdmin
+    .from("order_drafts")
+    .update({
+      items: nextItems,
+      awaiting_final_confirmation: false,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("conversation_id", conversationId);
+  if (error) throw new Error(`Falha ao persistir adicionais pagos: ${error.message}`);
+}
+
 async function persistObviousProductMemoryFromTurn(
   supabaseAdmin: any,
   conversationId: string,
@@ -1273,21 +1406,25 @@ async function persistObviousProductMemoryFromTurn(
     }
   }
 
-  if (qty == null && !previousAskedQuantity) return;
+  const previousWasBeverageOffer = isBeverageOfferMessage(previousAssistant);
 
-  // 3) Caso simples: um produto + uma quantidade, inclusive quantidade isolada
-  // em resposta à pergunta anterior.
+  // 3) Caso simples. Se acabou de oferecer bebida e o cliente respondeu
+  // apenas com o nome ("Guaraná", "Coca", "água"), assume 1 unidade.
   let candidates = candidatesFrom(userText);
-  if (!candidates.length && qty != null && previousAskedQuantity) {
+  let resolvedQty = qty;
+  if (resolvedQty == null && previousWasBeverageOffer && candidates.length === 1) resolvedQty = 1;
+  if (resolvedQty == null && !previousAskedQuantity) return;
+
+  if (!candidates.length && resolvedQty != null && previousAskedQuantity) {
     const previousUserTexts = [...history].reverse().filter((m) => m.role === "user").map((m) => m.content).slice(0, 5);
     for (const oldText of previousUserTexts) {
       const found = candidatesFrom(oldText);
       if (found.length === 1) { candidates = found; break; }
     }
   }
-  if (candidates.length !== 1 || qty == null) return;
+  if (candidates.length !== 1 || resolvedQty == null) return;
 
-  upsert(String((candidates[0] as any).name), qty);
+  upsert(String((candidates[0] as any).name), resolvedQty);
   draft.items = existing;
   draft.awaiting_final_confirmation = false;
   const { error } = await supabaseAdmin
@@ -1725,6 +1862,76 @@ function enforceNaturalSalesProgression(finalText: string, userText: string, dra
   return "Perfeito! Pode me dizer o que você gostaria de pedir e a quantidade de cada item, por favor?";
 }
 
+function extractAddonQuantityFromNotes(notes: string, addonName: string): number {
+  const n = normalizeStreet(notes);
+  const a = normalizeStreet(addonName);
+  if (!n || !a) return 0;
+
+  const addonTokens = a
+    .split(/\s+/)
+    .filter((token) => token.length >= 4 && !["extra", "adicional", "crocante", "cremoso", "cremosa"].includes(token));
+  const aliases = Array.from(new Set([a, ...addonTokens])).filter(Boolean);
+
+  for (const alias of aliases) {
+    const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const negative = new RegExp(`\\b(?:sem|tirar|tira|retirar|retira|remove|remover)\\s+(?:o\\s+|a\\s+)?${escaped}\\b`);
+    if (negative.test(n)) return 0;
+  }
+
+  // Só considera quantidade de adicional quando o número está junto do adicional.
+  // "2 costelas com bacon" = 2 produtos com 1 bacon em cada, e não 2 bacons por unidade.
+  for (const alias of aliases) {
+    const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const qtyMatch =
+      n.match(new RegExp(`\\b(\\d{1,2})\\s*x?\\s*${escaped}\\b`)) ||
+      n.match(new RegExp(`\\b${escaped}\\s*x\\s*(\\d{1,2})\\b`));
+    if (qtyMatch) return Math.max(1, Math.min(20, Number(qtyMatch[1]) || 1));
+  }
+
+  for (const alias of aliases) {
+    const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const wordQty: Array<[RegExp, number]> = [
+      [new RegExp(`\\b(?:duas|dois)\\s+${escaped}\\b`), 2],
+      [new RegExp(`\\btres\\s+${escaped}\\b`), 3],
+      [new RegExp(`\\bquatro\\s+${escaped}\\b`), 4],
+      [new RegExp(`\\bcinco\\s+${escaped}\\b`), 5],
+    ];
+    for (const [re, qty] of wordQty) if (re.test(n)) return qty;
+  }
+
+  return aliases.some((alias) =>
+    new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(n),
+  ) ? 1 : 0;
+}
+
+function mergeStructuredAndNoteAddons(
+  requested: DraftAddon[] | null | undefined,
+  notes: string | null | undefined,
+  availableOptions: any[],
+): DraftAddon[] {
+  const merged = new Map<string, DraftAddon>();
+  for (const addon of requested ?? []) {
+    const key = normalizeStreet(addon.name);
+    if (!key) continue;
+    merged.set(key, { name: addon.name, quantity: Math.max(1, Math.round(Number(addon.quantity) || 1)) });
+  }
+  const noteText = String(notes ?? "").trim();
+  if (!noteText) return [...merged.values()];
+  for (const option of availableOptions) {
+    const names = [String(option.display_name || "").trim(), String(option.name || "").trim()].filter(Boolean);
+    let qty = 0;
+    let chosen = names[0] || "";
+    for (const name of names) {
+      const detected = extractAddonQuantityFromNotes(noteText, name);
+      if (detected > qty) { qty = detected; chosen = name; }
+    }
+    if (!qty) continue;
+    const key = normalizeStreet(chosen);
+    if (!merged.has(key)) merged.set(key, { name: chosen, quantity: qty });
+  }
+  return [...merged.values()];
+}
+
 async function priceDraftItemsWithStructuredAddons(
   supabaseAdmin: any,
   draftItems: DraftItem[],
@@ -1813,7 +2020,9 @@ async function priceDraftItemsWithStructuredAddons(
     let addonExtra = 0;
     const addonLabels: string[] = [];
 
-    for (const requested of draft.addons ?? []) {
+    const chargeableAddons = mergeStructuredAndNoteAddons(draft.addons, draft.notes, availableOptions);
+
+    for (const requested of chargeableAddons) {
       const requestedKey = normalizeStreet(requested.name);
       const option =
         availableOptions.find(
@@ -2221,7 +2430,7 @@ const TOOLS = [
     function: {
       name: "update_order_draft",
       description:
-        "Atualiza os dados já coletados do pedido em andamento nesta conversa. Chame sempre que o cliente informar ou confirmar algo novo (nome, endereço, itens, pagamento). IMPORTANTE: em turnos de endereço/nome/pagamento, OMITA o campo items. Só envie items quando o cliente realmente informar ou alterar produtos; quando enviar, use a lista completa atual.",
+        "Atualiza os dados já coletados do pedido em andamento nesta conversa. Chame sempre que o cliente informar ou confirmar algo novo (nome, endereço, produtos, bebidas, adicionais, pagamento). TODO produto/bebida pedido precisa estar em items e TODO adicional pago precisa estar em addons do respectivo item. IMPORTANTE: em turnos de endereço/nome/pagamento, OMITA o campo items. Só envie items quando o cliente realmente informar ou alterar produtos; quando enviar, use a lista completa atual.",
       parameters: {
         type: "object",
         properties: {
@@ -2423,7 +2632,9 @@ ${conversationStageText}
 - LOCALIZAÇÃO DA LOJA: se perguntarem onde fica, informe "Rua Carlos Chagas, em Jardim Gramacho" e diga naturalmente que trabalhamos somente com delivery. Nunca informe o número 492 ao cliente. O número existe apenas para uso interno/cálculo de rota.
 - PREÇO: use exclusivamente o preço efetivo do CARDÁPIO ATIVO AGORA; quando houver promoção ativa no sistema, esse preço promocional é o valor válido.
 - Não ofereça adicionais pagos, bordas, molhos ou complementos que não existam como produto/opção estruturada no sistema. Observações como “sem ingrediente” podem ser registradas, mas nunca invente cobrança adicional.
-- Quando o cliente escolher um adicional que aparece em "Adicionais disponíveis" daquele produto, registre-o no campo \`addons\` do item usando o nome cadastrado e a quantidade. O backend soma o preço oficial do adicional automaticamente; nunca calcule nem invente o preço manualmente.
+- Quando o cliente escolher um adicional que aparece em "Adicionais disponíveis" daquele produto, registre-o OBRIGATORIAMENTE no campo \`addons\` do item usando o nome cadastrado e a quantidade. NÃO coloque adicional pago somente em \`notes\`. O backend soma o preço oficial automaticamente; nunca calcule nem invente o preço manualmente.
+- TODO item pedido pelo cliente precisa estar em \`items\`: batata, combo, refrigerante, água, bebida ou qualquer outro produto ativo. Bebida nunca pode ficar apenas em observação. Antes do resumo/finalização, confira que \`items\` representa TUDO o que o cliente pediu e que cada adicional pago está em \`addons\`.
+- 🚨 SOMA FINANCEIRA OBRIGATÓRIA: o valor final deve somar produtos principais + bebidas/refrigerantes + TODOS os adicionais pagos + demais produtos ativos + taxa de entrega. Bacon, cheddar, requeijão, mussarela, batata palha, bebida ou qualquer extra pago nunca podem ficar como observação gratuita.
 - Se o cliente disser algo como "com bacon extra", "adiciona cheddar" ou "mais requeijão", associe ao produto correto somente se essa opção estiver estruturada para esse produto.
 - Não confirme Pix apenas por foto de comprovante: informe somente que o comprovante foi recebido e será conferido.
 
@@ -4441,7 +4652,7 @@ async function executeTool(
       .order("created_at", { ascending: true });
     if (currentErr) return { result: { status: "error", detail: currentErr.message } };
 
-    let desired: { product_name: string; quantity: number; notes?: string | null }[] = [];
+    let desired: DraftItem[] = [];
     if (name === "update_active_order_items") {
       desired = Array.isArray(args.items)
         ? args.items
@@ -4449,6 +4660,14 @@ async function executeTool(
               product_name: String(it.product_name ?? "").trim(),
               quantity: Math.max(0, Math.round(Number(it.quantity) || 0)),
               notes: it.notes ? String(it.notes) : null,
+              addons: Array.isArray(it.addons)
+                ? it.addons
+                    .map((addon: any) => ({
+                      name: String(addon?.name ?? "").trim(),
+                      quantity: Math.max(1, Math.round(Number(addon?.quantity) || 1)),
+                    }))
+                    .filter((addon: DraftAddon) => Boolean(addon.name))
+                : [],
             }))
             .filter((it: any) => it.product_name && it.quantity > 0)
         : [];
@@ -4519,25 +4738,20 @@ async function executeTool(
       .select("id,name,sale_price,promotion_active,promotion_price,promotion_type,promotion_start_at,promotion_end_at,promotion_days_of_week,promotion_time_start,promotion_time_end,promotion_label")
       .eq("active", true);
     const productList = products ?? [];
-    const { findProductMatch, findProductSuggestions } = await import("@/lib/product-match.server");
-    const unmatched: any[] = [];
-    const repriced = desired.map((it) => {
-      const match = findProductMatch(productList, it.product_name);
-      if (!match) {
-        unmatched.push({ raw: it.product_name, closest: findProductSuggestions(productList, it.product_name) });
-      }
-      const effective = match ? getEffectivePrice(match) : { price: 0, listPrice: 0, isPromotion: false };
+    const { priced: repriced, unmatchedProducts, unmatchedAddons } =
+      await priceDraftItemsWithStructuredAddons(supabaseAdmin, desired, productList);
+
+    if (unmatchedProducts.length) {
       return {
-        product_id: match?.id ?? null,
-        product_name: match?.name ?? it.product_name,
-        quantity: it.quantity,
-        unit_price: effective.price,
-        list_price: effective.listPrice,
-        is_promotion_price: effective.isPromotion,
-        notes: it.notes ?? null,
+        result: {
+          status: "unmatched_products",
+          suggestions: unmatchedProducts.map((row) => ({ raw: row.raw, closest: row.closest })),
+        },
       };
-    });
-    if (unmatched.length) return { result: { status: "unmatched_products", suggestions: unmatched } };
+    }
+    if (unmatchedAddons.length) {
+      return { result: { status: "unmatched_addons", items: unmatchedAddons } };
+    }
 
     const subtotal = repriced.reduce((sum, it) => sum + Number(it.unit_price) * Number(it.quantity), 0);
     const couponDiscount = Number(activeOrder.coupon_discount ?? 0);
@@ -4545,7 +4759,12 @@ async function executeTool(
     const total = Math.max(0, subtotal - couponDiscount) + deliveryFee;
 
     if (!confirmedActiveAction) {
-      const pendingItems = repriced.map((it) => ({ product_name: it.product_name, quantity: it.quantity, notes: it.notes ?? null }));
+      const pendingItems = desired.map((it) => ({
+        product_name: it.product_name,
+        quantity: it.quantity,
+        notes: it.notes ?? null,
+        addons: it.addons ?? [],
+      }));
       const { error: stageError } = await supabaseAdmin.from("order_drafts").update({
         stage: "confirm_active_order_update", items: pendingItems, notes: null, awaiting_final_confirmation: false, updated_at: new Date().toISOString(),
       }).eq("conversation_id", conversation.id);
@@ -6224,6 +6443,11 @@ async function handleIncomingMessageUnlocked(
     await persistObviousProductMemoryFromTurn(supabaseAdmin, conversation.id, text, history, draft);
   } catch (err) {
     console.warn("[ORDER_MEMORY] Falha ao persistir item/quantidade:", err);
+  }
+  try {
+    await persistPaidAddonMemoryFromTurn(supabaseAdmin, conversation.id, text, draft);
+  } catch (err) {
+    console.warn("[ORDER_MEMORY] Falha ao persistir adicional pago:", err);
   }
 
   // ============ PRÉ-CAPTURA DA COLETA AGRUPADA ============
