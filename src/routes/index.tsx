@@ -135,7 +135,7 @@ type CartItem = {
 type View = "list" | "detail" | "cart" | "delivery_check" | "checkout";
 type ActiveFilter = "ativos" | "inativos" | "todos";
 type CheckoutPayment = "infinitepay" | "mercadopago" | "pagarme" | "efi" | "appmax";
-type PaymentChoice = "online_pix" | "online_card" | "delivery_card" | "delivery_pix";
+type PaymentChoice = "online" | "online_pix" | "online_card" | "delivery_card" | "delivery_pix";
 type AreaStatus = "idle" | "checking" | "needs_number" | "supported" | "unsupported" | "error";
 
 type ActiveOrderSummary = {
@@ -710,14 +710,14 @@ function CustomerHome() {
   const [paymentAvailable, setPaymentAvailable] = useState(false);
   const [mercadoPagoPublicKey, setMercadoPagoPublicKey] = useState("");
   const [mercadoPagoMaxInstallments, setMercadoPagoMaxInstallments] = useState(1);
-  const [mpCheckout, setMpCheckout] = useState<{ id: string; total: number; method: "pix" | "card" } | null>(null);
+  const [mpCheckout, setMpCheckout] = useState<{ id: string; total: number; method: "pix" | "card" | "both" } | null>(null);
   const [pagarmePublicKey, setPagarmePublicKey] = useState("");
   const [pagarmeMaxInstallments, setPagarmeMaxInstallments] = useState(1);
-  const [pagarmeCheckout, setPagarmeCheckout] = useState<{ id: string; total: number; method: "pix" | "card" } | null>(null);
+  const [pagarmeCheckout, setPagarmeCheckout] = useState<{ id: string; total: number; method: "pix" | "card" | "both" } | null>(null);
   const [efiPayeeCode, setEfiPayeeCode] = useState("");
   const [efiEnvironment, setEfiEnvironment] = useState<"sandbox" | "production">("sandbox");
   const [efiMaxInstallments, setEfiMaxInstallments] = useState(1);
-  const [efiCheckout, setEfiCheckout] = useState<{ id: string; total: number; method: "pix" | "card" } | null>(null);
+  const [efiCheckout, setEfiCheckout] = useState<{ id: string; total: number; method: "pix" | "card" | "both" } | null>(null);
   const [appmaxCheckout, setAppmaxCheckout] = useState<{ id: string; total: number; method: "pix" | "card" } | null>(null);
   const [appmaxExternalId, setAppmaxExternalId] = useState("");
   const [appmaxMaxInstallments, setAppmaxMaxInstallments] = useState(1);
@@ -1145,16 +1145,16 @@ function CustomerHome() {
       setPayOnDeliveryPixEnabled(pay.pay_on_delivery_pix_enabled !== false);
       const canPixOnline = (data as any)?.digital_menu_pix_enabled !== false && pay.pix_payment_available === true;
       const canCardOnline = (data as any)?.digital_menu_card_enabled !== false && pay.card_payment_available === true;
-      // Não pré-seleciona nenhuma forma de pagamento.
-      // O cliente deve escolher explicitamente Pix, cartão ou pagamento na entrega.
+      // O checkout começa sem forma pré-selecionada. Ao tocar em “Escolher forma
+      // de pagamento”, abrimos o checkout transparente do provedor configurado.
       setPaymentChoice(null);
-      if (canPixOnline) {
-        setPaymentProvider(loadedPixProvider);
-        setForm((current) => ({ ...current, payment: loadedPixProvider }));
-      } else if (canCardOnline) {
-        setPaymentProvider(loadedCardProvider);
-        setForm((current) => ({ ...current, payment: loadedCardProvider }));
-      }
+      const unifiedProvider = canPixOnline && canCardOnline && loadedPixProvider === loadedCardProvider
+        ? loadedPixProvider
+        : canCardOnline
+          ? loadedCardProvider
+          : loadedPixProvider;
+      setPaymentProvider(unifiedProvider);
+      setForm((current) => ({ ...current, payment: unifiedProvider }));
 
       const groups = (groupResult?.data || []) as AddonGroup[];
       const options = (optionResult?.data || []) as AddonOption[];
@@ -2283,9 +2283,21 @@ function CustomerHome() {
   const removeItem = (idx: number) => setCart((c) => c.filter((_, ix) => ix !== idx));
 
   function requestPlaceOrder() {
+    // Fluxo original: o botão principal abre diretamente o checkout transparente
+    // configurado. Pix/cartão são escolhidos dentro do checkout do provedor.
     if (!paymentChoice) {
+      const sameOnlineProvider = pixProvider === cardProvider;
+      const canPix = pixEnabled && pixPaymentAvailable;
+      const canCard = cardEnabled && cardPaymentAvailable;
+      if ((canPix || canCard) && sameOnlineProvider) {
+        void placeOrder(false, "online");
+        return;
+      }
+      // Se cada forma estiver roteada para um gateway diferente, não existe um
+      // único checkout capaz de representar os dois. Nesse caso mostramos as
+      // opções para o cliente escolher qual gateway deve ser aberto.
       scrollToCheckoutSection("payment-section");
-      toast.info("Escolha a forma de pagamento para continuar.");
+      toast.info("Escolha Pix ou cartão para abrir o checkout seguro correspondente.");
       return;
     }
 
@@ -2319,7 +2331,7 @@ function CustomerHome() {
       return;
     }
     const selectedProvider: CheckoutPayment = selectedPaymentChoice === "online_pix" ? pixProvider : selectedPaymentChoice === "online_card" ? cardProvider : paymentProvider;
-    const selectedOnlineAvailable = selectedPaymentChoice === "online_pix" ? pixPaymentAvailable : selectedPaymentChoice === "online_card" ? cardPaymentAvailable : false;
+    const selectedOnlineAvailable = selectedPaymentChoice === "online" ? paymentAvailable : selectedPaymentChoice === "online_pix" ? pixPaymentAvailable : selectedPaymentChoice === "online_card" ? cardPaymentAvailable : false;
     if (!cart.length) return toast.error("Seu carrinho está vazio");
     if (!form.name || !form.phone) return toast.error("Preencha nome e telefone");
     if (isDelivery && (!form.street || !form.number || !form.neighborhood)) return toast.error("Preencha rua, número e bairro");
@@ -2346,13 +2358,13 @@ function CustomerHome() {
     if (isDelivery && outsideDeliveryHours && schedulingEnabled && !scheduleAccepted) {
       return toast.error("Confirme o agendamento para o próximo horário disponível antes de finalizar.");
     }
-    if ((selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card") && !selectedOnlineAvailable) return toast.error("Esta forma de pagamento online está indisponível no momento");
+    if ((selectedPaymentChoice === "online" || selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card") && !selectedOnlineAvailable) return toast.error("Esta forma de pagamento online está indisponível no momento");
     if ((selectedPaymentChoice === "delivery_card" || selectedPaymentChoice === "delivery_pix") && !isDelivery) return toast.error("Pagamento na entrega só está disponível quando você escolhe entrega.");
     if (selectedPaymentChoice === "delivery_card" && (!payOnDeliveryEnabled || !payOnDeliveryCardEnabled)) return toast.error("Cartão na entrega está indisponível.");
     if (selectedPaymentChoice === "delivery_pix" && (!payOnDeliveryEnabled || !payOnDeliveryPixEnabled)) return toast.error("Pix na entrega está indisponível.");
 
     trackAnalytics("checkout_started", {
-      event_category: "commerce", value: total, customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card" ? selectedProvider : selectedPaymentChoice,
+      event_category: "commerce", value: total, customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: selectedPaymentChoice === "online" || selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card" ? selectedProvider : selectedPaymentChoice,
       properties: metaCommerceProperties({
         reservation:
           !isStoreOpenByBusinessHours(publicStoreStatus) &&
@@ -2375,7 +2387,7 @@ function CustomerHome() {
           address_neighborhood: isDelivery ? form.neighborhood || null : null,
           address_city: isDelivery ? form.city || null : null,
           address_cep: isDelivery ? form.cep || null : null,
-          payment_kind: selectedPaymentChoice,
+          payment_kind: selectedPaymentChoice === "online" ? selectedProvider : selectedPaymentChoice,
           scheduled: isDelivery && outsideDeliveryHours && schedulingEnabled && scheduleAccepted,
           store_reservation: !storeOpenNow && publicStoreStatus?.closed_reservations_enabled === true && closedStoreReservationMode,
           reservation_date: !storeOpenNow && closedStoreReservationMode ? reservationDate : null,
@@ -2393,7 +2405,7 @@ function CustomerHome() {
       });
       if (created?.error) throw new Error(created.error);
       if (!created?.checkout?.id) throw new Error("Checkout não criado");
-      trackAnalytics("checkout_created", { event_category: "commerce", checkout_id: String(created.checkout.id), order_id: created?.order_id ? String(created.order_id) : null, customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card" ? selectedProvider : selectedPaymentChoice, value: Number(created.checkout.total || total), properties: { pay_on_delivery: Boolean(created?.pay_on_delivery), provider: created.checkout.payment_provider || selectedProvider } });
+      trackAnalytics("checkout_created", { event_category: "commerce", checkout_id: String(created.checkout.id), order_id: created?.order_id ? String(created.order_id) : null, customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: selectedPaymentChoice === "online" || selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card" ? selectedProvider : selectedPaymentChoice, value: Number(created.checkout.total || total), properties: { pay_on_delivery: Boolean(created?.pay_on_delivery), provider: created.checkout.payment_provider || selectedProvider } });
 
       if (created?.pay_on_delivery && created?.order_id) {
         trackAnalytics("purchase", {
@@ -2421,7 +2433,8 @@ function CustomerHome() {
       }
 
       const provider: CheckoutPayment = created.checkout.payment_provider === "mercadopago" ? "mercadopago" : created.checkout.payment_provider === "pagarme" ? "pagarme" : created.checkout.payment_provider === "efi" ? "efi" : created.checkout.payment_provider === "appmax" ? "appmax" : "infinitepay";
-      const onlineMethod: "pix" | "card" = String(created.checkout.payment_kind || "").endsWith("_card") ? "card" : "pix";
+      const createdKind = String(created.checkout.payment_kind || "");
+      const onlineMethod: "pix" | "card" | "both" = createdKind.endsWith("_card") ? "card" : createdKind.endsWith("_pix") ? "pix" : "both";
       if (provider === "pagarme") {
         setPaymentProvider("pagarme");
         setForm((current) => ({ ...current, payment: "pagarme" }));
@@ -2503,7 +2516,7 @@ function CustomerHome() {
     } catch (err: any) {
       console.error(err);
       const message = String(err?.message || "Não foi possível iniciar o pagamento.");
-      trackAnalytics("checkout_error", { event_category: "error", value: total, payment_method: selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card" ? selectedProvider : selectedPaymentChoice, properties: { message: message.slice(0,300) } });
+      trackAnalytics("checkout_error", { event_category: "error", value: total, payment_method: selectedPaymentChoice === "online" || selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card" ? selectedProvider : selectedPaymentChoice, properties: { message: message.slice(0,300) } });
       if (/fora da área|fora da area|bairro|entrega/i.test(message)) void redirectOutsideArea();
       toast.error(message);
     } finally {
@@ -3772,10 +3785,14 @@ function CustomerHome() {
             ) : (
               <div className="space-y-3">
                 <div className="rounded-2xl border bg-white p-4 shadow-sm">
-                  <p className="text-sm font-black">Escolha como deseja pagar</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Selecione uma das formas de pagamento abaixo para continuar.</p>
+                  <p className="text-sm font-black">Pagamento seguro</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {pixProvider === cardProvider && paymentAvailable
+                      ? "Toque em “Escolher forma de pagamento” abaixo. O checkout transparente abrirá aqui para você escolher Pix ou cartão com segurança."
+                      : "Pix e cartão estão configurados em gateways diferentes. Escolha abaixo qual forma deseja usar."}
+                  </p>
                 </div>
-                {pixEnabled && pixPaymentAvailable && (
+                {pixProvider !== cardProvider && pixEnabled && pixPaymentAvailable && (
                   <button
                     type="button"
                     onClick={() => { setPaymentChoice("online_pix"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "pix", value: total, quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: pixProvider }) }); scrollToCheckoutSection("checkout-action"); }}
@@ -3791,7 +3808,7 @@ function CustomerHome() {
                   </button>
                 )}
 
-                {cardEnabled && cardPaymentAvailable && (
+                {pixProvider !== cardProvider && cardEnabled && cardPaymentAvailable && (
                   <button
                     type="button"
                     onClick={() => { setPaymentChoice("online_card"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "card", value: total, quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: cardProvider }) }); scrollToCheckoutSection("checkout-action"); }}
@@ -3862,6 +3879,7 @@ function CustomerHome() {
                 onClick={requestPlaceOrder}
                 disabled={
                   placing ||
+                  (paymentChoice === "online" && !paymentAvailable) ||
                   (paymentChoice === "online_pix" && (!pixEnabled || !pixPaymentAvailable)) ||
                   (paymentChoice === "online_card" && (!cardEnabled || !cardPaymentAvailable)) ||
                   (paymentChoice === "delivery_card" && (!payOnDeliveryEnabled || !payOnDeliveryCardEnabled)) ||
