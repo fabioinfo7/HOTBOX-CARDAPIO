@@ -1128,9 +1128,19 @@ function CustomerHome() {
       const loadedCardProvider = normalizeProvider(pay.card_provider || pay.provider);
       setPixProvider(loadedPixProvider);
       setCardProvider(loadedCardProvider);
-      setPixPaymentAvailable(pay.pix_payment_available === true);
-      setCardPaymentAvailable(pay.card_payment_available === true);
-      setPaymentAvailable(pay.payment_available === true);
+      // Compatibilidade com bancos que ainda usam a RPC antiga do checkout.
+      // A RPC antiga retorna apenas `provider` + `payment_available`; sem este
+      // fallback Pix/cartão ficavam falsos e o botão nunca abria o Brick.
+      const legacyPaymentAvailable = pay.payment_available === true;
+      const loadedPixAvailable = typeof pay.pix_payment_available === "boolean"
+        ? pay.pix_payment_available === true
+        : legacyPaymentAvailable;
+      const loadedCardAvailable = typeof pay.card_payment_available === "boolean"
+        ? pay.card_payment_available === true
+        : legacyPaymentAvailable;
+      setPixPaymentAvailable(loadedPixAvailable);
+      setCardPaymentAvailable(loadedCardAvailable);
+      setPaymentAvailable(legacyPaymentAvailable || loadedPixAvailable || loadedCardAvailable);
       setMercadoPagoPublicKey(String(pay.mercadopago_public_key || ""));
       setMercadoPagoMaxInstallments(Math.min(12, Math.max(1, Number(pay.mercadopago_max_installments || 1))));
       setPagarmePublicKey(String(pay.pagarme_public_key || ""));
@@ -1143,8 +1153,8 @@ function CustomerHome() {
       setPayOnDeliveryEnabled(pay.pay_on_delivery_enabled === true);
       setPayOnDeliveryCardEnabled(pay.pay_on_delivery_card_enabled !== false);
       setPayOnDeliveryPixEnabled(pay.pay_on_delivery_pix_enabled !== false);
-      const canPixOnline = (data as any)?.digital_menu_pix_enabled !== false && pay.pix_payment_available === true;
-      const canCardOnline = (data as any)?.digital_menu_card_enabled !== false && pay.card_payment_available === true;
+      const canPixOnline = (data as any)?.digital_menu_pix_enabled !== false && loadedPixAvailable;
+      const canCardOnline = (data as any)?.digital_menu_card_enabled !== false && loadedCardAvailable;
       // O checkout começa sem forma pré-selecionada. Ao tocar em “Escolher forma
       // de pagamento”, abrimos o checkout transparente do provedor configurado.
       setPaymentChoice(null);
