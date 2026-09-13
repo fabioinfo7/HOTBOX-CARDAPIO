@@ -21,7 +21,7 @@ type Props = {
   checkoutId: string;
   amount: number;
   publicKey: string;
-  method: PagarmeMethod;
+  method: PagarmeMethod | "both";
   maxInstallments?: number;
   customerName: string;
   customerEmail?: string | null;
@@ -65,6 +65,8 @@ export function PagarmePayment({
   onCancel,
   onSwitchToPix,
 }: Props) {
+  const [selectedMethod, setSelectedMethod] = useState<PagarmeMethod>(method === "pix" ? "pix" : "card");
+  const activeMethod: PagarmeMethod = method === "both" ? selectedMethod : method;
   const [email, setEmail] = useState(String(customerEmail || ""));
   const [document, setDocument] = useState("");
   const [number, setNumber] = useState("");
@@ -78,7 +80,7 @@ export function PagarmePayment({
   const [pending, setPending] = useState<{ qrCode?: string | null; qrCodeUrl?: string | null; status?: string | null } | null>(null);
   const [rejected, setRejected] = useState("");
 
-  const needsBillingFields = method === "card" && !billingAddress;
+  const needsBillingFields = activeMethod === "card" && !billingAddress;
 
   const installmentsOptions = useMemo(() => {
     const max = Math.min(12, Math.max(1, Number(maxInstallments || 1)));
@@ -140,7 +142,7 @@ export function PagarmePayment({
     if (loading) return;
     if (!/\S+@\S+\.\S+/.test(email.trim())) return toast.error("Informe um e-mail válido.");
     if (![11, 14].includes(digits(document).length)) return toast.error("Informe seu CPF para o pagamento.");
-    if (method === "card" && needsBillingFields) {
+    if (activeMethod === "card" && needsBillingFields) {
       if (!billing.street.trim() || !billing.number.trim() || !billing.neighborhood.trim() || !billing.city.trim() || digits(billing.cep).length !== 8) {
         return toast.error("Preencha o endereço de cobrança do cartão.");
       }
@@ -149,22 +151,22 @@ export function PagarmePayment({
     setLoading(true);
     setRejected("");
     try {
-      const cardToken = method === "card" ? await tokenizeCard() : null;
+      const cardToken = activeMethod === "card" ? await tokenizeCard() : null;
       const result: any = await createPagarmePayment({
         data: {
           checkoutId,
-          method,
+          method: activeMethod,
           cardToken,
           email: email.trim(),
           document: digits(document),
           installments,
-          billingAddress: method === "card" ? billing : null,
+          billingAddress: activeMethod === "card" ? billing : null,
         },
       });
 
       if (!result?.ok) {
         const message = result?.error || "Pagamento não aprovado.";
-        if (result?.rejected && method === "card") {
+        if (result?.rejected && activeMethod === "card") {
           setRejected(message);
           trackAnalytics("payment_failed", {
             event_category: "payment",
@@ -273,6 +275,16 @@ export function PagarmePayment({
 
   return (
     <div className="space-y-4">
+      {method === "both" && (
+        <div className="grid grid-cols-2 gap-2 rounded-xl bg-zinc-100 p-1">
+          <button type="button" onClick={() => { setSelectedMethod("card"); setRejected(""); }} className={`rounded-lg px-3 py-2 text-sm font-black ${activeMethod === "card" ? "bg-white shadow-sm" : "text-zinc-600"}`}>
+            <CreditCard className="mr-1 inline size-4" /> Cartão
+          </button>
+          <button type="button" onClick={() => { setSelectedMethod("pix"); setRejected(""); }} className={`rounded-lg px-3 py-2 text-sm font-black ${activeMethod === "pix" ? "bg-white shadow-sm" : "text-zinc-600"}`}>
+            <QrCode className="mr-1 inline size-4" /> Pix
+          </button>
+        </div>
+      )}
       <div className="flex items-center justify-between gap-3 rounded-2xl border bg-emerald-50 p-3">
         <div className="flex items-center gap-2 text-sm font-bold text-emerald-950"><ShieldCheck className="size-5" /> Pagamento seguro</div>
         <button type="button" onClick={onCancel} className="rounded-full p-1.5 hover:bg-white" aria-label="Fechar pagamento"><X className="size-4" /></button>
@@ -289,7 +301,7 @@ export function PagarmePayment({
         </div>
       </div>
 
-      {method === "card" && (
+      {activeMethod === "card" && (
         <>
           <div>
             <Label>Número do cartão</Label>
@@ -337,7 +349,7 @@ export function PagarmePayment({
       )}
 
       <Button className="w-full rounded-full bg-[#ffd400] py-6 text-base font-black text-black hover:bg-[#f4ca00]" onClick={pay} disabled={loading}>
-        {loading ? <><Loader2 className="mr-2 size-5 animate-spin" /> Processando…</> : method === "pix" ? <><QrCode className="mr-2 size-5" /> Gerar Pix • R$ {amount.toFixed(2).replace(".", ",")}</> : <><CreditCard className="mr-2 size-5" /> Pagar no cartão • R$ {amount.toFixed(2).replace(".", ",")}</>}
+        {loading ? <><Loader2 className="mr-2 size-5 animate-spin" /> Processando…</> : activeMethod === "pix" ? <><QrCode className="mr-2 size-5" /> Gerar Pix • R$ {amount.toFixed(2).replace(".", ",")}</> : <><CreditCard className="mr-2 size-5" /> Pagar no cartão • R$ {amount.toFixed(2).replace(".", ",")}</>}
       </Button>
       <p className="text-center text-[11px] text-muted-foreground">Os dados do cartão são tokenizados diretamente pelo Pagar.me e não ficam armazenados na HotBox.</p>
     </div>
