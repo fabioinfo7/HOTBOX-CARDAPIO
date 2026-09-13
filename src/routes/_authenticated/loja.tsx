@@ -48,6 +48,7 @@ import { FreightApprovalPopup } from "@/components/freight-approval-popup";
 import { HumanHandoffAlert } from "@/components/human-handoff-alert";
 import { AutoPrintReceipt } from "@/components/auto-print-receipt";
 import { PwaInstallButton } from "@/components/pwa-install";
+import "@/styles/hotbox-admin.css";
 
 import hotboxLogoUrl from "@/assets/logo-hotbox.jpeg";
 
@@ -160,18 +161,47 @@ function AdminLayout() {
 
       const { data, error } = await (supabase as any)
         .from("analytics_sessions")
-        .select("id,visitor_id,presence_last_seen_at")
+        .select("id,visitor_id,presence_last_seen_at,current_page_path")
         .gte("presence_last_seen_at", cutoff)
         .limit(500);
 
       if (disposed || error) return;
 
+      const menuRows = (data || []).filter((row: any) => {
+        const raw = String(row?.current_page_path || "/").split("?")[0].replace(/\/+$/, "") || "/";
+        return (
+          raw === "/" ||
+          raw === "/cardapio" ||
+          raw.startsWith("/cardapio/") ||
+          raw === "/carrinho" ||
+          raw === "/checkout" ||
+          raw.startsWith("/produto/")
+        );
+      });
+
       const uniqueVisitors = new Set(
-        (data || [])
+        menuRows
           .map((row: any) => String(row?.visitor_id || row?.id || "").trim())
           .filter(Boolean),
       );
       const currentCount = uniqueVisitors.size;
+
+      const pageCounts = new Map<string, number>();
+      for (const row of menuRows) {
+        const raw = String(row?.current_page_path || "/").split("?")[0].replace(/\/+$/, "") || "/";
+        const label =
+          raw.startsWith("/produto/") ? "vendo produto" :
+          raw === "/carrinho" ? "no carrinho" :
+          raw === "/checkout" ? "finalizando pedido" :
+          raw.startsWith("/cardapio/area-entrega") ? "informando CEP" :
+          "na página principal";
+        pageCounts.set(label, (pageCounts.get(label) || 0) + 1);
+      }
+      const pageSummary = [...pageCounts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 2)
+        .map(([label, count]) => `${count} ${label}`)
+        .join(" • ");
       const previousCount = previousLiveVisitorsRef.current;
 
       if (previousCount === null) {
@@ -181,7 +211,7 @@ function AdminLayout() {
           showLiveAdminBubble({
             kind: "visitors",
             title: "Tem gente no cardápio agora",
-            message: `${pluralPeople(currentCount)} navegando neste momento.`,
+            message: pageSummary || `${pluralPeople(currentCount)} navegando neste momento.`,
           });
         }
         return;
@@ -192,7 +222,7 @@ function AdminLayout() {
         showLiveAdminBubble({
           kind: "visitors",
           title: entered === 1 ? "Uma pessoa entrou no cardápio" : `${entered} pessoas entraram no cardápio`,
-          message: `Agora há ${pluralPeople(currentCount)} navegando.`,
+          message: pageSummary ? `Agora há ${pluralPeople(currentCount)}: ${pageSummary}.` : `Agora há ${pluralPeople(currentCount)} navegando.`,
         });
       }
 
@@ -554,7 +584,7 @@ function AdminLayout() {
     (loc.pathname.includes("/pedido/") ? "Pedido" : "HOTBOX DELIVERY");
 
   return (
-    <div className="min-h-screen bg-background lg:flex lg:flex-col">
+    <div className="hotbox-admin-shell min-h-screen bg-background lg:flex lg:flex-col">
       <FreightApprovalPopup />
       <HumanHandoffAlert />
       <AutoPrintReceipt />
