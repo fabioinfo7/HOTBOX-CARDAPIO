@@ -38,6 +38,8 @@ import { Label } from "@/components/ui/label";
 import { CustomerLoyaltyClub } from "@/components/customer-loyalty-club";
 import { MercadoPagoPayment } from "@/components/mercadopago-payment";
 import { AppmaxPayment } from "@/components/appmax-payment";
+import { PagarmePayment } from "@/components/pagarme-payment";
+import { EfiPayment } from "@/components/efi-payment";
 import { quoteLoyaltyReward } from "@/lib/loyalty.functions";
 import { quoteSiteDelivery } from "@/lib/site-checkout.functions";
 import { getPublicTestimonialsFn } from "@/lib/satisfaction.functions";
@@ -129,10 +131,10 @@ type CartItem = {
   orderBumpId?: string | null;
   bumpPrice?: number | null;
 };
-type View = "list" | "detail" | "cart" | "checkout";
+type View = "list" | "detail" | "cart" | "delivery_check" | "checkout";
 type ActiveFilter = "ativos" | "inativos" | "todos";
-type CheckoutPayment = "infinitepay" | "mercadopago" | "appmax";
-type PaymentChoice = "online" | "delivery_card" | "delivery_pix";
+type CheckoutPayment = "infinitepay" | "mercadopago" | "pagarme" | "efi" | "appmax";
+type PaymentChoice = "online_pix" | "online_card" | "delivery_card" | "delivery_pix";
 type AreaStatus = "idle" | "checking" | "needs_number" | "supported" | "unsupported" | "error";
 
 type ActiveOrderSummary = {
@@ -701,11 +703,22 @@ function CustomerHome() {
   const [deliveryTime, setDeliveryTime] = useState<number | null>(null);
   const [infinitepayEnabled, setInfinitepayEnabled] = useState(false);
   const [paymentProvider, setPaymentProvider] = useState<CheckoutPayment>("infinitepay");
+  const [pixProvider, setPixProvider] = useState<CheckoutPayment>("infinitepay");
+  const [cardProvider, setCardProvider] = useState<CheckoutPayment>("infinitepay");
+  const [pixPaymentAvailable, setPixPaymentAvailable] = useState(false);
+  const [cardPaymentAvailable, setCardPaymentAvailable] = useState(false);
   const [paymentAvailable, setPaymentAvailable] = useState(false);
   const [mercadoPagoPublicKey, setMercadoPagoPublicKey] = useState("");
   const [mercadoPagoMaxInstallments, setMercadoPagoMaxInstallments] = useState(1);
-  const [mpCheckout, setMpCheckout] = useState<{ id: string; total: number } | null>(null);
-  const [appmaxCheckout, setAppmaxCheckout] = useState<{ id: string; total: number } | null>(null);
+  const [mpCheckout, setMpCheckout] = useState<{ id: string; total: number; method: "pix" | "card" } | null>(null);
+  const [pagarmePublicKey, setPagarmePublicKey] = useState("");
+  const [pagarmeMaxInstallments, setPagarmeMaxInstallments] = useState(1);
+  const [pagarmeCheckout, setPagarmeCheckout] = useState<{ id: string; total: number; method: "pix" | "card" } | null>(null);
+  const [efiPayeeCode, setEfiPayeeCode] = useState("");
+  const [efiEnvironment, setEfiEnvironment] = useState<"sandbox" | "production">("sandbox");
+  const [efiMaxInstallments, setEfiMaxInstallments] = useState(1);
+  const [efiCheckout, setEfiCheckout] = useState<{ id: string; total: number; method: "pix" | "card" } | null>(null);
+  const [appmaxCheckout, setAppmaxCheckout] = useState<{ id: string; total: number; method: "pix" | "card" } | null>(null);
   const [appmaxExternalId, setAppmaxExternalId] = useState("");
   const [appmaxMaxInstallments, setAppmaxMaxInstallments] = useState(1);
   const [ifoodStoreLink, setIfoodStoreLink] = useState("");
@@ -714,7 +727,7 @@ function CustomerHome() {
   const [payOnDeliveryEnabled, setPayOnDeliveryEnabled] = useState(false);
   const [payOnDeliveryCardEnabled, setPayOnDeliveryCardEnabled] = useState(true);
   const [payOnDeliveryPixEnabled, setPayOnDeliveryPixEnabled] = useState(true);
-  const [paymentChoice, setPaymentChoice] = useState<PaymentChoice>("online");
+  const [paymentChoice, setPaymentChoice] = useState<PaymentChoice>("online_pix");
   const [digitalMenuEnabled, setDigitalMenuEnabled] = useState(true);
   const [publicStoreStatus, setPublicStoreStatus] = useState<PublicStoreStatus | null>(null);
   const [, setStoreClockTick] = useState(0);
@@ -754,10 +767,7 @@ function CustomerHome() {
     let path = "/cardapio";
     let title = "Cardápio HotBox";
 
-    if (areaStatus !== "supported") {
-      path = "/cardapio/area-entrega";
-      title = "Verificação da área de entrega";
-    } else if (view === "detail" && selectedProduct) {
+    if (view === "detail" && selectedProduct) {
       const slug = String(selectedProduct.name || selectedProduct.id || "produto")
         .normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "")
@@ -769,6 +779,9 @@ function CustomerHome() {
     } else if (view === "cart") {
       path = "/carrinho";
       title = "Carrinho";
+    } else if (view === "delivery_check") {
+      path = "/entrega/verificar";
+      title = "Verificar entrega";
     } else if (view === "checkout") {
       path = "/checkout";
       title = "Finalização do pedido";
@@ -961,10 +974,10 @@ function CustomerHome() {
   ]);
 
   // HOTBOX_MENU_ACCESS_GRANTED
-  // Só conta como acesso ao cardápio depois que a área de entrega foi validada.
-  // Quem apenas abre a tela do CEP ou é redirecionado ao iFood fica fora dessa métrica.
+  // A visita passa a contar como acesso ao cardápio assim que o cardápio real é exibido.
+  // A verificação de entrega acontece depois da sacola e é medida em uma etapa separada.
   useEffect(() => {
-    if (areaStatus !== "supported") return;
+    if (!configLoaded || !digitalMenuEnabled) return;
     try {
       const ids = analyticsIdentity();
       const key = `hb_menu_access_${ids.session_id}`;
@@ -976,12 +989,15 @@ function CustomerHome() {
     const saved = readAreaAccess();
     trackAnalytics("menu_access_granted", {
       event_category: "funnel",
+      page_path: "/cardapio",
+      page_title: "Cardápio HotBox",
       properties: {
-        cep: onlyDigits(saved?.cep || form.cep || accessCep || "").slice(0, 8) || null,
-        neighborhood: String(saved?.neighborhood || form.neighborhood || validatedNeighborhood || "").trim() || null,
+        area_prevalidated: Boolean(saved?.neighborhood),
+        cep: onlyDigits(saved?.cep || "").slice(0, 8) || null,
+        neighborhood: String(saved?.neighborhood || "").trim() || null,
       },
     });
-  }, [areaStatus, accessCep, form.cep, form.neighborhood, validatedNeighborhood]);
+  }, [configLoaded, digitalMenuEnabled]);
 
   useEffect(() => {
     getPublicTestimonialsFn()
@@ -1106,23 +1122,39 @@ function CustomerHome() {
       }
 
       const pay = paymentResult?.data || {};
-      const provider: CheckoutPayment = pay.provider === "mercadopago" ? "mercadopago" : pay.provider === "appmax" ? "appmax" : "infinitepay";
-      setPaymentProvider(provider);
+      const normalizeProvider = (value: unknown): CheckoutPayment => value === "mercadopago" ? "mercadopago" : value === "pagarme" ? "pagarme" : value === "efi" ? "efi" : value === "appmax" ? "appmax" : "infinitepay";
+      const loadedPixProvider = normalizeProvider(pay.pix_provider || pay.provider);
+      const loadedCardProvider = normalizeProvider(pay.card_provider || pay.provider);
+      setPixProvider(loadedPixProvider);
+      setCardProvider(loadedCardProvider);
+      setPixPaymentAvailable(pay.pix_payment_available === true);
+      setCardPaymentAvailable(pay.card_payment_available === true);
       setPaymentAvailable(pay.payment_available === true);
       setMercadoPagoPublicKey(String(pay.mercadopago_public_key || ""));
       setMercadoPagoMaxInstallments(Math.min(12, Math.max(1, Number(pay.mercadopago_max_installments || 1))));
+      setPagarmePublicKey(String(pay.pagarme_public_key || ""));
+      setPagarmeMaxInstallments(Math.min(12, Math.max(1, Number(pay.pagarme_max_installments || 1))));
+      setEfiPayeeCode(String(pay.efi_payee_code || ""));
+      setEfiEnvironment(pay.efi_environment === "production" ? "production" : "sandbox");
+      setEfiMaxInstallments(Math.min(12, Math.max(1, Number(pay.efi_max_installments || 1))));
       setAppmaxExternalId(String(pay.appmax_external_id || ""));
       setAppmaxMaxInstallments(Math.min(12, Math.max(1, Number(pay.appmax_max_installments || 1))));
       setPayOnDeliveryEnabled(pay.pay_on_delivery_enabled === true);
       setPayOnDeliveryCardEnabled(pay.pay_on_delivery_card_enabled !== false);
       setPayOnDeliveryPixEnabled(pay.pay_on_delivery_pix_enabled !== false);
-      const onlineMethodsEnabled = (data as any)?.digital_menu_pix_enabled !== false || (data as any)?.digital_menu_card_enabled !== false;
-      if ((!onlineMethodsEnabled || pay.payment_available !== true) && pay.pay_on_delivery_enabled === true) {
+      const canPixOnline = (data as any)?.digital_menu_pix_enabled !== false && pay.pix_payment_available === true;
+      const canCardOnline = (data as any)?.digital_menu_card_enabled !== false && pay.card_payment_available === true;
+      if (canPixOnline) {
+        setPaymentChoice("online_pix");
+        setPaymentProvider(loadedPixProvider);
+        setForm((current) => ({ ...current, payment: loadedPixProvider }));
+      } else if (canCardOnline) {
+        setPaymentChoice("online_card");
+        setPaymentProvider(loadedCardProvider);
+        setForm((current) => ({ ...current, payment: loadedCardProvider }));
+      } else if (pay.pay_on_delivery_enabled === true) {
         setPaymentChoice(pay.pay_on_delivery_card_enabled !== false ? "delivery_card" : "delivery_pix");
-      } else {
-        setPaymentChoice("online");
       }
-      setForm((current) => ({ ...current, payment: provider }));
 
       const groups = (groupResult?.data || []) as AddonGroup[];
       const options = (optionResult?.data || []) as AddonOption[];
@@ -1146,15 +1178,26 @@ function CustomerHome() {
   }, []);
 
   useEffect(() => {
-    if (form.payment !== paymentProvider) setForm((current) => ({ ...current, payment: paymentProvider }));
-  }, [form.payment, paymentProvider]);
+    if (paymentChoice === "online_pix") {
+      setPaymentProvider(pixProvider);
+      setPaymentAvailable(pixPaymentAvailable);
+      if (form.payment !== pixProvider) setForm((current) => ({ ...current, payment: pixProvider }));
+    } else if (paymentChoice === "online_card") {
+      setPaymentProvider(cardProvider);
+      setPaymentAvailable(cardPaymentAvailable);
+      if (form.payment !== cardProvider) setForm((current) => ({ ...current, payment: cardProvider }));
+    }
+  }, [paymentChoice, pixProvider, cardProvider, pixPaymentAvailable, cardPaymentAvailable, form.payment]);
 
   useEffect(() => {
     if (form.deliveryMode === "pickup") {
-      if (paymentChoice !== "online") setPaymentChoice("online");
+      if (paymentChoice === "delivery_card" || paymentChoice === "delivery_pix") {
+        if (pixEnabled && pixPaymentAvailable) setPaymentChoice("online_pix");
+        else if (cardEnabled && cardPaymentAvailable) setPaymentChoice("online_card");
+      }
       setScheduleAccepted(false);
     }
-  }, [form.deliveryMode, paymentChoice]);
+  }, [form.deliveryMode, paymentChoice, pixEnabled, cardEnabled, pixPaymentAvailable, cardPaymentAvailable]);
 
   useEffect(() => {
     if (areaStatus !== "supported") return;
@@ -1172,22 +1215,31 @@ function CustomerHome() {
 
 
 
-  async function redirectOutsideArea(details?: { cep?: string | null; neighborhood?: string | null }) {
-    const target = ifoodStoreLink.trim();
+  async function redirectOutsideArea(
+    details?: { cep?: string | null; neighborhood?: string | null },
+    destination: "ifood" | "99food" | "whatsapp" = "ifood",
+  ) {
     const cleanCep = onlyDigits(details?.cep || accessCep || form.cep || "").slice(0, 8);
     const neighborhood = String(details?.neighborhood || validatedNeighborhood || form.neighborhood || "").trim();
-    const destination = target ? "ifood" : "whatsapp";
+    const ifoodTarget = ifoodStoreLink.trim();
+    const target = destination === "99food" ? NFOOD_URL : destination === "whatsapp" ? WHATSAPP_URL : (ifoodTarget || WHATSAPP_URL);
+    const resolvedDestination = destination === "ifood" && !ifoodTarget ? "whatsapp" : destination;
 
-    await trackAnalyticsAndWait(target ? "ifood_redirect_outside_area" : "outside_area_redirect_whatsapp", {
-      event_category: "delivery_region",
-      properties: {
-        cep: cleanCep || null,
-        neighborhood: neighborhood || null,
-        destination,
+    await trackAnalyticsAndWait(
+      resolvedDestination === "ifood" ? "ifood_redirect_outside_area" : resolvedDestination === "99food" ? "nfood_redirect_outside_area" : "outside_area_redirect_whatsapp",
+      {
+        event_category: "delivery_region",
+        properties: {
+          cep: cleanCep || null,
+          neighborhood: neighborhood || null,
+          destination: resolvedDestination,
+          cart_items: totalQty,
+          cart_value: Number(subtotal.toFixed(2)),
+        },
       },
-    });
+    );
 
-    window.location.replace(target || WHATSAPP_URL);
+    window.location.href = target;
   }
   async function checkDeliveryArea(
     neighborhood: string,
@@ -1340,7 +1392,12 @@ function CustomerHome() {
           pricingMode: quote?.pricingMode || null,
           source: "cep",
         });
-        void redirectOutsideArea({ cep, neighborhood: unsupportedNeighborhood });
+        trackAnalytics("outside_area_detected", {
+          event_category: "delivery_region",
+          properties: { cep, neighborhood: unsupportedNeighborhood || null, cart_items: totalQty, cart_value: Number(subtotal.toFixed(2)) },
+        });
+        setAreaStatus("unsupported");
+        setAreaMessage("Sua região é atendida pelas plataformas parceiras. Os preços e condições podem variar de acordo com a plataforma.");
         return;
       }
       if (quote?.quoteUnavailable) {
@@ -1387,6 +1444,7 @@ function CustomerHome() {
       setAreaStatus("supported");
       setAreaMessage("");
       toast.success("Entrega disponível para o seu endereço!");
+      if (view === "delivery_check") proceedToCheckout();
     } catch (error) {
       console.error(error);
 
@@ -1426,6 +1484,7 @@ function CustomerHome() {
               : "",
           );
           toast.success("CEP liberado manualmente para entrega!");
+          if (!manualCepQuote?.needsNumber && view === "delivery_check") proceedToCheckout();
           return;
         }
       } catch {
@@ -1459,7 +1518,12 @@ function CustomerHome() {
           pricingMode: quote?.pricingMode || null,
           source: "bairro_manual",
         });
-        void redirectOutsideArea({ cep: accessCep || form.cep || null, neighborhood });
+        trackAnalytics("outside_area_detected", {
+          event_category: "delivery_region",
+          properties: { cep: onlyDigits(accessCep || form.cep || "").slice(0, 8) || null, neighborhood, cart_items: totalQty, cart_value: Number(subtotal.toFixed(2)) },
+        });
+        setAreaStatus("unsupported");
+        setAreaMessage("Sua região é atendida pelas plataformas parceiras. Os preços e condições podem variar de acordo com a plataforma.");
         return;
       }
       if (quote?.needsNumber || quote?.pricingMode === "distance") {
@@ -1496,7 +1560,8 @@ function CustomerHome() {
       });
       setAreaStatus("supported");
       setAreaMessage("");
-      toast.success("Pronto! Confira o cardápio disponível para você.");
+      toast.success("Entrega disponível para o seu bairro!");
+      if (view === "delivery_check") proceedToCheckout();
     } catch (error) {
       console.error(error);
       setAreaStatus("error");
@@ -1550,8 +1615,6 @@ function CustomerHome() {
     setScheduleAccepted(false);
     setManualNeighborhood("");
     setManualAreaMode(false);
-    setCart([]);
-    setView("list");
     setForm((current) => ({ ...current, street: "", number: "", complement: "", neighborhood: "", city: "", cep: "" }));
   }
 
@@ -1718,14 +1781,14 @@ function CustomerHome() {
       `Subtotal: ${brl(subtotal)}`,
       ...(appliedCoupon?.code ? [`Cupom: ${appliedCoupon.code} (-${brl(couponDiscount)})`] : []),
       `Taxa de entrega: ${isDelivery ? brl(deliveryFee) : "R$ 0,00"}`,
-      `*Total: ${brl(mpCheckout?.total ?? total)}*`,
-      ...(mpCheckout?.id ? [`Referência do checkout: ${mpCheckout.id}`] : []),
+      `*Total: ${brl(pagarmeCheckout?.total ?? mpCheckout?.total ?? total)}*`,
+      ...(pagarmeCheckout?.id ? [`Referência do checkout: ${pagarmeCheckout.id}`] : mpCheckout?.id ? [`Referência do checkout: ${mpCheckout.id}`] : []),
       "",
       "Meu pagamento não foi autorizado. Preciso receber um link de pagamento.",
     ];
 
     return `https://wa.me/5521984296288?text=${encodeURIComponent(lines.join("\\n"))}`;
-  }, [cart, form, isDelivery, subtotal, couponDiscount, appliedCoupon?.code, deliveryFee, total, mpCheckout?.total, mpCheckout?.id]);
+  }, [cart, form, isDelivery, subtotal, couponDiscount, appliedCoupon?.code, deliveryFee, total, pagarmeCheckout?.total, pagarmeCheckout?.id, mpCheckout?.total, mpCheckout?.id]);
 
   const couponCartPayload = () =>
     cart.map((i) => {
@@ -2048,11 +2111,15 @@ function CustomerHome() {
     return true;
   }
 
-  function goToCheckoutFromCart() {
+  function proceedToCheckout() {
     trackAnalytics("begin_checkout", {
       event_category: "commerce",
       value: total,
-      properties: { items_count: totalQty },
+      properties: {
+        items_count: totalQty,
+        delivery_mode: form.deliveryMode,
+        delivery_area_confirmed: form.deliveryMode === "pickup" || areaStatus === "supported",
+      },
     });
 
     const storeOpenNow = isStoreOpenByBusinessHours(publicStoreStatus);
@@ -2065,6 +2132,22 @@ function CustomerHome() {
     }
 
     setView("checkout");
+  }
+
+  function goToCheckoutFromCart() {
+    if (form.deliveryMode === "pickup" || areaStatus === "supported") {
+      proceedToCheckout();
+      return;
+    }
+
+    trackAnalytics("delivery_check_started", {
+      event_category: "funnel",
+      value: Number((subtotal - couponDiscount).toFixed(2)),
+      properties: { items_count: totalQty, cart_value: Number(subtotal.toFixed(2)) },
+    });
+    setAreaStatus((current) => current === "unsupported" ? "idle" : current);
+    setAreaMessage("");
+    setView("delivery_check");
   }
 
   function canStartPurchaseNow() {
@@ -2223,7 +2306,10 @@ function CustomerHome() {
     void placeOrder();
   }
 
-  async function placeOrder(reservationConfirmedNow = false) {
+  async function placeOrder(reservationConfirmedNow = false, forcedPaymentChoice?: PaymentChoice) {
+    const selectedPaymentChoice = forcedPaymentChoice || paymentChoice;
+    const selectedProvider: CheckoutPayment = selectedPaymentChoice === "online_pix" ? pixProvider : selectedPaymentChoice === "online_card" ? cardProvider : paymentProvider;
+    const selectedOnlineAvailable = selectedPaymentChoice === "online_pix" ? pixPaymentAvailable : selectedPaymentChoice === "online_card" ? cardPaymentAvailable : false;
     if (!cart.length) return toast.error("Seu carrinho está vazio");
     if (!form.name || !form.phone) return toast.error("Preencha nome e telefone");
     if (isDelivery && (!form.street || !form.number || !form.neighborhood)) return toast.error("Preencha rua, número e bairro");
@@ -2250,13 +2336,13 @@ function CustomerHome() {
     if (isDelivery && outsideDeliveryHours && schedulingEnabled && !scheduleAccepted) {
       return toast.error("Confirme o agendamento para o próximo horário disponível antes de finalizar.");
     }
-    if (paymentChoice === "online" && (!(pixEnabled || cardEnabled) || !paymentAvailable)) return toast.error("Pagamento online indisponível no momento");
-    if (paymentChoice !== "online" && !isDelivery) return toast.error("Pagamento na entrega só está disponível quando você escolhe entrega.");
-    if (paymentChoice === "delivery_card" && (!payOnDeliveryEnabled || !payOnDeliveryCardEnabled)) return toast.error("Cartão na entrega está indisponível.");
-    if (paymentChoice === "delivery_pix" && (!payOnDeliveryEnabled || !payOnDeliveryPixEnabled)) return toast.error("Pix na entrega está indisponível.");
+    if ((selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card") && !selectedOnlineAvailable) return toast.error("Esta forma de pagamento online está indisponível no momento");
+    if ((selectedPaymentChoice === "delivery_card" || selectedPaymentChoice === "delivery_pix") && !isDelivery) return toast.error("Pagamento na entrega só está disponível quando você escolhe entrega.");
+    if (selectedPaymentChoice === "delivery_card" && (!payOnDeliveryEnabled || !payOnDeliveryCardEnabled)) return toast.error("Cartão na entrega está indisponível.");
+    if (selectedPaymentChoice === "delivery_pix" && (!payOnDeliveryEnabled || !payOnDeliveryPixEnabled)) return toast.error("Pix na entrega está indisponível.");
 
     trackAnalytics("checkout_started", {
-      event_category: "commerce", value: total, customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: paymentChoice === "online" ? paymentProvider : paymentChoice,
+      event_category: "commerce", value: total, customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card" ? selectedProvider : selectedPaymentChoice,
       properties: metaCommerceProperties({
         reservation:
           !isStoreOpenByBusinessHours(publicStoreStatus) &&
@@ -2279,7 +2365,7 @@ function CustomerHome() {
           address_neighborhood: isDelivery ? form.neighborhood || null : null,
           address_city: isDelivery ? form.city || null : null,
           address_cep: isDelivery ? form.cep || null : null,
-          payment_kind: paymentChoice === "online" ? paymentProvider : paymentChoice,
+          payment_kind: selectedPaymentChoice,
           scheduled: isDelivery && outsideDeliveryHours && schedulingEnabled && scheduleAccepted,
           store_reservation: !storeOpenNow && publicStoreStatus?.closed_reservations_enabled === true && closedStoreReservationMode,
           reservation_date: !storeOpenNow && closedStoreReservationMode ? reservationDate : null,
@@ -2297,7 +2383,7 @@ function CustomerHome() {
       });
       if (created?.error) throw new Error(created.error);
       if (!created?.checkout?.id) throw new Error("Checkout não criado");
-      trackAnalytics("checkout_created", { event_category: "commerce", checkout_id: String(created.checkout.id), order_id: created?.order_id ? String(created.order_id) : null, customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: paymentChoice === "online" ? paymentProvider : paymentChoice, value: Number(created.checkout.total || total), properties: { pay_on_delivery: Boolean(created?.pay_on_delivery), provider: created.checkout.payment_provider || paymentProvider } });
+      trackAnalytics("checkout_created", { event_category: "commerce", checkout_id: String(created.checkout.id), order_id: created?.order_id ? String(created.order_id) : null, customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card" ? selectedProvider : selectedPaymentChoice, value: Number(created.checkout.total || total), properties: { pay_on_delivery: Boolean(created?.pay_on_delivery), provider: created.checkout.payment_provider || selectedProvider } });
 
       if (created?.pay_on_delivery && created?.order_id) {
         trackAnalytics("purchase", {
@@ -2307,7 +2393,7 @@ function CustomerHome() {
           customer_name: form.name,
           customer_phone: onlyDigits(form.phone),
           payment_method: String(
-            created.payment_method || paymentChoice,
+            created.payment_method || selectedPaymentChoice,
           ),
           value: Number(created.checkout.total || total),
           quantity: metaCartItemCount(),
@@ -2324,7 +2410,36 @@ function CustomerHome() {
         return;
       }
 
-      const provider: CheckoutPayment = created.checkout.payment_provider === "mercadopago" ? "mercadopago" : created.checkout.payment_provider === "appmax" ? "appmax" : "infinitepay";
+      const provider: CheckoutPayment = created.checkout.payment_provider === "mercadopago" ? "mercadopago" : created.checkout.payment_provider === "pagarme" ? "pagarme" : created.checkout.payment_provider === "efi" ? "efi" : created.checkout.payment_provider === "appmax" ? "appmax" : "infinitepay";
+      const onlineMethod: "pix" | "card" = String(created.checkout.payment_kind || "").endsWith("_card") ? "card" : "pix";
+      if (provider === "pagarme") {
+        setPaymentProvider("pagarme");
+        setForm((current) => ({ ...current, payment: "pagarme" }));
+        trackAnalytics("payment_started", {
+          event_category: "payment",
+          checkout_id: String(created.checkout.id),
+          payment_method: onlineMethod,
+          value: Number(created.checkout.total || total),
+          quantity: metaCartItemCount(),
+          properties: metaCommerceProperties({ provider: "pagarme" }),
+        });
+        setPagarmeCheckout({ id: String(created.checkout.id), total: Number(created.checkout.total || total), method: onlineMethod });
+        scrollToCheckoutSection("payment-section");
+        return;
+      }
+
+      if (provider === "efi") {
+        setPaymentProvider("efi");
+        setForm((current) => ({ ...current, payment: "efi" }));
+        trackAnalytics("payment_started", {
+          event_category: "payment", checkout_id: String(created.checkout.id), payment_method: onlineMethod,
+          value: Number(created.checkout.total || total), quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: "efi" }),
+        });
+        setEfiCheckout({ id: String(created.checkout.id), total: Number(created.checkout.total || total), method: onlineMethod });
+        scrollToCheckoutSection("payment-section");
+        return;
+      }
+
       if (provider === "mercadopago") {
         setPaymentProvider("mercadopago");
         setForm((current) => ({ ...current, payment: "mercadopago" }));
@@ -2338,7 +2453,7 @@ function CustomerHome() {
             provider: "mercadopago",
           }),
         });
-        setMpCheckout({ id: String(created.checkout.id), total: Number(created.checkout.total || total) });
+        setMpCheckout({ id: String(created.checkout.id), total: Number(created.checkout.total || total), method: onlineMethod });
         scrollToCheckoutSection("payment-section");
         return;
       }
@@ -2356,7 +2471,7 @@ function CustomerHome() {
             provider: "appmax",
           }),
         });
-        setAppmaxCheckout({ id: String(created.checkout.id), total: Number(created.checkout.total || total) });
+        setAppmaxCheckout({ id: String(created.checkout.id), total: Number(created.checkout.total || total), method: onlineMethod });
         scrollToCheckoutSection("payment-section");
         return;
       }
@@ -2378,12 +2493,72 @@ function CustomerHome() {
     } catch (err: any) {
       console.error(err);
       const message = String(err?.message || "Não foi possível iniciar o pagamento.");
-      trackAnalytics("checkout_error", { event_category: "error", value: total, payment_method: paymentChoice === "online" ? paymentProvider : paymentChoice, properties: { message: message.slice(0,300) } });
+      trackAnalytics("checkout_error", { event_category: "error", value: total, payment_method: selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card" ? selectedProvider : selectedPaymentChoice, properties: { message: message.slice(0,300) } });
       if (/fora da área|fora da area|bairro|entrega/i.test(message)) void redirectOutsideArea();
       toast.error(message);
     } finally {
       setPlacing(false);
     }
+  }
+
+  async function cancelPagarmeCheckout() {
+    if (!pagarmeCheckout) return;
+    try {
+      const { cancelSiteCheckout } = await import("@/lib/site-checkout.functions");
+      await cancelSiteCheckout({ data: { checkoutId: pagarmeCheckout.id, access_token: customerSession?.access_token || null } });
+    } catch {}
+    setPagarmeCheckout(null);
+  }
+
+  function finishPagarme(orderId?: string | null) {
+    const checkoutId = pagarmeCheckout?.id || "";
+    if (orderId) {
+      trackAnalytics("purchase", {
+        event_category: "commerce", checkout_id: checkoutId, order_id: String(orderId), customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: pagarmeCheckout?.method || "card", value: Number(pagarmeCheckout?.total || total), quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: "pagarme" }),
+      });
+      pushMyOrder(String(orderId));
+      void refreshActiveOrders();
+    }
+    setCart([]);
+    removeCoupon();
+    window.location.href = `/obrigado?provider=pagarme&checkout_id=${encodeURIComponent(checkoutId)}${orderId ? `&order_id=${encodeURIComponent(String(orderId))}` : ""}`;
+  }
+
+  async function cancelEfiCheckout() {
+    if (!efiCheckout) return;
+    try {
+      const { cancelSiteCheckout } = await import("@/lib/site-checkout.functions");
+      await cancelSiteCheckout({ data: { checkoutId: efiCheckout.id, access_token: customerSession?.access_token || null } });
+    } catch {}
+    setEfiCheckout(null);
+  }
+
+  function finishEfi(orderId?: string | null) {
+    const checkoutId = efiCheckout?.id || "";
+    if (orderId) {
+      trackAnalytics("purchase", { event_category: "commerce", checkout_id: checkoutId, order_id: String(orderId), customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: efiCheckout?.method || "card", value: Number(efiCheckout?.total || total), quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: "efi" }) });
+      pushMyOrder(String(orderId));
+      void refreshActiveOrders();
+    }
+    setCart([]);
+    removeCoupon();
+    window.location.href = `/obrigado?provider=efi&checkout_id=${encodeURIComponent(checkoutId)}${orderId ? `&order_id=${encodeURIComponent(String(orderId))}` : ""}`;
+  }
+
+  async function switchFailedCardToPix() {
+    const currentId = pagarmeCheckout?.id || efiCheckout?.id || mpCheckout?.id || appmaxCheckout?.id || "";
+    if (currentId) {
+      try {
+        const { cancelSiteCheckout } = await import("@/lib/site-checkout.functions");
+        await cancelSiteCheckout({ data: { checkoutId: currentId, access_token: customerSession?.access_token || null } });
+      } catch {}
+    }
+    setPagarmeCheckout(null);
+    setEfiCheckout(null);
+    setMpCheckout(null);
+    setAppmaxCheckout(null);
+    setPaymentChoice("online_pix");
+    await placeOrder(false, "online_pix");
   }
 
   async function cancelMercadoPagoCheckout() {
@@ -2516,506 +2691,6 @@ function CustomerHome() {
       </div>
     );
   }
-
-  if (areaStatus !== "supported") {
-    const outside = areaStatus === "unsupported";
-    return (
-      <div className="min-h-screen bg-gradient-to-b from-[#160805] via-[#4f0f0c] to-[#f7f7f7] px-4 py-8 sm:py-12">
-        {activeOrderBanner && <div className="mx-auto mb-4 max-w-2xl">{activeOrderBanner}</div>}
-        <div className="mx-auto max-w-lg">
-          <div className="rounded-[34px] border border-white/10 bg-white p-6 shadow-2xl sm:p-8">
-            <div className="flex items-center gap-3">
-              <img src={HOTBOX_LOGO_URL} alt="HotBox Delivery" className="h-20 w-20 rounded-3xl object-contain shadow-md" />
-              <div>
-                <p className="font-display text-2xl font-black leading-none">HOT<span className="text-[#d92d20]">BOX</span></p>
-                <p className="mt-1 text-[11px] font-bold uppercase tracking-[0.22em] text-[#d92d20]">Delivery</p>
-              </div>
-            </div>
-
-            {!outside ? (
-              <>
-                <div className="mt-6 rounded-3xl bg-gradient-to-br from-amber-50 to-orange-50 p-4">
-                  <div className="flex items-center gap-3">
-                    <div className="grid size-10 shrink-0 place-items-center rounded-2xl bg-[#ffd400] text-black">
-                      <MapPin className="size-5" />
-                    </div>
-                    <div>
-                      <h1 className="font-display text-xl font-black leading-tight">Veja o cardápio da sua região</h1>
-                      <p className="mt-0.5 text-sm text-muted-foreground">Informe seu CEP para ver produtos, ofertas e valores disponíveis para você.</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-5">
-                  <Label>Seu CEP</Label>
-                  <div className="mt-2 flex gap-2">
-                    <Input
-                      inputMode="numeric"
-                      autoComplete="postal-code"
-                      className="h-12 rounded-2xl text-base"
-                      placeholder="00000-000"
-                      value={accessCep}
-                      onChange={(e) => setAccessCep(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter") void validateCepAccess(); }}
-                    />
-                    <Button onClick={validateCepAccess} disabled={areaStatus === "checking"} className="h-12 rounded-2xl px-5 font-black">
-                      {areaStatus === "checking" ? <Loader2 className="size-4 animate-spin" /> : "Continuar"}
-                    </Button>
-                  </div>
-                </div>
-
-                {areaStatus === "needs_number" && (
-                  <div className="mt-4 rounded-2xl border-2 border-primary/30 bg-primary/5 p-4">
-                    <Label>Número do endereço</Label>
-                    <p className="mt-1 text-xs text-muted-foreground">Seu CEP foi localizado. Agora precisamos do número para medir a rota e aplicar a faixa de km correta.</p>
-                    <div className="mt-2 flex gap-2">
-                      <Input
-                        inputMode="numeric"
-                        className="h-11 rounded-xl"
-                        placeholder="Ex.: 492"
-                        value={accessNumber}
-                        onChange={(e) => setAccessNumber(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === "Enter") void validateCepAccess(); }}
-                        autoFocus
-                      />
-                      <Button onClick={validateCepAccess} disabled={areaStatus === "checking"} className="h-11 rounded-xl font-black">Calcular taxa</Button>
-                    </div>
-                  </div>
-                )}
-
-                {(manualAreaMode || areaStatus === "error") && (
-                  <div className="mt-4 rounded-2xl border bg-muted/30 p-4">
-                    <Label>Ou informe seu bairro</Label>
-                    <div className="mt-2 flex gap-2">
-                      <Input
-                        className="h-11 rounded-xl"
-                        placeholder="Ex.: Itatiaia"
-                        value={manualNeighborhood}
-                        onChange={(e) => setManualNeighborhood(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === "Enter") void validateManualNeighborhood(); }}
-                      />
-                      <Button variant="outline" onClick={validateManualNeighborhood} disabled={areaStatus === "checking"} className="h-11 rounded-xl">Validar</Button>
-                    </div>
-                  </div>
-                )}
-
-                {areaMessage && (
-                  <div className="mt-4 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-                    <AlertTriangle className="mt-0.5 size-4 shrink-0" /> {areaMessage}
-                  </div>
-                )}
-
-                {!manualAreaMode && (
-                  <button type="button" onClick={() => setManualAreaMode(true)} className="mt-4 w-full text-center text-xs font-semibold text-muted-foreground underline underline-offset-4">
-                    Não sei meu CEP
-                  </button>
-                )}
-              </>
-            ) : (
-              <>
-                <div className="mt-7 rounded-3xl border border-orange-200 bg-orange-50 p-5">
-                  <div className="flex items-start gap-3">
-                    <AlertTriangle className="mt-0.5 size-6 shrink-0 text-orange-600" />
-                    <div>
-                      <h1 className="font-display text-2xl font-black">Entrega própria indisponível nessa região</h1>
-                      <p className="mt-1 text-sm leading-relaxed text-orange-950/70">{areaMessage}</p>
-                      {validatedNeighborhood && <p className="mt-2 text-sm font-bold text-orange-950">Bairro identificado: {validatedNeighborhood}</p>}
-                    </div>
-                  </div>
-                </div>
-
-                <p className="mt-5 text-sm leading-relaxed text-muted-foreground">
-                  Você não precisa desistir do pedido. Para regiões mais distantes, confira a disponibilidade pelas plataformas parceiras.
-                </p>
-                <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                  <a href={ifoodStoreLink || WHATSAPP_URL} target="_blank" rel="noreferrer" className="rounded-2xl bg-[#ea1d2c] px-4 py-3 text-center text-sm font-black text-white">Pedir pelo iFood</a>
-                  <a href={NFOOD_URL} target="_blank" rel="noreferrer" className="rounded-2xl bg-[#ff7a00] px-4 py-3 text-center text-sm font-black text-white">Pedir pela 99Food</a>
-                </div>
-                <a href={WHATSAPP_URL} target="_blank" rel="noreferrer" className="mt-2 flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold">
-                  <MessageCircle className="size-4" /> Tirar uma dúvida no WhatsApp
-                </a>
-                <button type="button" onClick={resetAreaAccess} className="mt-4 w-full text-center text-xs font-bold text-muted-foreground underline underline-offset-4">Verificar outro CEP ou bairro</button>
-              </>
-            )}
-
-            <div className="mt-6 flex items-center justify-center gap-2 border-t pt-5 text-xs text-muted-foreground">
-              <ShieldCheck className="size-4 text-emerald-600" /> Seus dados são usados apenas para atendimento e entrega.
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (view === "detail" && selectedProduct) {
-    const p = selectedProduct;
-    return (
-      <div className={`min-h-screen bg-background pb-28 ${!p.active ? "grayscale opacity-70" : ""}`}>
-        <div className="relative">
-          <button
-            onClick={() => setView("list")}
-            className="absolute left-4 top-4 z-10 grid size-9 place-items-center rounded-full bg-black/50 text-white backdrop-blur"
-          >
-            <ArrowLeft className="size-5" />
-          </button>
-          <div className="absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-2xl bg-white/95 p-1.5 shadow-lg backdrop-blur">
-            <img src={HOTBOX_LOGO_URL} alt="HotBox Delivery" className="size-9 rounded-xl object-contain" />
-          </div>
-          <div className="absolute right-4 top-4 z-10 inline-flex items-center gap-1.5 rounded-full bg-black/65 px-3 py-2 text-xs font-black text-white shadow-lg backdrop-blur">
-            <Clock className="size-3.5" />
-            40 - 60 Minutos
-          </div>
-          {p.image_url ? (
-            isBeverageProduct(p) ? (
-              <div className="grid h-64 w-full place-items-center bg-white sm:h-80">
-                <NormalizedBeverageImage
-                  src={p.image_url}
-                  alt={p.name}
-                  className="h-56 w-56 max-w-[78%] object-contain sm:h-64 sm:w-64"
-                />
-              </div>
-            ) : (
-              <img src={p.image_url} alt={p.name} className="h-64 w-full object-cover sm:h-80" />
-            )
-          ) : (
-            <div className="grid h-64 w-full place-items-center bg-muted text-sm text-muted-foreground sm:h-80">
-              Sem foto
-            </div>
-          )}
-        </div>
-
-        <div className="mx-auto max-w-2xl px-5 py-5">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="font-display text-2xl font-black uppercase tracking-tight">{p.name}</h1>
-            {p.is_combo && <span className="rounded-full bg-amber-400 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-black">Combo</span>}
-          </div>
-          {(() => {
-            const eff = getEffectivePrice(p);
-            return eff.isPromotion ? (
-              <div className="mt-1 flex items-baseline gap-2">
-                <span className="text-base font-semibold text-muted-foreground line-through">
-                  {brl(eff.listPrice)}
-                </span>
-                <span className="text-2xl font-extrabold text-fuchsia-600">{brl(eff.price)}</span>
-                {p.promotion_label && (
-                  <span className="flex items-center gap-1 rounded-full bg-fuchsia-100 px-2 py-0.5 text-[11px] font-bold text-fuchsia-700">
-                    <Ticket className="size-3" /> {p.promotion_label}
-                  </span>
-                )}
-              </div>
-            ) : (
-              <p className="mt-1 text-2xl font-extrabold text-primary">{brl(eff.price)}</p>
-            );
-          })()}
-
-          {publicReviews.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowPublicReviews(true)}
-              className="mt-3 flex w-full items-center gap-2 rounded-2xl border border-amber-200/70 bg-amber-50/60 px-3 py-2.5 text-left shadow-sm transition hover:bg-amber-50"
-            >
-              <PublicReviewStars value={publicReviewsAverage} />
-              <span className="text-sm font-black text-zinc-900">{publicReviewsAverage.toFixed(1)}</span>
-              <span className="min-w-0 flex-1 truncate text-[11px] text-zinc-500">
-                {publicReviews.length} {publicReviews.length === 1 ? "avaliação" : "avaliações"} de clientes
-              </span>
-              <span className="shrink-0 text-[11px] font-black text-primary">Ver avaliações</span>
-              <ChevronRight className="size-3.5 shrink-0 text-primary" />
-            </button>
-          )}
-
-          {p.description && <p className="mt-3 text-sm leading-relaxed text-foreground/75">{p.description}</p>}
-          {!p.active && (
-            <div className="mt-4 rounded-2xl border border-zinc-300 bg-zinc-100 px-4 py-3 text-center">
-              <p className="font-black uppercase tracking-wide text-zinc-700">Esgotado por hoje</p>
-            </div>
-          )}
-
-          {(addonGroupsByProduct[p.id] || []).length > 0 && (
-            <div className="mt-5 space-y-4">
-              <div className="rounded-2xl bg-zinc-950 px-4 py-3 text-white shadow-sm">
-                <p className="text-sm font-black">Personalize seu pedido</p>
-                <p className="mt-0.5 text-[11px] text-white/70">Escolha adicionais e quantidades do seu jeito.</p>
-              </div>
-
-              {(addonGroupsByProduct[p.id] || []).map((group) => {
-                const selectedCount = groupSelectedUnits(group);
-                const min = Math.max(0, Number(group.min_select || 0), group.required ? 1 : 0);
-                const max = Math.max(1, Number(group.max_select || 1));
-                return (
-                  <div key={group.id} className={`overflow-hidden rounded-[22px] border border-black/5 bg-white shadow-sm ${group.active !== true ? "grayscale opacity-55" : ""}`}>
-                    <div className="flex items-start justify-between gap-3 border-b bg-zinc-50/80 px-4 py-3">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="font-black text-zinc-950">{group.display_title || group.name}</p>
-                          <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${
-                            group.required
-                              ? "bg-red-100 text-red-700"
-                              : "bg-emerald-100 text-emerald-700"
-                          }`}>
-                            {group.required ? "Obrigatório" : "Opcional"}
-                          </span>
-                          {group.active !== true && (
-                            <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-zinc-600">
-                              Indisponível
-                            </span>
-                          )}
-                        </div>
-                        {(group.display_subtitle || group.description) && <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{group.display_subtitle || group.description}</p>}
-                        <p className="mt-1 text-[10px] font-semibold text-zinc-400">
-                          {group.required
-                            ? `Escolha de ${min} até ${max} unidade(s)`
-                            : `Você pode adicionar até ${max} unidade(s)`}
-                        </p>
-                      </div>
-                      <span className="shrink-0 rounded-full bg-zinc-900 px-2.5 py-1 text-[10px] font-black text-white">
-                        {selectedCount}/{max}
-                      </span>
-                    </div>
-
-                    <div className="divide-y">
-                      {group.options.map((option) => {
-                        const optionId = String(option.id);
-                        const availability = addonOptionAvailability(option, group);
-                        const unavailable = !availability.available;
-                        const quantity = unavailable ? 0 : addonQty(optionId);
-                        const selected = quantity > 0;
-                        const unitPrice = effectiveAddonOptionPrice(option);
-                        return (
-                          <div
-                            key={option.id}
-                            className={`flex items-center gap-3 px-4 py-3 transition ${
-                              unavailable
-                                ? "bg-zinc-50 grayscale opacity-55"
-                                : selected
-                                  ? "bg-amber-50/60"
-                                  : "bg-white"
-                            }`}
-                          >
-                            <button
-                              type="button"
-                              onClick={() => toggleDetailAddon(group, option)}
-                              disabled={unavailable}
-                              className={`grid size-6 shrink-0 place-items-center border-2 disabled:cursor-not-allowed ${
-                                group.max_select === 1 ? "rounded-full" : "rounded-lg"
-                              } ${
-                                selected
-                                  ? "border-primary bg-primary text-primary-foreground"
-                                  : "border-zinc-300 bg-white"
-                              }`}
-                              aria-label={
-                                unavailable
-                                  ? `${option.display_name || option.name} indisponível`
-                                  : selected
-                                    ? `Remover ${option.display_name || option.name}`
-                                    : `Adicionar ${option.display_name || option.name}`
-                              }
-                            >
-                              {selected && <CheckCircle2 className="size-4" />}
-                            </button>
-
-                            {(() => {
-                              const linkedProduct = option.linked_product_id
-                                ? products.find((product) => String(product.id) === String(option.linked_product_id))
-                                : null;
-                              const optionImage = String(option.image_url || linkedProduct?.image_url || "").trim();
-                              return optionImage ? (
-                                <img
-                                  src={optionImage}
-                                  alt=""
-                                  loading="lazy"
-                                  decoding="async"
-                                  className="size-14 shrink-0 rounded-xl border object-cover"
-                                />
-                              ) : null;
-                            })()}
-
-                            <button
-                              type="button"
-                              onClick={() => toggleDetailAddon(group, option)}
-                              disabled={unavailable}
-                              className="min-w-0 flex-1 text-left disabled:cursor-not-allowed"
-                            >
-                              <div className="flex flex-wrap items-center gap-1.5">
-                                <p className="text-sm font-bold text-zinc-900">{option.display_name || option.name}</p>
-                                {unavailable && (
-                                  <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-zinc-600">
-                                    Esgotado
-                                  </span>
-                                )}
-                              </div>
-                              {(option.display_description || option.description) && <p className="mt-0.5 text-[11px] text-muted-foreground">{option.display_description || option.description}</p>}
-                              <p className="mt-0.5 text-xs font-black text-primary">
-                                {unitPrice > 0 ? `+ ${brl(unitPrice)} cada` : "Sem acréscimo"}
-                              </p>
-                            </button>
-
-                            {max > 1 && (
-                              <div className="flex shrink-0 items-center gap-1 rounded-full border bg-white p-1 shadow-sm">
-                                <button
-                                  type="button"
-                                  onClick={() => setDetailAddonQuantity(group, option, quantity - 1)}
-                                  disabled={unavailable || quantity <= 0}
-                                  className="grid size-7 place-items-center rounded-full text-zinc-700 disabled:cursor-not-allowed disabled:opacity-30"
-                                  aria-label={`Diminuir ${option.display_name || option.name}`}
-                                >
-                                  <Minus className="size-3.5" />
-                                </button>
-                                <span className="w-5 text-center text-xs font-black">{quantity}</span>
-                                <button
-                                  type="button"
-                                  onClick={() => setDetailAddonQuantity(group, option, quantity + 1)}
-                                  disabled={selectedCount >= max}
-                                  className="grid size-7 place-items-center rounded-full bg-zinc-900 text-white disabled:opacity-30"
-                                  aria-label={`Aumentar ${option.display_name || option.name}`}
-                                >
-                                  <Plus className="size-3.5" />
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {selectedCount < min && (
-                      <p className="border-t bg-red-50 px-4 py-2 text-[11px] font-bold text-red-700">
-                        Obrigatório: falta escolher {min - selectedCount} unidade(s).
-                      </p>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          <div className="mt-4">
-            <Label className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Observações</Label>
-            <Textarea
-              rows={2}
-              className="mt-1"
-              placeholder="Ex: sem cebola, ponto da carne, etc."
-              value={detailNotes}
-              onChange={(e) => setDetailNotes(e.target.value)}
-            />
-          </div>
-
-          {publicReviews.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowPublicReviews(true)}
-              className="mt-6 w-full rounded-[22px] border border-amber-200 bg-gradient-to-br from-amber-50 to-white p-4 text-left shadow-sm transition hover:border-amber-300"
-            >
-              <p className="text-[10px] font-black uppercase tracking-[0.14em] text-amber-700">
-                Aprovado pelos clientes
-              </p>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <PublicReviewStars value={publicReviewsAverage} />
-                <span className="text-lg font-black text-zinc-950">{publicReviewsAverage.toFixed(1)} de 5</span>
-              </div>
-              <p className="mt-1 text-sm font-semibold text-zinc-700">
-                Avaliado com {publicReviewsAverage.toFixed(1)} estrelas pelos clientes
-              </p>
-              <div className="mt-2 flex items-center justify-between gap-3">
-                <span className="text-xs text-muted-foreground">
-                  Baseado em {publicReviews.length} {publicReviews.length === 1 ? "avaliação" : "avaliações"}
-                </span>
-                <span className="flex items-center gap-1 text-xs font-black text-primary">
-                  Ver avaliações <ChevronRight className="size-3.5" />
-                </span>
-              </div>
-            </button>
-          )}
-        </div>
-
-        <PublicReviewsModal
-          open={showPublicReviews}
-          onClose={() => setShowPublicReviews(false)}
-          reviews={publicReviews}
-          average={publicReviewsAverage}
-        />
-
-        <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 px-5 py-3 backdrop-blur">
-          <div className="mx-auto flex max-w-2xl items-center gap-3">
-            <div className="flex items-center gap-3 rounded-full border px-3 py-2">
-              <button
-                onClick={() => setDetailQty((q) => Math.max(1, q - 1))}
-                disabled={!p.active}
-                className="grid size-6 place-items-center disabled:opacity-30"
-              >
-                <Minus className="size-4" />
-              </button>
-              <span className="w-4 text-center font-bold">{detailQty}</span>
-              <button onClick={() => setDetailQty((q) => q + 1)} disabled={!p.active} className="grid size-6 place-items-center disabled:opacity-30">
-                <Plus className="size-4" />
-              </button>
-            </div>
-            <Button
-              onClick={addToCartFromDetail}
-              disabled={!p.active}
-              className="flex-1 justify-between rounded-full bg-[#ffd400] py-6 text-base font-black text-black shadow-md hover:bg-[#f4ca00] disabled:bg-zinc-300 disabled:text-zinc-600"
-            >
-              <span>{p.active ? "Adicionar" : "Esgotado"}</span>
-              <span>{brl((
-                (detailOrderBumpId
-                  ? Number(orderBumps.find((b) => b.id === detailOrderBumpId)?.price_override ?? getEffectivePrice(p).price)
-                  : getEffectivePrice(p).price) +
-                selectedDetailAddons(p.id).reduce((sum, a) => sum + Number(a.price || 0) * Math.max(1, Number(a.qty || 1)), 0)
-              ) * detailQty)}</span>
-            </Button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const reservationEntryModal = (showReservationEntryModal && (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4">
-      <div className="w-full max-w-md rounded-[28px] border border-amber-300 bg-white p-6 shadow-2xl">
-        <div className="mx-auto grid size-14 place-items-center rounded-full bg-amber-100 text-3xl">🗓️</div>
-        <p className="mt-4 text-center text-xs font-black uppercase tracking-[0.16em] text-amber-700">
-          Loja fechada no momento
-        </p>
-        <h2 className="mt-1 text-center text-2xl font-black text-zinc-950">
-          Seu pedido pode ficar reservado
-        </h2>
-        <p className="mt-3 text-center text-sm leading-relaxed text-zinc-700">
-          A HotBox está fora do horário de funcionamento agora, mas você pode continuar normalmente.
-          Seu pagamento será realizado agora e o pedido ficará como <strong>AGENDADO / RESERVADO</strong> para entrega posterior.
-        </p>
-        <div className="mt-4 rounded-2xl border border-amber-300 bg-amber-50 p-4">
-          <p className="text-sm font-black text-amber-950">Antes da entrega</p>
-          <p className="mt-1 text-sm leading-relaxed text-amber-900">
-            A <strong>HotBox irá fazer contato com você antes da entrega para confirmar a entrega e o horário</strong>.
-          </p>
-        </div>
-        <p className="mt-4 text-xs leading-relaxed text-zinc-500">
-          Ao continuar, você confirma que entendeu que este pedido não será preparado nem entregue agora.
-        </p>
-        <div className="mt-5 grid gap-2">
-          <Button
-            type="button"
-            onClick={() => {
-              setReservationAccepted(true);
-              setShowReservationEntryModal(false);
-              setView("checkout");
-            }}
-            className="w-full rounded-full bg-[#ffd400] py-6 font-black text-black hover:bg-[#f4ca00]"
-          >
-            Estou ciente • continuar
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => setShowReservationEntryModal(false)}
-            className="w-full rounded-full"
-          >
-            Voltar ao carrinho
-          </Button>
-        </div>
-      </div>
-    </div>
-  ));
 
   const reservationPaymentConfirmModal = (showReservationPaymentConfirm && (
     <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/65 px-4">
@@ -3266,13 +2941,13 @@ function CustomerHome() {
               <div className="mt-4 flex items-center justify-between rounded-2xl border-2 border-amber-300 bg-amber-50 px-4 py-3">
                 <div>
                   <span className="block text-xs font-black uppercase tracking-wide text-amber-900">Taxa de entrega</span>
-                  <span className="text-[11px] text-amber-800/80">Já incluída no total abaixo</span>
+                  <span className="text-[11px] text-amber-800/80">{areaStatus === "supported" ? "Já incluída no total abaixo" : "Calculada na próxima etapa"}</span>
                 </div>
                 <span className="text-xl font-black text-amber-950">{deliveryFeeLabel()}</span>
               </div>
               <div className="mt-2 flex justify-between border-t pt-2 text-lg font-extrabold">
-                <span>Total</span>
-                <span>{brl(total)}</span>
+                <span>{areaStatus === "supported" || !isDelivery ? "Total" : "Subtotal do pedido"}</span>
+                <span>{brl(areaStatus === "supported" || !isDelivery ? total : Math.max(0, subtotal - couponDiscount))}</span>
               </div>
             </div>
           )}
@@ -3285,12 +2960,126 @@ function CustomerHome() {
                 onClick={goToCheckoutFromCart}
                 className="w-full justify-between rounded-full bg-[#ffd400] py-6 text-base font-black text-black shadow-md hover:bg-[#f4ca00]"
               >
-                <span>Finalizar pedido</span>
-                <span>{brl(total)}</span>
+                <span>{areaStatus === "supported" || !isDelivery ? "Finalizar pedido" : "Ver entrega e continuar"}</span>
+                <span>{brl(areaStatus === "supported" || !isDelivery ? total : Math.max(0, subtotal - couponDiscount))}</span>
               </Button>
             </div>
           </div>
         )}
+      </div>
+    );
+  }
+
+
+  if (view === "delivery_check") {
+    const outside = areaStatus === "unsupported";
+    return (
+      <div className="min-h-screen bg-[#f7f7f7] pb-24">
+        <header className="sticky top-0 z-30 flex items-center gap-3 border-b bg-white/95 px-4 py-4 backdrop-blur">
+          <button onClick={() => setView("cart")}><ArrowLeft className="size-5" /></button>
+          <img src={HOTBOX_LOGO_URL} alt="HotBox" className="size-9 rounded-xl object-contain" />
+          <div>
+            <h1 className="font-display text-lg font-black tracking-tight">Confirmar entrega</h1>
+            <p className="text-[11px] text-muted-foreground">Seu carrinho continua salvo</p>
+          </div>
+        </header>
+
+        <div className="mx-auto max-w-xl px-4 py-6">
+          {!outside ? (
+            <div className="rounded-[30px] border bg-white p-5 shadow-sm sm:p-6">
+              <div className="flex items-start gap-3">
+                <div className="grid size-11 shrink-0 place-items-center rounded-2xl bg-[#ffd400] text-black"><MapPin className="size-5" /></div>
+                <div>
+                  <h2 className="font-display text-2xl font-black">Só falta confirmar sua entrega</h2>
+                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">Informe o CEP para verificarmos se entregamos no endereço e calcularmos a taxa correta.</p>
+                </div>
+              </div>
+
+              <div className="mt-5">
+                <Label>CEP</Label>
+                <div className="mt-2 flex gap-2">
+                  <Input
+                    inputMode="numeric"
+                    autoComplete="postal-code"
+                    className="h-12 rounded-2xl text-base"
+                    placeholder="00000-000"
+                    value={accessCep}
+                    onChange={(e) => setAccessCep(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") void validateCepAccess(); }}
+                  />
+                  <Button onClick={validateCepAccess} disabled={areaStatus === "checking"} className="h-12 rounded-2xl px-5 font-black">
+                    {areaStatus === "checking" ? <Loader2 className="size-4 animate-spin" /> : "Continuar"}
+                  </Button>
+                </div>
+              </div>
+
+              {areaStatus === "needs_number" && (
+                <div className="mt-4 rounded-2xl border-2 border-primary/20 bg-primary/5 p-4">
+                  <Label>Número do endereço</Label>
+                  <p className="mt-1 text-xs text-muted-foreground">Precisamos do número apenas para calcular a rota e a taxa por distância.</p>
+                  <div className="mt-2 flex gap-2">
+                    <Input inputMode="numeric" className="h-11 rounded-xl" placeholder="Ex.: 492" value={accessNumber} onChange={(e) => setAccessNumber(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void validateCepAccess(); }} autoFocus />
+                    <Button onClick={validateCepAccess} disabled={areaStatus === "checking"} className="h-11 rounded-xl font-black">Calcular</Button>
+                  </div>
+                </div>
+              )}
+
+              {(manualAreaMode || areaStatus === "error") && (
+                <div className="mt-4 rounded-2xl border bg-muted/30 p-4">
+                  <Label>Ou informe seu bairro</Label>
+                  <div className="mt-2 flex gap-2">
+                    <Input className="h-11 rounded-xl" placeholder="Ex.: Jardim Gramacho" value={manualNeighborhood} onChange={(e) => setManualNeighborhood(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void validateManualNeighborhood(); }} />
+                    <Button variant="outline" onClick={validateManualNeighborhood} disabled={areaStatus === "checking"} className="h-11 rounded-xl">Verificar</Button>
+                  </div>
+                </div>
+              )}
+
+              {areaMessage && areaStatus !== "needs_number" && (
+                <div className="mt-4 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><AlertTriangle className="mt-0.5 size-4 shrink-0" /> {areaMessage}</div>
+              )}
+
+              {!manualAreaMode && areaStatus !== "error" && (
+                <button type="button" onClick={() => setManualAreaMode(true)} className="mt-4 w-full text-center text-xs font-semibold text-muted-foreground underline underline-offset-4">Não sei meu CEP</button>
+              )}
+
+              <div className="mt-5 border-t pt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForm((current) => ({ ...current, deliveryMode: "pickup" }));
+                    trackAnalytics("pickup_selected_from_delivery_check", { event_category: "funnel", properties: { items_count: totalQty } });
+                    proceedToCheckout();
+                  }}
+                  className="w-full rounded-2xl border px-4 py-3 text-sm font-bold text-foreground hover:bg-muted/40"
+                >
+                  Prefiro retirar na HotBox
+                </button>
+                <p className="mt-3 text-center text-[11px] leading-relaxed text-muted-foreground">Usamos o CEP somente para confirmar a disponibilidade e a taxa de entrega.</p>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-[30px] border bg-white p-5 shadow-sm sm:p-6">
+              <div className="rounded-3xl border border-orange-200 bg-orange-50 p-5">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="mt-0.5 size-6 shrink-0 text-orange-600" />
+                  <div>
+                    <h2 className="font-display text-2xl font-black">Para sua região, o pedido é pelas plataformas parceiras</h2>
+                    <p className="mt-2 text-sm leading-relaxed text-orange-950/75">Ainda não fazemos entrega própria nesse endereço. Os preços e condições nas plataformas podem ser diferentes dos valores do nosso delivery direto.</p>
+                    {validatedNeighborhood && <p className="mt-2 text-sm font-bold text-orange-950">Bairro identificado: {validatedNeighborhood}</p>}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-5 grid gap-2">
+                <Button onClick={() => void redirectOutsideArea({ cep: accessCep || form.cep || null, neighborhood: validatedNeighborhood || form.neighborhood }, "ifood")} className="h-12 rounded-2xl bg-[#ea1d2c] font-black text-white hover:bg-[#d71927]">Pedir pelo iFood</Button>
+                <Button variant="outline" onClick={() => void redirectOutsideArea({ cep: accessCep || form.cep || null, neighborhood: validatedNeighborhood || form.neighborhood }, "99food")} className="h-12 rounded-2xl font-black">Ver disponibilidade na 99Food</Button>
+                <Button variant="ghost" onClick={resetAreaAccess} className="h-11 rounded-2xl">Verificar outro CEP ou bairro</Button>
+              </div>
+
+              <p className="mt-4 text-center text-xs text-muted-foreground">Seu carrinho permanece salvo caso queira voltar e verificar outro endereço.</p>
+            </div>
+          )}
+        </div>
       </div>
     );
   }
@@ -3337,7 +3126,13 @@ function CustomerHome() {
             <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">Modo de entrega</h3>
             <div className="grid grid-cols-2 gap-2">
               <button
-                onClick={() => setForm({ ...form, deliveryMode: "delivery" })}
+                onClick={() => {
+                  setForm({ ...form, deliveryMode: "delivery" });
+                  if (areaStatus !== "supported") {
+                    trackAnalytics("delivery_check_started", { event_category: "funnel", value: Number((subtotal - couponDiscount).toFixed(2)), properties: { items_count: totalQty, source: "checkout_delivery_switch" } });
+                    setView("delivery_check");
+                  }
+                }}
                 className={`flex items-center justify-center gap-2 rounded-full py-3 text-sm font-bold transition ${isDelivery ? "bg-gradient-to-r from-primary to-accent text-primary-foreground shadow-md" : "border text-foreground/70"}`}
               >
                 <Bike className="size-4" /> Entrega
@@ -3425,7 +3220,7 @@ function CustomerHome() {
                 <div>
                   <div className="flex items-center justify-between">
                     <Label>CEP</Label>
-                    <button type="button" onClick={resetAreaAccess} className="text-[11px] font-bold text-primary underline underline-offset-2">Trocar CEP/bairro</button>
+                    <button type="button" onClick={() => { resetAreaAccess(); setView("delivery_check"); }} className="text-[11px] font-bold text-primary underline underline-offset-2">Trocar CEP/bairro</button>
                   </div>
                   <Input
                     className="mt-1 rounded-xl bg-muted/40"
@@ -3550,7 +3345,48 @@ function CustomerHome() {
           )}
 
           <div id="payment-section" className="scroll-mt-24">
-            {mpCheckout ? (
+            {efiCheckout ? (
+              <EfiPayment
+                checkoutId={efiCheckout.id}
+                amount={efiCheckout.total}
+                payeeCode={efiPayeeCode}
+                environment={efiEnvironment}
+                method={efiCheckout.method}
+                maxInstallments={efiMaxInstallments}
+                customerName={form.name}
+                customerEmail={customerSession?.user?.email || null}
+                customerPhone={form.phone}
+                billingAddress={isDelivery ? { street: form.street, number: form.number, neighborhood: form.neighborhood, city: form.city || "Duque de Caxias", state: "RJ", cep: form.cep, complement: form.complement || null } : null}
+                supportWhatsappUrl={paymentSupportWhatsappUrl}
+                onPaid={finishEfi}
+                onCancel={cancelEfiCheckout}
+                onSwitchToPix={efiCheckout.method === "card" && pixEnabled && pixPaymentAvailable ? switchFailedCardToPix : undefined}
+              />
+            ) : pagarmeCheckout ? (
+              <PagarmePayment
+                checkoutId={pagarmeCheckout.id}
+                amount={pagarmeCheckout.total}
+                publicKey={pagarmePublicKey}
+                method={pagarmeCheckout.method}
+                maxInstallments={pagarmeMaxInstallments}
+                customerName={form.name}
+                customerEmail={customerSession?.user?.email || null}
+                customerPhone={form.phone}
+                billingAddress={isDelivery ? {
+                  street: form.street,
+                  number: form.number,
+                  neighborhood: form.neighborhood,
+                  city: form.city || "Duque de Caxias",
+                  state: "RJ",
+                  cep: form.cep,
+                  complement: form.complement || null,
+                } : null}
+                supportWhatsappUrl={paymentSupportWhatsappUrl}
+                onPaid={finishPagarme}
+                onCancel={cancelPagarmeCheckout}
+                onSwitchToPix={pagarmeCheckout.method === "card" && pixEnabled && pixPaymentAvailable ? switchFailedCardToPix : undefined}
+              />
+            ) : mpCheckout ? (
               <MercadoPagoPayment
                 checkoutId={mpCheckout.id}
                 amount={mpCheckout.total}
@@ -3559,6 +3395,8 @@ function CustomerHome() {
                 customerEmail={customerSession?.user?.email || null}
                 origin={typeof window !== "undefined" ? window.location.origin : ""}
                 supportWhatsappUrl={paymentSupportWhatsappUrl}
+                allowedMethod={mpCheckout.method}
+                onSwitchToPix={mpCheckout.method === "card" && pixEnabled && pixPaymentAvailable ? switchFailedCardToPix : undefined}
                 onPaid={finishMercadoPago}
                 onCancel={cancelMercadoPagoCheckout}
               />
@@ -3576,6 +3414,38 @@ function CustomerHome() {
               />
             ) : (
               <div className="space-y-3">
+                {pixEnabled && pixPaymentAvailable && (
+                  <button
+                    type="button"
+                    onClick={() => { setPaymentChoice("online_pix"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "pix", value: total, quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: pixProvider }) }); scrollToCheckoutSection("checkout-action"); }}
+                    className={`w-full rounded-2xl border-2 p-4 text-left transition ${paymentChoice === "online_pix" ? "border-emerald-500 bg-emerald-50 shadow-sm" : "border-border bg-white hover:border-emerald-300"}`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-emerald-600 text-white"><QrCode className="size-5" /></span>
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between gap-2"><p className="text-sm font-black">Pix</p>{paymentChoice === "online_pix" && <span className="rounded-full bg-emerald-600 px-2 py-1 text-[10px] font-black text-white">SELECIONADO</span>}</div>
+                        <p className="text-[11px] text-muted-foreground">Pagamento rápido com confirmação automática.</p>
+                      </div>
+                    </div>
+                  </button>
+                )}
+
+                {cardEnabled && cardPaymentAvailable && (
+                  <button
+                    type="button"
+                    onClick={() => { setPaymentChoice("online_card"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "card", value: total, quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: cardProvider }) }); scrollToCheckoutSection("checkout-action"); }}
+                    className={`w-full rounded-2xl border-2 p-4 text-left transition ${paymentChoice === "online_card" ? "border-zinc-900 bg-zinc-50 shadow-sm" : "border-border bg-white hover:border-zinc-400"}`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-zinc-900 text-white"><CreditCard className="size-5" /></span>
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between gap-2"><p className="text-sm font-black">Cartão de crédito</p>{paymentChoice === "online_card" && <span className="rounded-full bg-zinc-900 px-2 py-1 text-[10px] font-black text-white">SELECIONADO</span>}</div>
+                        <p className="text-[11px] text-muted-foreground">Checkout seguro. Se houver recusa, você poderá tentar outro cartão, Pix ou WhatsApp.</p>
+                      </div>
+                    </div>
+                  </button>
+                )}
+
                 {isDelivery && payOnDeliveryEnabled && payOnDeliveryCardEnabled && (
                   <button
                     type="button"
@@ -3614,7 +3484,7 @@ function CustomerHome() {
                   </button>
                 )}
 
-                {isDelivery && payOnDeliveryEnabled && paymentChoice !== "online" && (
+                {isDelivery && payOnDeliveryEnabled && (paymentChoice === "delivery_card" || paymentChoice === "delivery_pix") && (
                   <div className="rounded-2xl border border-amber-300 bg-amber-50 p-3 text-xs font-semibold leading-relaxed text-amber-950">
                     <b>Pagamento na entrega:</b> seu pedido será criado imediatamente e ficará marcado como pagamento pendente até o recebimento.
                   </div>
@@ -3624,14 +3494,15 @@ function CustomerHome() {
           </div>
         </div>
 
-        {!mpCheckout && !appmaxCheckout && (
+        {!efiCheckout && !pagarmeCheckout && !mpCheckout && !appmaxCheckout && (
           <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 px-4 py-3 backdrop-blur">
             <div className="mx-auto max-w-2xl">
               <Button
                 onClick={requestPlaceOrder}
                 disabled={
                   placing ||
-                  (paymentChoice === "online" && (!(pixEnabled || cardEnabled) || !paymentAvailable)) ||
+                  (paymentChoice === "online_pix" && (!pixEnabled || !pixPaymentAvailable)) ||
+                  (paymentChoice === "online_card" && (!cardEnabled || !cardPaymentAvailable)) ||
                   (paymentChoice === "delivery_card" && (!payOnDeliveryEnabled || !payOnDeliveryCardEnabled)) ||
                   (paymentChoice === "delivery_pix" && (!payOnDeliveryEnabled || !payOnDeliveryPixEnabled))
                 }
@@ -3644,9 +3515,11 @@ function CustomerHome() {
                       ? "Confirmar • pagar no cartão na entrega"
                       : paymentChoice === "delivery_pix"
                         ? "Confirmar • pagar Pix na entrega"
-                        : paymentProvider === "mercadopago" || paymentProvider === "appmax"
-                          ? "Pagar com Pix ou cartão"
-                          : "Continuar para pagamento"}
+                        : paymentChoice === "online_pix"
+                          ? "Pagar com Pix"
+                          : paymentChoice === "online_card"
+                            ? "Pagar com cartão"
+                            : "Continuar para pagamento"}
                 </span>
                 <span>{brl(total)}</span>
               </Button>
@@ -3670,7 +3543,7 @@ function CustomerHome() {
             </div>
           </Link>
           <div className="ml-auto flex items-center gap-1.5">
-            <button type="button" onClick={resetAreaAccess} title="Trocar endereço" className="grid size-9 place-items-center rounded-full border bg-white text-muted-foreground transition hover:text-foreground">
+            <button type="button" onClick={() => { if (areaStatus === "supported") { resetAreaAccess(); toast.info("O novo endereço será confirmado quando você finalizar a sacola."); } else { toast.info("A entrega será confirmada quando você finalizar a sacola."); } }} title={areaStatus === "supported" ? "Trocar endereço" : "Entrega confirmada ao finalizar"} className="grid size-9 place-items-center rounded-full border bg-white text-muted-foreground transition hover:text-foreground">
               <MapPin className="size-4" />
             </button>
             <a href={WHATSAPP_URL} target="_blank" rel="noreferrer" title="Ajuda pelo WhatsApp" className="grid size-9 place-items-center rounded-full bg-[#25D366] text-white shadow-sm">
@@ -3757,6 +3630,9 @@ function CustomerHome() {
       </header>
 
       <main className="mx-auto max-w-2xl px-4 py-5">
+        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-950">
+          <b>Preços do delivery direto HotBox.</b> A disponibilidade e a taxa de entrega são confirmadas quando você finalizar a sacola. Nas plataformas parceiras, preços e condições podem ser diferentes.
+        </div>
         {!query && (activeCategory === "Tudo" || activeCategory === "Batata") && (
           <div className="mb-5">
             <CustomerLoyaltyClub
