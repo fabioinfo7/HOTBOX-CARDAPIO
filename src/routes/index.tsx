@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { toast } from "sonner";
 import {
@@ -26,8 +26,9 @@ import {
   AlertTriangle,
   Loader2,
   MessageCircle,
-
-  Instagram,} from "lucide-react";
+  Pencil,
+  Instagram,
+} from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { brl, formatPhone, onlyDigits } from "@/lib/formatters";
 import { getEffectivePrice } from "@/lib/promotions";
@@ -36,15 +37,29 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { CustomerLoyaltyClub } from "@/components/customer-loyalty-club";
-import { MercadoPagoPayment } from "@/components/mercadopago-payment";
-import { PagarmePayment } from "@/components/pagarme-payment";
-import { EfiPayment } from "@/components/efi-payment";
 import { quoteLoyaltyReward } from "@/lib/loyalty.functions";
 import { quoteSiteDelivery } from "@/lib/site-checkout.functions";
 import { getPublicTestimonialsFn } from "@/lib/satisfaction.functions";
-import { trackAnalytics, trackAnalyticsAndWait, analyticsIdentity, setAnalyticsVirtualPage } from "@/lib/analytics";
+import {
+  trackAnalytics,
+  trackAnalyticsAndWait,
+  analyticsIdentity,
+  setAnalyticsVirtualPage,
+} from "@/lib/analytics";
 import { MetaPixelInjector } from "@/components/meta-pixel-injector";
 import hotboxLogoUrl from "@/assets/logo-hotbox.jpeg";
+
+const MercadoPagoPayment = lazy(() =>
+  import("@/components/mercadopago-payment").then((module) => ({
+    default: module.MercadoPagoPayment,
+  })),
+);
+const PagarmePayment = lazy(() =>
+  import("@/components/pagarme-payment").then((module) => ({ default: module.PagarmePayment })),
+);
+const EfiPayment = lazy(() =>
+  import("@/components/efi-payment").then((module) => ({ default: module.EfiPayment })),
+);
 
 export const Route = createFileRoute("/")({
   component: CustomerHomeTracked,
@@ -145,14 +160,24 @@ type ActiveOrderSummary = {
   delivery_mode?: string | null;
 };
 
-
 const HOTBOX_LOGO_URL = hotboxLogoUrl;
-const WHATSAPP_URL = "https://wa.me/5521984296288?text=" + encodeURIComponent("Olá! Preciso de ajuda com meu pedido no cardápio digital da Hotbox.");
+const WHATSAPP_URL =
+  "https://wa.me/5521984296288?text=" +
+  encodeURIComponent("Olá! Preciso de ajuda com meu pedido no cardápio digital da Hotbox.");
 const NFOOD_URL = "https://oia.99app.com/dlp9/3SsCkm?area=BR";
 
 const MY_ORDERS_KEY = "hb_my_orders";
 const CART_STORAGE_KEY = "hb_cart_v1";
+const CART_STORAGE_VERSION = 2;
+const CART_STORAGE_TTL_MS = 24 * 60 * 60 * 1000;
 const AREA_ACCESS_SESSION_KEY = "hb_area_access_session";
+const MENU_BOOT_STARTED_AT = Date.now();
+
+type StoredCart = {
+  version: number;
+  savedAt: number;
+  items: CartItem[];
+};
 
 type SavedAreaAccess = {
   cep?: string;
@@ -237,7 +262,6 @@ function activeOrderStatusLabel(status: string) {
   return labels[status] || "Pedido em andamento";
 }
 
-
 type PublicReview = {
   id: string;
   customerName: string;
@@ -250,7 +274,10 @@ type PublicReview = {
 function PublicReviewStars({ value }: { value: number }) {
   const rounded = Math.round(value);
   return (
-    <span className="inline-flex items-center gap-0.5" aria-label={`${value.toFixed(1)} de 5 estrelas`}>
+    <span
+      className="inline-flex items-center gap-0.5"
+      aria-label={`${value.toFixed(1)} de 5 estrelas`}
+    >
       {[1, 2, 3, 4, 5].map((star) => (
         <Star
           key={star}
@@ -273,7 +300,6 @@ function publicReviewDate(value: string) {
   }
 }
 
-
 function PublicReviewCard({ review }: { review: PublicReview }) {
   return (
     <article className="rounded-2xl border border-black/5 bg-white p-3 shadow-sm">
@@ -291,11 +317,15 @@ function PublicReviewCard({ review }: { review: PublicReview }) {
 
       <div className="mt-1.5 flex items-center gap-2">
         <PublicReviewStars value={review.rating} />
-        <span className="text-[9px] font-bold uppercase tracking-wide text-zinc-400">Compra verificada</span>
+        <span className="text-[9px] font-bold uppercase tracking-wide text-zinc-400">
+          Compra verificada
+        </span>
       </div>
 
       {review.comment && (
-        <p className="mt-2 line-clamp-3 text-[13px] leading-relaxed text-zinc-700">“{review.comment}”</p>
+        <p className="mt-2 line-clamp-3 text-[13px] leading-relaxed text-zinc-700">
+          “{review.comment}”
+        </p>
       )}
     </article>
   );
@@ -307,10 +337,14 @@ function CompactInlineReview({ review }: { review: PublicReview }) {
       <div className="flex items-center gap-2">
         <PublicReviewStars value={review.rating} />
         <span className="text-xs font-black text-zinc-800">{review.rating.toFixed(1)}</span>
-        <span className="ml-auto text-[10px] font-bold uppercase tracking-wide text-zinc-400">Compra verificada</span>
+        <span className="ml-auto text-[10px] font-bold uppercase tracking-wide text-zinc-400">
+          Compra verificada
+        </span>
       </div>
       {review.comment && (
-        <p className="mt-1.5 line-clamp-2 text-[12px] leading-relaxed text-zinc-700">“{review.comment}”</p>
+        <p className="mt-1.5 line-clamp-2 text-[12px] leading-relaxed text-zinc-700">
+          “{review.comment}”
+        </p>
       )}
       <p className="mt-1 text-[10px] text-zinc-400">
         {review.customerName} • {publicReviewDate(review.submittedAt)}
@@ -340,7 +374,9 @@ function PublicReviewsModal({
       >
         <div className="flex items-center justify-between border-b px-4 py-3">
           <div>
-            <p className="text-[10px] font-black uppercase tracking-[0.14em] text-amber-700">Avaliações reais</p>
+            <p className="text-[10px] font-black uppercase tracking-[0.14em] text-amber-700">
+              Avaliações reais
+            </p>
             <div className="mt-0.5 flex items-center gap-2">
               <PublicReviewStars value={average} />
               <span className="text-sm font-black">{average.toFixed(1)}</span>
@@ -367,7 +403,6 @@ function PublicReviewsModal({
   );
 }
 
-
 type StoreBusinessRange = { days: number[]; open: string; close: string };
 type PublicStoreStatus = {
   manual_store_status?: "open" | "closed" | null;
@@ -379,7 +414,10 @@ type PublicStoreStatus = {
 
 function isBeverageProduct(product: Product) {
   const normalize = (value: unknown) =>
-    String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
 
   const category = normalize(product.category);
   const name = normalize(product.name);
@@ -398,19 +436,28 @@ function isBeverageProduct(product: Product) {
   );
 }
 
+const normalizedBeverageCache = new Map<string, string>();
 
 function NormalizedBeverageImage({
   src,
   alt,
   className = "",
+  priority = false,
 }: {
   src: string;
   alt: string;
   className?: string;
+  priority?: boolean;
 }) {
-  const [normalizedSrc, setNormalizedSrc] = useState(src);
+  const [normalizedSrc, setNormalizedSrc] = useState(() => normalizedBeverageCache.get(src) || src);
 
   useEffect(() => {
+    const cached = normalizedBeverageCache.get(src);
+    if (cached) {
+      setNormalizedSrc(cached);
+      return;
+    }
+
     let cancelled = false;
     const image = new Image();
     image.crossOrigin = "anonymous";
@@ -420,7 +467,10 @@ function NormalizedBeverageImage({
 
       try {
         const maxScan = 900;
-        const ratio = Math.min(1, maxScan / Math.max(image.naturalWidth || 1, image.naturalHeight || 1));
+        const ratio = Math.min(
+          1,
+          maxScan / Math.max(image.naturalWidth || 1, image.naturalHeight || 1),
+        );
         const scanW = Math.max(1, Math.round(image.naturalWidth * ratio));
         const scanH = Math.max(1, Math.round(image.naturalHeight * ratio));
 
@@ -485,19 +535,10 @@ function NormalizedBeverageImage({
 
         octx.fillStyle = "#ffffff";
         octx.fillRect(0, 0, canvasSize, canvasSize);
-        octx.drawImage(
-          scan,
-          minX,
-          minY,
-          cropW,
-          cropH,
-          dx,
-          dy,
-          drawW,
-          drawH,
-        );
+        octx.drawImage(scan, minX, minY, cropW, cropH, dx, dy, drawW, drawH);
 
         const dataUrl = out.toDataURL("image/webp", 0.92);
+        normalizedBeverageCache.set(src, dataUrl);
         if (!cancelled) setNormalizedSrc(dataUrl);
       } catch {
         // If the browser blocks canvas processing for any image, keep the original.
@@ -516,12 +557,24 @@ function NormalizedBeverageImage({
     };
   }, [src]);
 
-  return <img src={normalizedSrc} alt={alt} className={className} />;
+  return (
+    <img
+      src={normalizedSrc}
+      alt={alt}
+      className={className}
+      loading={priority ? "eager" : "lazy"}
+      decoding="async"
+      fetchPriority={priority ? "high" : "auto"}
+    />
+  );
 }
 
 function productMenuGroupPriority(product: Product) {
   const normalize = (value: unknown) =>
-    String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
   const category = normalize(product.category);
   const name = normalize(product.name);
 
@@ -531,7 +584,8 @@ function productMenuGroupPriority(product: Product) {
     category.includes("bebida") ||
     category.includes("refrigerante") ||
     category.includes("suco")
-  ) return 1;
+  )
+    return 1;
   return 2;
 }
 
@@ -580,11 +634,12 @@ function isStoreOpenByBusinessHours(config: PublicStoreStatus | null) {
     if (open === close) return days.includes(now.day);
     if (close > open) return days.includes(now.day) && now.minutes >= open && now.minutes < close;
 
-    return (days.includes(now.day) && now.minutes >= open) ||
-      (days.includes(previousDay) && now.minutes < close);
+    return (
+      (days.includes(now.day) && now.minutes >= open) ||
+      (days.includes(previousDay) && now.minutes < close)
+    );
   });
 }
-
 
 function brasiliaDatePartsNow() {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -620,7 +675,9 @@ function reservationDayAllowed(config: PublicStoreStatus | null, ymd: string) {
   const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
   if (config?.business_hours_enabled !== true) return true;
   const ranges = Array.isArray(config?.business_hours) ? config!.business_hours! : [];
-  return ranges.some((range) => Array.isArray(range.days) && range.days.map(Number).includes(weekday));
+  return ranges.some(
+    (range) => Array.isArray(range.days) && range.days.map(Number).includes(weekday),
+  );
 }
 
 function nextReservationDate(config: PublicStoreStatus | null) {
@@ -677,7 +734,10 @@ function formatStoreBusinessHours(config: PublicStoreStatus | null) {
     .filter((r) => Array.isArray(r.days) && r.days.length && r.open && r.close)
     .map((r) => {
       const days = [...r.days].map(Number).sort((a, b) => a - b);
-      return `${days.map((d) => names[d] || "").filter(Boolean).join(", ")}: ${String(r.open).slice(0, 5)} às ${String(r.close).slice(0, 5)}`;
+      return `${days
+        .map((d) => names[d] || "")
+        .filter(Boolean)
+        .join(", ")}: ${String(r.open).slice(0, 5)} às ${String(r.close).slice(0, 5)}`;
     })
     .join(" • ");
 }
@@ -685,6 +745,8 @@ function formatStoreBusinessHours(config: PublicStoreStatus | null) {
 function CustomerHome() {
   const nav = useNavigate();
   const [products, setProducts] = useState<Product[]>([]);
+  const [menuLoadError, setMenuLoadError] = useState("");
+  const [menuReloadAttempt, setMenuReloadAttempt] = useState(0);
   const [publicReviews, setPublicReviews] = useState<PublicReview[]>([]);
   const [publicReviewsAverage, setPublicReviewsAverage] = useState(0);
   const [showPublicReviews, setShowPublicReviews] = useState(false);
@@ -705,14 +767,26 @@ function CustomerHome() {
   const [cardPaymentAvailable, setCardPaymentAvailable] = useState(false);
   const [mercadoPagoPublicKey, setMercadoPagoPublicKey] = useState("");
   const [mercadoPagoMaxInstallments, setMercadoPagoMaxInstallments] = useState(1);
-  const [mpCheckout, setMpCheckout] = useState<{ id: string; total: number; method: "pix" | "card" } | null>(null);
+  const [mpCheckout, setMpCheckout] = useState<{
+    id: string;
+    total: number;
+    method: "pix" | "card";
+  } | null>(null);
   const [pagarmePublicKey, setPagarmePublicKey] = useState("");
   const [pagarmeMaxInstallments, setPagarmeMaxInstallments] = useState(1);
-  const [pagarmeCheckout, setPagarmeCheckout] = useState<{ id: string; total: number; method: "pix" | "card" } | null>(null);
+  const [pagarmeCheckout, setPagarmeCheckout] = useState<{
+    id: string;
+    total: number;
+    method: "pix" | "card";
+  } | null>(null);
   const [efiPayeeCode, setEfiPayeeCode] = useState("");
   const [efiEnvironment, setEfiEnvironment] = useState<"sandbox" | "production">("sandbox");
   const [efiMaxInstallments, setEfiMaxInstallments] = useState(1);
-  const [efiCheckout, setEfiCheckout] = useState<{ id: string; total: number; method: "pix" | "card" } | null>(null);
+  const [efiCheckout, setEfiCheckout] = useState<{
+    id: string;
+    total: number;
+    method: "pix" | "card";
+  } | null>(null);
   const [ifoodStoreLink, setIfoodStoreLink] = useState("");
   const [pixEnabled, setPixEnabled] = useState(true);
   const [cardEnabled, setCardEnabled] = useState(true);
@@ -733,7 +807,9 @@ function CustomerHome() {
   const [areaStatus, setAreaStatus] = useState<AreaStatus>("idle");
   const [accessCep, setAccessCep] = useState("");
   const [accessNumber, setAccessNumber] = useState("");
-  const [deliveryPricingMode, setDeliveryPricingMode] = useState<"neighborhood" | "distance">("neighborhood");
+  const [deliveryPricingMode, setDeliveryPricingMode] = useState<"neighborhood" | "distance">(
+    "neighborhood",
+  );
   const [deliveryDistanceKm, setDeliveryDistanceKm] = useState<number | null>(null);
   const [manualNeighborhood, setManualNeighborhood] = useState("");
   const [manualAreaMode, setManualAreaMode] = useState(false);
@@ -744,9 +820,12 @@ function CustomerHome() {
   const [schedulingEnabled, setSchedulingEnabled] = useState(false);
   const [scheduleAccepted, setScheduleAccepted] = useState(false);
 
-
   const [couponInput, setCouponInput] = useState("");
-  const [appliedCoupon, setAppliedCoupon] = useState<{ code: string; discount: number; loyalty?: boolean } | null>(null);
+  const [appliedCoupon, setAppliedCoupon] = useState<{
+    code: string;
+    discount: number;
+    loyalty?: boolean;
+  } | null>(null);
   const [couponError, setCouponError] = useState("");
   const [checkingCoupon, setCheckingCoupon] = useState(false);
 
@@ -793,7 +872,10 @@ function CustomerHome() {
   const [detailAddonQty, setDetailAddonQty] = useState<Record<string, number>>({});
   const [detailOrderBumpId, setDetailOrderBumpId] = useState<string | null>(null);
   const [detailReturnView, setDetailReturnView] = useState<"list" | "cart" | "checkout">("list");
-  const [addonGroupsByProduct, setAddonGroupsByProduct] = useState<Record<string, AddonGroup[]>>({});
+  const [editingCartIndex, setEditingCartIndex] = useState<number | null>(null);
+  const [addonGroupsByProduct, setAddonGroupsByProduct] = useState<Record<string, AddonGroup[]>>(
+    {},
+  );
   const [orderBumps, setOrderBumps] = useState<OrderBump[]>([]);
 
   const [form, setForm] = useState({
@@ -820,8 +902,13 @@ function CustomerHome() {
     try {
       const raw = window.localStorage.getItem(CART_STORAGE_KEY);
       if (raw) {
-        const saved = JSON.parse(raw);
-        if (Array.isArray(saved)) {
+        const parsed = JSON.parse(raw) as StoredCart | CartItem[];
+        const isLegacy = Array.isArray(parsed);
+        const savedAt = isLegacy ? Date.now() : Number(parsed?.savedAt || 0);
+        const saved = isLegacy ? parsed : parsed?.items;
+        if (!isLegacy && (!savedAt || Date.now() - savedAt > CART_STORAGE_TTL_MS)) {
+          window.localStorage.removeItem(CART_STORAGE_KEY);
+        } else if (Array.isArray(saved)) {
           const safe = saved
             .filter((item: any) => item?.product?.id && Number(item?.qty || 0) > 0)
             .map((item: any) => ({
@@ -843,7 +930,16 @@ function CustomerHome() {
   useEffect(() => {
     if (!cartHydrated) return;
     try {
-      window.localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
+      if (!cart.length) {
+        window.localStorage.removeItem(CART_STORAGE_KEY);
+        return;
+      }
+      const payload: StoredCart = {
+        version: CART_STORAGE_VERSION,
+        savedAt: Date.now(),
+        items: cart,
+      };
+      window.localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(payload));
     } catch {
       // Se o navegador bloquear storage, a sacola continua funcionando nesta sessão.
     }
@@ -880,12 +976,16 @@ function CustomerHome() {
         const options = groups.flatMap((group) => group.options);
 
         const validAddons = item.addons.filter((addon) => {
-          const option = options.find((candidate) => String(candidate.id) === String(addon.option_id));
+          const option = options.find(
+            (candidate) => String(candidate.id) === String(addon.option_id),
+          );
           if (!option) {
             changed = true;
             return false;
           }
-          const group = groups.find((candidate) => String(candidate.id) === String(option.group_id));
+          const group = groups.find(
+            (candidate) => String(candidate.id) === String(option.group_id),
+          );
           const available = addonOptionAvailability(option, group).available;
           if (!available) changed = true;
           return available;
@@ -904,7 +1004,9 @@ function CustomerHome() {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setCustomerSession(data.session));
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setCustomerSession(session));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) =>
+      setCustomerSession(session),
+    );
     return () => listener.subscription.unsubscribe();
   }, []);
 
@@ -1025,9 +1127,9 @@ function CustomerHome() {
       }
 
       setActiveOrders(
-        (((data as ActiveOrderSummary[]) || []).filter((order) =>
+        ((data as ActiveOrderSummary[]) || []).filter((order) =>
           ACTIVE_ORDER_STATUSES.has(String(order.status || "")),
-        )),
+        ),
       );
     } finally {
       setCheckingActiveOrders(false);
@@ -1057,16 +1159,16 @@ function CustomerHome() {
   }, []);
 
   useEffect(() => {
-    (supabase as any)
-      .rpc("get_public_menu_products")
-      .then(({ data, error }: any) => {
-        if (error) {
-          console.error("[menu-products] Falha ao carregar produtos públicos:", error);
-          setProducts([]);
-          return;
-        }
-        setProducts((data as Product[]) ?? []);
-      });
+    setMenuLoadError("");
+    (supabase as any).rpc("get_public_menu_products").then(({ data, error }: any) => {
+      if (error) {
+        console.error("[menu-products] Falha ao carregar produtos públicos:", error);
+        setProducts([]);
+        setMenuLoadError("Não foi possível carregar os produtos agora.");
+        return;
+      }
+      setProducts((data as Product[]) ?? []);
+    });
     Promise.all([
       supabase
         .from("store_config_public")
@@ -1076,91 +1178,140 @@ function CustomerHome() {
         .maybeSingle(),
       (supabase as any).rpc("get_public_payment_config"),
       (supabase as any).rpc("get_public_store_status"),
-      (supabase as any).from("menu_addon_groups").select("id,name,display_title,description,display_subtitle,required,min_select,max_select,active,sort_order").order("sort_order"),
-      (supabase as any).from("menu_addon_options").select("id,group_id,name,display_name,description,display_description,image_url,price,linked_product_id,use_linked_product_price,active,sort_order").order("sort_order"),
-      (supabase as any).from("product_addon_groups").select("product_id,group_id,sort_order").order("sort_order"),
-      (supabase as any).from("menu_order_bumps").select("id,product_id,title,subtitle,placement,price_override,active,sort_order").eq("active", true).order("sort_order"),
-    ]).then(([storeResult, paymentResult, storeStatusResult, groupResult, optionResult, linkResult, bumpResult]: any[]) => {
-      const data = storeResult?.data;
-      if (data) {
-        setStoreName(data.store_name ?? "HotBox Delivery");
+      (supabase as any)
+        .from("menu_addon_groups")
+        .select(
+          "id,name,display_title,description,display_subtitle,required,min_select,max_select,active,sort_order",
+        )
+        .order("sort_order"),
+      (supabase as any)
+        .from("menu_addon_options")
+        .select(
+          "id,group_id,name,display_name,description,display_description,image_url,price,linked_product_id,use_linked_product_price,active,sort_order",
+        )
+        .order("sort_order"),
+      (supabase as any)
+        .from("product_addon_groups")
+        .select("product_id,group_id,sort_order")
+        .order("sort_order"),
+      (supabase as any)
+        .from("menu_order_bumps")
+        .select("id,product_id,title,subtitle,placement,price_override,active,sort_order")
+        .eq("active", true)
+        .order("sort_order"),
+    ])
+      .then(
+        ([
+          storeResult,
+          paymentResult,
+          storeStatusResult,
+          groupResult,
+          optionResult,
+          linkResult,
+          bumpResult,
+        ]: any[]) => {
+          const data = storeResult?.data;
+          if (data) {
+            setStoreName(data.store_name ?? "HotBox Delivery");
 
-        // Não sobrescreve a taxa que já foi calculada pelo CEP/bairro.
-        // O carregamento assíncrono da configuração da loja podia terminar DEPOIS
-        // da validação do endereço e trocar a taxa real pelo default (muitas vezes 0).
-        const savedArea = readAreaAccess();
-        setDeliveryFee((currentFee) => {
-          if (savedArea && Number.isFinite(Number(savedArea.deliveryFee))) {
-            return Number(savedArea.deliveryFee);
+            // Não sobrescreve a taxa que já foi calculada pelo CEP/bairro.
+            // O carregamento assíncrono da configuração da loja podia terminar DEPOIS
+            // da validação do endereço e trocar a taxa real pelo default (muitas vezes 0).
+            const savedArea = readAreaAccess();
+            setDeliveryFee((currentFee) => {
+              if (savedArea && Number.isFinite(Number(savedArea.deliveryFee))) {
+                return Number(savedArea.deliveryFee);
+              }
+              if (areaStatus === "supported" && Number.isFinite(Number(currentFee))) {
+                return Number(currentFee);
+              }
+              return Number(data.default_delivery_fee ?? 0);
+            });
+
+            setDeliveryTime(data.estimated_delivery_time_minutes ?? null);
+            setBannerUrl(data.banner_image_url ?? null);
+            setIfoodStoreLink(String((data as any).ifood_store_link || ""));
+            setDigitalMenuEnabled((data as any).digital_menu_enabled !== false);
+            setPixEnabled((data as any).digital_menu_pix_enabled !== false);
+            setCardEnabled((data as any).digital_menu_card_enabled !== false);
+            if (data.banner_tagline) setBannerTagline(data.banner_tagline);
           }
-          if (areaStatus === "supported" && Number.isFinite(Number(currentFee))) {
-            return Number(currentFee);
+          const loadedStoreStatus = (storeStatusResult?.data || {}) as PublicStoreStatus;
+          setPublicStoreStatus(loadedStoreStatus);
+          if (
+            !isStoreOpenByBusinessHours(loadedStoreStatus) &&
+            loadedStoreStatus.closed_reservations_enabled === true
+          ) {
+            setReservationDate((current) => current || nextReservationDate(loadedStoreStatus));
           }
-          return Number(data.default_delivery_fee ?? 0);
-        });
 
-        setDeliveryTime(data.estimated_delivery_time_minutes ?? null);
-        setBannerUrl(data.banner_image_url ?? null);
-        setIfoodStoreLink(String((data as any).ifood_store_link || ""));
-        setDigitalMenuEnabled((data as any).digital_menu_enabled !== false);
-        setPixEnabled((data as any).digital_menu_pix_enabled !== false);
-        setCardEnabled((data as any).digital_menu_card_enabled !== false);
-        if (data.banner_tagline) setBannerTagline(data.banner_tagline);
-      }
-      const loadedStoreStatus = (storeStatusResult?.data || {}) as PublicStoreStatus;
-      setPublicStoreStatus(loadedStoreStatus);
-      if (!isStoreOpenByBusinessHours(loadedStoreStatus) && loadedStoreStatus.closed_reservations_enabled === true) {
-        setReservationDate((current) => current || nextReservationDate(loadedStoreStatus));
-      }
+          const pay = paymentResult?.data || {};
+          const normalizeProvider = (value: unknown): CheckoutPayment =>
+            value === "pagarme" ? "pagarme" : value === "efi" ? "efi" : "mercadopago";
+          const loadedProvider = normalizeProvider(pay.provider);
+          setPaymentProvider(loadedProvider);
+          setForm((current) => ({ ...current, payment: loadedProvider }));
+          setPixPaymentAvailable(pay.pix_payment_available === true);
+          setCardPaymentAvailable(pay.card_payment_available === true);
+          setMercadoPagoPublicKey(String(pay.mercadopago_public_key || ""));
+          setMercadoPagoMaxInstallments(
+            Math.min(12, Math.max(1, Number(pay.mercadopago_max_installments || 1))),
+          );
+          setPagarmePublicKey(String(pay.pagarme_public_key || ""));
+          setPagarmeMaxInstallments(
+            Math.min(12, Math.max(1, Number(pay.pagarme_max_installments || 1))),
+          );
+          setEfiPayeeCode(String(pay.efi_payee_code || ""));
+          setEfiEnvironment(pay.efi_environment === "production" ? "production" : "sandbox");
+          setEfiMaxInstallments(Math.min(12, Math.max(1, Number(pay.efi_max_installments || 1))));
+          // O cardápio digital trabalha somente com pagamento online pelo gateway
+          // único configurado (Mercado Pago, Efí ou Pagar.me).
+          setPayOnDeliveryEnabled(false);
+          setPayOnDeliveryCardEnabled(false);
+          setPayOnDeliveryPixEnabled(false);
+          const canPixOnline =
+            (data as any)?.digital_menu_pix_enabled !== false && pay.pix_payment_available === true;
+          const canCardOnline =
+            (data as any)?.digital_menu_card_enabled !== false &&
+            pay.card_payment_available === true;
+          if (canPixOnline) {
+            setPaymentChoice("online_pix");
+          } else if (canCardOnline) {
+            setPaymentChoice("online_card");
+          }
 
-      const pay = paymentResult?.data || {};
-      const normalizeProvider = (value: unknown): CheckoutPayment =>
-        value === "pagarme" ? "pagarme" : value === "efi" ? "efi" : "mercadopago";
-      const loadedProvider = normalizeProvider(pay.provider);
-      setPaymentProvider(loadedProvider);
-      setForm((current) => ({ ...current, payment: loadedProvider }));
-      setPixPaymentAvailable(pay.pix_payment_available === true);
-      setCardPaymentAvailable(pay.card_payment_available === true);
-      setMercadoPagoPublicKey(String(pay.mercadopago_public_key || ""));
-      setMercadoPagoMaxInstallments(Math.min(12, Math.max(1, Number(pay.mercadopago_max_installments || 1))));
-      setPagarmePublicKey(String(pay.pagarme_public_key || ""));
-      setPagarmeMaxInstallments(Math.min(12, Math.max(1, Number(pay.pagarme_max_installments || 1))));
-      setEfiPayeeCode(String(pay.efi_payee_code || ""));
-      setEfiEnvironment(pay.efi_environment === "production" ? "production" : "sandbox");
-      setEfiMaxInstallments(Math.min(12, Math.max(1, Number(pay.efi_max_installments || 1))));
-      setPayOnDeliveryEnabled(pay.pay_on_delivery_enabled === true);
-      setPayOnDeliveryCardEnabled(pay.pay_on_delivery_card_enabled !== false);
-      setPayOnDeliveryPixEnabled(pay.pay_on_delivery_pix_enabled !== false);
-      const canPixOnline = (data as any)?.digital_menu_pix_enabled !== false && pay.pix_payment_available === true;
-      const canCardOnline = (data as any)?.digital_menu_card_enabled !== false && pay.card_payment_available === true;
-      if (canPixOnline) {
-        setPaymentChoice("online_pix");
-      } else if (canCardOnline) {
-        setPaymentChoice("online_card");
-      } else if (pay.pay_on_delivery_enabled === true) {
-        setPaymentChoice(pay.pay_on_delivery_card_enabled !== false ? "delivery_card" : "delivery_pix");
-      }
-
-      const groups = (groupResult?.data || []) as AddonGroup[];
-      const options = (optionResult?.data || []) as AddonOption[];
-      const links = (linkResult?.data || []) as Array<{ product_id: string; group_id: string; sort_order?: number }>;
-      const groupMap = new Map(groups.map((g) => [String(g.id), { ...g, options: options.filter((o) => String(o.group_id) === String(g.id)) }]));
-      const byProduct: Record<string, AddonGroup[]> = {};
-      for (const link of links) {
-        const group = groupMap.get(String(link.group_id));
-        if (!group) continue;
-        const productId = String(link.product_id);
-        byProduct[productId] ||= [];
-        byProduct[productId].push(group);
-      }
-      setAddonGroupsByProduct(byProduct);
-      setOrderBumps((bumpResult?.data || []) as OrderBump[]);
-      setConfigLoaded(true);
-    }).catch((error) => {
-      console.error("[cardapio] falha ao carregar configurações", error);
-      setConfigLoaded(true);
-    });
-  }, []);
+          const groups = (groupResult?.data || []) as AddonGroup[];
+          const options = (optionResult?.data || []) as AddonOption[];
+          const links = (linkResult?.data || []) as Array<{
+            product_id: string;
+            group_id: string;
+            sort_order?: number;
+          }>;
+          const groupMap = new Map(
+            groups.map((g) => [
+              String(g.id),
+              { ...g, options: options.filter((o) => String(o.group_id) === String(g.id)) },
+            ]),
+          );
+          const byProduct: Record<string, AddonGroup[]> = {};
+          for (const link of links) {
+            const group = groupMap.get(String(link.group_id));
+            if (!group) continue;
+            const productId = String(link.product_id);
+            byProduct[productId] ||= [];
+            byProduct[productId].push(group);
+          }
+          setAddonGroupsByProduct(byProduct);
+          setOrderBumps((bumpResult?.data || []) as OrderBump[]);
+          setConfigLoaded(true);
+        },
+      )
+      .catch((error) => {
+        console.error("[cardapio] falha ao carregar configurações", error);
+        setMenuLoadError("Não foi possível carregar todas as configurações do cardápio.");
+        setConfigLoaded(true);
+      });
+  }, [menuReloadAttempt]);
 
   useEffect(() => {
     if (form.deliveryMode === "pickup") {
@@ -1170,7 +1321,14 @@ function CustomerHome() {
       }
       setScheduleAccepted(false);
     }
-  }, [form.deliveryMode, paymentChoice, pixEnabled, cardEnabled, pixPaymentAvailable, cardPaymentAvailable]);
+  }, [
+    form.deliveryMode,
+    paymentChoice,
+    pixEnabled,
+    cardEnabled,
+    pixPaymentAvailable,
+    cardPaymentAvailable,
+  ]);
 
   useEffect(() => {
     if (areaStatus !== "supported") return;
@@ -1182,24 +1340,37 @@ function CustomerHome() {
   }, [areaStatus, deliveryFee]);
 
   useEffect(() => {
-    const n = String(customerSession?.user?.user_metadata?.full_name || customerSession?.user?.user_metadata?.name || "").trim();
-    if (n) setForm((current) => current.name ? current : { ...current, name: n });
+    const n = String(
+      customerSession?.user?.user_metadata?.full_name ||
+        customerSession?.user?.user_metadata?.name ||
+        "",
+    ).trim();
+    if (n) setForm((current) => (current.name ? current : { ...current, name: n }));
   }, [customerSession?.user?.id]);
-
-
 
   async function redirectOutsideArea(
     details?: { cep?: string | null; neighborhood?: string | null },
     destination: "ifood" | "99food" | "whatsapp" = "ifood",
   ) {
     const cleanCep = onlyDigits(details?.cep || accessCep || form.cep || "").slice(0, 8);
-    const neighborhood = String(details?.neighborhood || validatedNeighborhood || form.neighborhood || "").trim();
+    const neighborhood = String(
+      details?.neighborhood || validatedNeighborhood || form.neighborhood || "",
+    ).trim();
     const ifoodTarget = ifoodStoreLink.trim();
-    const target = destination === "99food" ? NFOOD_URL : destination === "whatsapp" ? WHATSAPP_URL : (ifoodTarget || WHATSAPP_URL);
+    const target =
+      destination === "99food"
+        ? NFOOD_URL
+        : destination === "whatsapp"
+          ? WHATSAPP_URL
+          : ifoodTarget || WHATSAPP_URL;
     const resolvedDestination = destination === "ifood" && !ifoodTarget ? "whatsapp" : destination;
 
     await trackAnalyticsAndWait(
-      resolvedDestination === "ifood" ? "ifood_redirect_outside_area" : resolvedDestination === "99food" ? "nfood_redirect_outside_area" : "outside_area_redirect_whatsapp",
+      resolvedDestination === "ifood"
+        ? "ifood_redirect_outside_area"
+        : resolvedDestination === "99food"
+          ? "nfood_redirect_outside_area"
+          : "outside_area_redirect_whatsapp",
       {
         event_category: "delivery_region",
         properties: {
@@ -1350,7 +1521,9 @@ function CustomerHome() {
           source: "cep",
         });
         setAreaStatus("needs_number");
-        setAreaMessage("Para calcular a taxa por quilometragem com precisão, informe o número do endereço.");
+        setAreaMessage(
+          "Para calcular a taxa por quilometragem com precisão, informe o número do endereço.",
+        );
         return;
       }
       if (!quote?.supported) {
@@ -1367,15 +1540,24 @@ function CustomerHome() {
         });
         trackAnalytics("outside_area_detected", {
           event_category: "delivery_region",
-          properties: { cep, neighborhood: unsupportedNeighborhood || null, cart_items: totalQty, cart_value: Number(subtotal.toFixed(2)) },
+          properties: {
+            cep,
+            neighborhood: unsupportedNeighborhood || null,
+            cart_items: totalQty,
+            cart_value: Number(subtotal.toFixed(2)),
+          },
         });
         setAreaStatus("unsupported");
-        setAreaMessage("Sua região é atendida pelas plataformas parceiras. Os preços e condições podem variar de acordo com a plataforma.");
+        setAreaMessage(
+          "Sua região é atendida pelas plataformas parceiras. Os preços e condições podem variar de acordo com a plataforma.",
+        );
         return;
       }
       if (quote?.quoteUnavailable) {
         setAreaStatus("error");
-        setAreaMessage("Não conseguimos calcular a distância desse endereço com segurança. Confira o número e tente novamente.");
+        setAreaMessage(
+          "Não conseguimos calcular a distância desse endereço com segurança. Confira o número e tente novamente.",
+        );
         return;
       }
       setDeliveryPricingMode(quote?.pricingMode === "distance" ? "distance" : "neighborhood");
@@ -1422,7 +1604,13 @@ function CustomerHome() {
       console.error(error);
 
       try {
-        const manualCepQuote = await checkDeliveryArea("", undefined, accessNumber || undefined, undefined, cep);
+        const manualCepQuote = await checkDeliveryArea(
+          "",
+          undefined,
+          accessNumber || undefined,
+          undefined,
+          cep,
+        );
         if (manualCepQuote?.supported) {
           applyDeliveryWindowFromQuote(manualCepQuote);
           const supportedNeighborhood = String(manualCepQuote.neighborhood || "");
@@ -1448,9 +1636,7 @@ function CustomerHome() {
             pricingMode: manualCepQuote?.pricingMode || "neighborhood",
             source: "cep",
           });
-          setAreaStatus(
-            manualCepQuote?.needsNumber ? "needs_number" : "supported",
-          );
+          setAreaStatus(manualCepQuote?.needsNumber ? "needs_number" : "supported");
           setAreaMessage(
             manualCepQuote?.needsNumber
               ? "CEP liberado manualmente. Informe também o número do endereço para calcular a taxa."
@@ -1466,7 +1652,9 @@ function CustomerHome() {
 
       setAreaStatus("error");
       setManualAreaMode(true);
-      setAreaMessage("Não conseguimos consultar esse CEP agora. Você pode informar seu bairro manualmente.");
+      setAreaMessage(
+        "Não conseguimos consultar esse CEP agora. Você pode informar seu bairro manualmente.",
+      );
     }
   }
 
@@ -1479,7 +1667,13 @@ function CustomerHome() {
     }
     setAreaStatus("checking");
     try {
-      const quote = await checkDeliveryArea(neighborhood, undefined, undefined, undefined, accessCep || form.cep);
+      const quote = await checkDeliveryArea(
+        neighborhood,
+        undefined,
+        undefined,
+        undefined,
+        accessCep || form.cep,
+      );
       applyDeliveryWindowFromQuote(quote);
       if (!quote?.supported) {
         setValidatedNeighborhood(neighborhood);
@@ -1493,16 +1687,25 @@ function CustomerHome() {
         });
         trackAnalytics("outside_area_detected", {
           event_category: "delivery_region",
-          properties: { cep: onlyDigits(accessCep || form.cep || "").slice(0, 8) || null, neighborhood, cart_items: totalQty, cart_value: Number(subtotal.toFixed(2)) },
+          properties: {
+            cep: onlyDigits(accessCep || form.cep || "").slice(0, 8) || null,
+            neighborhood,
+            cart_items: totalQty,
+            cart_value: Number(subtotal.toFixed(2)),
+          },
         });
         setAreaStatus("unsupported");
-        setAreaMessage("Sua região é atendida pelas plataformas parceiras. Os preços e condições podem variar de acordo com a plataforma.");
+        setAreaMessage(
+          "Sua região é atendida pelas plataformas parceiras. Os preços e condições podem variar de acordo com a plataforma.",
+        );
         return;
       }
       if (quote?.needsNumber || quote?.pricingMode === "distance") {
         setDeliveryPricingMode("distance");
         setAreaStatus("error");
-        setAreaMessage("A loja está cobrando por quilometragem. Para calcular a taxa corretamente, informe o CEP e o número do endereço.");
+        setAreaMessage(
+          "A loja está cobrando por quilometragem. Para calcular a taxa corretamente, informe o CEP e o número do endereço.",
+        );
         return;
       }
       setDeliveryPricingMode("neighborhood");
@@ -1547,7 +1750,13 @@ function CustomerHome() {
     const number = String(nextNumber ?? form.number ?? "").trim();
     if (!number) return;
     try {
-      const quote = await checkDeliveryArea(form.neighborhood, form.street, number, form.city, form.cep || accessCep);
+      const quote = await checkDeliveryArea(
+        form.neighborhood,
+        form.street,
+        number,
+        form.city,
+        form.cep || accessCep,
+      );
       applyDeliveryWindowFromQuote(quote);
       if (quote?.supported && quote?.fee != null && !quote?.quoteUnavailable) {
         const fee = Number(quote.fee);
@@ -1557,7 +1766,9 @@ function CustomerHome() {
             cep: form.cep || accessCep || "",
             street: form.street || "",
             number,
-            neighborhood: String(quote.neighborhood || form.neighborhood || validatedNeighborhood || ""),
+            neighborhood: String(
+              quote.neighborhood || form.neighborhood || validatedNeighborhood || "",
+            ),
             city: form.city || "",
             deliveryFee: fee,
             deliveryCutoffTime: quote?.deliveryCutoffTime || null,
@@ -1588,12 +1799,23 @@ function CustomerHome() {
     setScheduleAccepted(false);
     setManualNeighborhood("");
     setManualAreaMode(false);
-    setForm((current) => ({ ...current, street: "", number: "", complement: "", neighborhood: "", city: "", cep: "" }));
+    setForm((current) => ({
+      ...current,
+      street: "",
+      number: "",
+      complement: "",
+      neighborhood: "",
+      city: "",
+      cep: "",
+    }));
   }
 
   const categories = useMemo(() => {
     const normalize = (value: unknown) =>
-      String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
 
     const remaining = Array.from(
       new Set(
@@ -1639,9 +1861,15 @@ function CustomerHome() {
           (activeCategory === "Batata"
             ? normalizedCategory.includes("batata")
             : (p.category || "Outros") === activeCategory);
-        const matchesQuery = !query.trim() || p.name.toLowerCase().includes(query.toLowerCase());
+        const normalizedQuery = query.trim().toLocaleLowerCase("pt-BR");
+        const searchable = `${p.name} ${p.description || ""} ${p.category || ""}`.toLocaleLowerCase(
+          "pt-BR",
+        );
+        const matchesQuery = !normalizedQuery || searchable.includes(normalizedQuery);
         const matchesStatus =
-          activeFilter === "todos" || (activeFilter === "ativos" && p.active) || (activeFilter === "inativos" && !p.active);
+          activeFilter === "todos" ||
+          (activeFilter === "ativos" && p.active) ||
+          (activeFilter === "inativos" && !p.active);
         return matchesCategory && matchesQuery && matchesStatus;
       })
       .sort((a, b) => {
@@ -1657,19 +1885,68 @@ function CustomerHome() {
       });
   }, [products, activeCategory, query, activeFilter]);
 
+  useEffect(() => {
+    const normalizedQuery = query.trim();
+    if (normalizedQuery.length < 2) return;
+    const timer = window.setTimeout(() => {
+      trackAnalytics("menu_search", {
+        event_category: "discovery",
+        properties: {
+          query_length: normalizedQuery.length,
+          results_count: filtered.length,
+          category: activeCategory,
+          has_results: filtered.length > 0,
+        },
+      });
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [query, activeCategory, filtered.length]);
+
+  useEffect(() => {
+    if (!configLoaded || (!products.length && !menuLoadError)) return;
+    try {
+      const key = `hb_menu_ready_${analyticsIdentity().session_id}_${menuReloadAttempt}`;
+      if (sessionStorage.getItem(key)) return;
+      sessionStorage.setItem(key, "1");
+    } catch {
+      // O diagnóstico de performance não pode bloquear o cardápio.
+    }
+    trackAnalytics("menu_ready", {
+      event_category: "performance",
+      value: Math.max(0, Date.now() - MENU_BOOT_STARTED_AT),
+      properties: {
+        load_ms: Math.max(0, Date.now() - MENU_BOOT_STARTED_AT),
+        products_count: products.length,
+        categories_count: categories.length,
+        reload_attempt: menuReloadAttempt,
+        load_error: Boolean(menuLoadError),
+      },
+    });
+  }, [configLoaded, products.length, menuLoadError, menuReloadAttempt, categories.length]);
+
   function basePriceForCartItem(item: CartItem) {
-    if (item.orderBumpId && item.bumpPrice != null && Number.isFinite(Number(item.bumpPrice))) return Number(item.bumpPrice);
+    if (item.orderBumpId && item.bumpPrice != null && Number.isFinite(Number(item.bumpPrice)))
+      return Number(item.bumpPrice);
     return Number(getEffectivePrice(item.product).price);
   }
 
   function cartUnitPrice(item: CartItem) {
-    return Number((basePriceForCartItem(item) + item.addons.reduce((sum, a) => sum + Number(a.price || 0) * Math.max(1, Number(a.qty || 1)), 0)).toFixed(2));
+    return Number(
+      (
+        basePriceForCartItem(item) +
+        item.addons.reduce(
+          (sum, a) => sum + Number(a.price || 0) * Math.max(1, Number(a.qty || 1)),
+          0,
+        )
+      ).toFixed(2),
+    );
   }
 
   const subtotal = cart.reduce((s, i) => s + cartUnitPrice(i) * i.qty, 0);
   const isDelivery = form.deliveryMode === "delivery";
   const couponDiscount = appliedCoupon?.discount ?? 0;
-  const total = Math.max(0, subtotal - couponDiscount) + (cart.length && isDelivery ? deliveryFee : 0);
+  const total =
+    Math.max(0, subtotal - couponDiscount) + (cart.length && isDelivery ? deliveryFee : 0);
 
   function metaCartContents() {
     return cart.map((item) => ({
@@ -1682,10 +1959,7 @@ function CustomerHome() {
   }
 
   function metaCartItemCount() {
-    return cart.reduce(
-      (sum, item) => sum + Math.max(1, Number(item.qty || 1)),
-      0,
-    );
+    return cart.reduce((sum, item) => sum + Math.max(1, Number(item.qty || 1)), 0);
   }
 
   function metaCommerceProperties(extra: Record<string, unknown> = {}) {
@@ -1693,9 +1967,7 @@ function CustomerHome() {
       contents: metaCartContents(),
       items_count: metaCartItemCount(),
       subtotal: Number(subtotal.toFixed(2)),
-      delivery_fee: Number(
-        (cart.length && isDelivery ? deliveryFee : 0).toFixed(2),
-      ),
+      delivery_fee: Number((cart.length && isDelivery ? deliveryFee : 0).toFixed(2)),
       discount: Number(couponDiscount.toFixed(2)),
       coupon: appliedCoupon?.code || null,
       delivery_mode: form.deliveryMode,
@@ -1737,7 +2009,9 @@ function CustomerHome() {
           form.neighborhood || null,
           form.city || null,
           form.cep ? `CEP: ${form.cep}` : null,
-        ].filter(Boolean).join(" | ")
+        ]
+          .filter(Boolean)
+          .join(" | ")
       : "Retirada no local";
 
     const lines = [
@@ -1755,13 +2029,30 @@ function CustomerHome() {
       ...(appliedCoupon?.code ? [`Cupom: ${appliedCoupon.code} (-${brl(couponDiscount)})`] : []),
       `Taxa de entrega: ${isDelivery ? brl(deliveryFee) : "R$ 0,00"}`,
       `*Total: ${brl(pagarmeCheckout?.total ?? mpCheckout?.total ?? total)}*`,
-      ...(pagarmeCheckout?.id ? [`Referência do checkout: ${pagarmeCheckout.id}`] : mpCheckout?.id ? [`Referência do checkout: ${mpCheckout.id}`] : []),
+      ...(pagarmeCheckout?.id
+        ? [`Referência do checkout: ${pagarmeCheckout.id}`]
+        : mpCheckout?.id
+          ? [`Referência do checkout: ${mpCheckout.id}`]
+          : []),
       "",
       "Meu pagamento não foi autorizado. Preciso receber um link de pagamento.",
     ];
 
     return `https://wa.me/5521984296288?text=${encodeURIComponent(lines.join("\\n"))}`;
-  }, [cart, form, isDelivery, subtotal, couponDiscount, appliedCoupon?.code, deliveryFee, total, pagarmeCheckout?.total, pagarmeCheckout?.id, mpCheckout?.total, mpCheckout?.id]);
+  }, [
+    cart,
+    form,
+    isDelivery,
+    subtotal,
+    couponDiscount,
+    appliedCoupon?.code,
+    deliveryFee,
+    total,
+    pagarmeCheckout?.total,
+    pagarmeCheckout?.id,
+    mpCheckout?.total,
+    mpCheckout?.id,
+  ]);
 
   const couponCartPayload = () =>
     cart.map((i) => {
@@ -1779,12 +2070,16 @@ function CustomerHome() {
   const totalQty = cart.reduce((s, i) => s + i.qty, 0);
 
   async function applyCoupon(explicitCode?: string) {
-    const code = String(explicitCode || couponInput).trim().toUpperCase();
+    const code = String(explicitCode || couponInput)
+      .trim()
+      .toUpperCase();
     if (!code) return;
     const couponPhone = onlyDigits(form.phone);
     if (couponPhone.length < 10) {
       setCouponInput(code);
-      setCouponError("Informe seu WhatsApp para validar o cupom. O número já ficará preenchido no checkout.");
+      setCouponError(
+        "Informe seu WhatsApp para validar o cupom. O número já ficará preenchido no checkout.",
+      );
       setView("cart");
       return;
     }
@@ -1807,7 +2102,11 @@ function CustomerHome() {
           return;
         }
         setCouponInput(code);
-        setAppliedCoupon({ code: quoted.code, discount: Number(quoted.discount || 0), loyalty: true });
+        setAppliedCoupon({
+          code: quoted.code,
+          discount: Number(quoted.discount || 0),
+          loyalty: true,
+        });
         toast.success(`🔥 Recompensa aplicada: ${quoted.productName} grátis!`);
         return;
       }
@@ -1858,11 +2157,15 @@ function CustomerHome() {
         });
         if (!quoted.ok) {
           setAppliedCoupon(null);
-          setCouponError((quoted as any).reason || "A recompensa deixou de ser válida para este carrinho.");
+          setCouponError(
+            (quoted as any).reason || "A recompensa deixou de ser válida para este carrinho.",
+          );
           return;
         }
         const nextDiscount = Number(quoted.discount || 0);
-        setAppliedCoupon((current) => current ? { ...current, discount: nextDiscount, loyalty: true } : current);
+        setAppliedCoupon((current) =>
+          current ? { ...current, discount: nextDiscount, loyalty: true } : current,
+        );
         setCouponError("");
         return;
       }
@@ -1878,13 +2181,24 @@ function CustomerHome() {
         return;
       }
       const nextDiscount = Number(data.discount || 0);
-      setAppliedCoupon((current) => current ? { ...current, discount: nextDiscount } : current);
+      setAppliedCoupon((current) => (current ? { ...current, discount: nextDiscount } : current));
       setCouponError("");
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [subtotal, form.phone, form.deliveryMode, cart, appliedCoupon?.code, customerSession?.access_token]);
+  }, [
+    subtotal,
+    form.phone,
+    form.deliveryMode,
+    cart,
+    appliedCoupon?.code,
+    customerSession?.access_token,
+  ]);
 
-  function openDetail(p: Product, orderBumpId?: string | null, returnView: "list" | "cart" | "checkout" = "list") {
+  function openDetail(
+    p: Product,
+    orderBumpId?: string | null,
+    returnView: "list" | "cart" | "checkout" = "list",
+  ) {
     const productPrice = Number(getEffectivePrice(p).price || 0);
     trackAnalytics("product_view", {
       event_category: "commerce",
@@ -1911,11 +2225,57 @@ function CustomerHome() {
     setDetailAddonIds([]);
     setDetailAddonQty({});
     setDetailOrderBumpId(orderBumpId || null);
+    setEditingCartIndex(null);
     setDetailReturnView(returnView);
     setView("detail");
     window.setTimeout(() => {
       window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     }, 0);
+  }
+
+  function openReviews(source: "menu" | "product" | "menu_footer") {
+    trackAnalytics("reviews_opened", {
+      event_category: "trust",
+      product_id: source === "product" ? selectedProduct?.id : undefined,
+      product_name: source === "product" ? selectedProduct?.name : undefined,
+      properties: {
+        source,
+        reviews_count: publicReviews.length,
+        average_rating: Number(publicReviewsAverage.toFixed(1)),
+      },
+    });
+    setShowPublicReviews(true);
+  }
+
+  function openCartItemForEdit(index: number) {
+    const item = cart[index];
+    if (!item) return;
+    setSelectedProduct(item.product);
+    setDetailQty(item.qty);
+    setDetailNotes(item.notes);
+    setDetailAddonIds(
+      item.addons
+        .filter((addon) => Number(addon.qty || 0) > 0)
+        .map((addon) => String(addon.option_id)),
+    );
+    setDetailAddonQty(
+      Object.fromEntries(
+        item.addons.map((addon) => [String(addon.option_id), Math.max(1, Number(addon.qty || 1))]),
+      ),
+    );
+    setDetailOrderBumpId(item.orderBumpId || null);
+    setDetailReturnView("cart");
+    setEditingCartIndex(index);
+    trackAnalytics("cart_item_edit_started", {
+      event_category: "commerce",
+      product_id: item.product.id,
+      product_name: item.product.name,
+      quantity: item.qty,
+      value: Number((cartUnitPrice(item) * item.qty).toFixed(2)),
+      properties: metaCommerceProperties({ cart_index: index }),
+    });
+    setView("detail");
+    window.setTimeout(() => window.scrollTo({ top: 0, left: 0, behavior: "auto" }), 0);
   }
 
   function inventoryNameKey(value: unknown) {
@@ -1944,11 +2304,7 @@ function CustomerHome() {
     const optionKey = inventoryNameKey(option.display_name || option.name);
     if (!optionKey) return null;
 
-    return (
-      products.find(
-        (product) => inventoryNameKey(product.name) === optionKey,
-      ) || null
-    );
+    return products.find((product) => inventoryNameKey(product.name) === optionKey) || null;
   }
 
   function addonOptionAvailability(option: AddonOption, group?: AddonGroup) {
@@ -1973,7 +2329,10 @@ function CustomerHome() {
   }
 
   function addonQty(optionId: string) {
-    return Math.max(0, Number(detailAddonQty[optionId] || (detailAddonIds.includes(optionId) ? 1 : 0)));
+    return Math.max(
+      0,
+      Number(detailAddonQty[optionId] || (detailAddonIds.includes(optionId) ? 1 : 0)),
+    );
   }
 
   function groupSelectedUnits(group: AddonGroup) {
@@ -2036,7 +2395,9 @@ function CustomerHome() {
 
   function effectiveAddonOptionPrice(option: AddonOption) {
     if (option.linked_product_id && option.use_linked_product_price === true) {
-      const linked = products.find((product) => String(product.id) === String(option.linked_product_id));
+      const linked = products.find(
+        (product) => String(product.id) === String(option.linked_product_id),
+      );
       if (linked) return Number(getEffectivePrice(linked).price || 0);
     }
     return Number(option.price || 0);
@@ -2118,7 +2479,7 @@ function CustomerHome() {
       value: Number((subtotal - couponDiscount).toFixed(2)),
       properties: { items_count: totalQty, cart_value: Number(subtotal.toFixed(2)) },
     });
-    setAreaStatus((current) => current === "unsupported" ? "idle" : current);
+    setAreaStatus((current) => (current === "unsupported" ? "idle" : current));
     setAreaMessage("");
     setView("delivery_check");
   }
@@ -2159,23 +2520,54 @@ function CustomerHome() {
     }
     if (!validateDetailAddons(selectedProduct.id)) return;
     const addons = selectedDetailAddons(selectedProduct.id);
-    const bump = detailOrderBumpId ? orderBumps.find((b) => String(b.id) === detailOrderBumpId) : null;
+    const bump = detailOrderBumpId
+      ? orderBumps.find((b) => String(b.id) === detailOrderBumpId)
+      : null;
     const bumpPrice = bump?.price_override == null ? null : Number(bump.price_override);
-    const signature = addons.map((a) => `${a.option_id}:${Math.max(1, Number(a.qty || 1))}`).sort().join(",");
+    const signature = addons
+      .map((a) => `${a.option_id}:${Math.max(1, Number(a.qty || 1))}`)
+      .sort()
+      .join(",");
     setCart((c) => {
-      const ex = c.find((i) =>
-        i.product.id === selectedProduct.id &&
-        i.notes === detailNotes &&
-        (i.orderBumpId || "") === (detailOrderBumpId || "") &&
-        i.addons.map((a) => `${a.option_id}:${Math.max(1, Number(a.qty || 1))}`).sort().join(",") === signature
+      if (editingCartIndex != null && c[editingCartIndex]) {
+        return c.map((item, index) =>
+          index === editingCartIndex
+            ? {
+                product: selectedProduct,
+                qty: detailQty,
+                notes: detailNotes,
+                addons,
+                orderBumpId: detailOrderBumpId,
+                bumpPrice,
+              }
+            : item,
+        );
+      }
+      const ex = c.find(
+        (i) =>
+          i.product.id === selectedProduct.id &&
+          i.notes === detailNotes &&
+          (i.orderBumpId || "") === (detailOrderBumpId || "") &&
+          i.addons
+            .map((a) => `${a.option_id}:${Math.max(1, Number(a.qty || 1))}`)
+            .sort()
+            .join(",") === signature,
       );
       if (ex) return c.map((i) => (i === ex ? { ...i, qty: i.qty + detailQty } : i));
-      return [...c, { product: selectedProduct, qty: detailQty, notes: detailNotes, addons, orderBumpId: detailOrderBumpId, bumpPrice }];
+      return [
+        ...c,
+        {
+          product: selectedProduct,
+          qty: detailQty,
+          notes: detailNotes,
+          addons,
+          orderBumpId: detailOrderBumpId,
+          bumpPrice,
+        },
+      ];
     });
     const addonTotal = addons.reduce(
-      (sum, a) =>
-        sum +
-        Number(a.price || 0) * Math.max(1, Number(a.qty || 1)),
+      (sum, a) => sum + Number(a.price || 0) * Math.max(1, Number(a.qty || 1)),
       0,
     );
     const baseSelectedPrice = Number(
@@ -2183,10 +2575,8 @@ function CustomerHome() {
         ? bumpPrice
         : getEffectivePrice(selectedProduct).price || 0,
     );
-    const selectedUnitPrice = Number(
-      (baseSelectedPrice + addonTotal).toFixed(2),
-    );
-    trackAnalytics("add_to_cart", {
+    const selectedUnitPrice = Number((baseSelectedPrice + addonTotal).toFixed(2));
+    trackAnalytics(editingCartIndex != null ? "cart_item_updated" : "add_to_cart", {
       event_category: "commerce",
       product_id: selectedProduct.id,
       product_name: selectedProduct.name,
@@ -2197,6 +2587,7 @@ function CustomerHome() {
         addons: addons.map((a) => a.name),
         addon_total: Number(addonTotal.toFixed(2)),
         order_bump_id: detailOrderBumpId || null,
+        edit_mode: editingCartIndex != null,
         contents: [
           {
             id: String(selectedProduct.id),
@@ -2206,8 +2597,11 @@ function CustomerHome() {
         ],
       },
     });
-    toast.success(`${selectedProduct.name} adicionado`);
+    toast.success(
+      editingCartIndex != null ? "Item atualizado na sacola" : `${selectedProduct.name} adicionado`,
+    );
     setDetailOrderBumpId(null);
+    setEditingCartIndex(null);
     setView(detailReturnView);
   }
 
@@ -2222,12 +2616,13 @@ function CustomerHome() {
     const bumpPrice = bump.price_override == null ? null : Number(bump.price_override);
     setCart((current) => {
       const existing = current.find((i) => i.orderBumpId === bump.id);
-      if (existing) return current.map((i) => i === existing ? { ...i, qty: i.qty + 1 } : i);
-      return [...current, { product, qty: 1, notes: "", addons: [], orderBumpId: bump.id, bumpPrice }];
+      if (existing) return current.map((i) => (i === existing ? { ...i, qty: i.qty + 1 } : i));
+      return [
+        ...current,
+        { product, qty: 1, notes: "", addons: [], orderBumpId: bump.id, bumpPrice },
+      ];
     });
-    const trackedBumpPrice = Number(
-      bumpPrice ?? getEffectivePrice(product).price ?? 0,
-    );
+    const trackedBumpPrice = Number(bumpPrice ?? getEffectivePrice(product).price ?? 0);
     trackAnalytics("order_bump_added", {
       event_category: "commerce",
       product_id: product.id,
@@ -2250,11 +2645,40 @@ function CustomerHome() {
     toast.success(`${product.name} adicionado à sacola`);
   }
 
-  const changeQty = (idx: number, d: number) =>
-    setCart((c) => c.map((i, ix) => (ix === idx ? { ...i, qty: Math.max(0, i.qty + d) } : i)).filter((i) => i.qty > 0));
+  const changeQty = (idx: number, d: number) => {
+    const item = cart[idx];
+    if (item) {
+      trackAnalytics("cart_quantity_changed", {
+        event_category: "commerce",
+        product_id: item.product.id,
+        product_name: item.product.name,
+        quantity: Math.max(0, item.qty + d),
+        value: Number(cartUnitPrice(item).toFixed(2)),
+        properties: metaCommerceProperties({ direction: d > 0 ? "increase" : "decrease" }),
+      });
+    }
+    setCart((c) =>
+      c
+        .map((i, ix) => (ix === idx ? { ...i, qty: Math.max(0, i.qty + d) } : i))
+        .filter((i) => i.qty > 0),
+    );
+  };
   const updateNotes = (idx: number, notes: string) =>
     setCart((c) => c.map((i, ix) => (ix === idx ? { ...i, notes } : i)));
-  const removeItem = (idx: number) => setCart((c) => c.filter((_, ix) => ix !== idx));
+  const removeItem = (idx: number) => {
+    const item = cart[idx];
+    if (item) {
+      trackAnalytics("remove_from_cart", {
+        event_category: "commerce",
+        product_id: item.product.id,
+        product_name: item.product.name,
+        quantity: item.qty,
+        value: Number((cartUnitPrice(item) * item.qty).toFixed(2)),
+        properties: metaCommerceProperties(),
+      });
+    }
+    setCart((c) => c.filter((_, ix) => ix !== idx));
+  };
 
   function requestPlaceOrder() {
     const storeOpenNow = isStoreOpenByBusinessHours(publicStoreStatus);
@@ -2282,10 +2706,16 @@ function CustomerHome() {
   async function placeOrder(reservationConfirmedNow = false, forcedPaymentChoice?: PaymentChoice) {
     const selectedPaymentChoice = forcedPaymentChoice || paymentChoice;
     const selectedProvider: CheckoutPayment = paymentProvider;
-    const selectedOnlineAvailable = selectedPaymentChoice === "online_pix" ? pixPaymentAvailable : selectedPaymentChoice === "online_card" ? cardPaymentAvailable : false;
+    const selectedOnlineAvailable =
+      selectedPaymentChoice === "online_pix"
+        ? pixPaymentAvailable
+        : selectedPaymentChoice === "online_card"
+          ? cardPaymentAvailable
+          : false;
     if (!cart.length) return toast.error("Seu carrinho está vazio");
     if (!form.name || !form.phone) return toast.error("Preencha nome e telefone");
-    if (isDelivery && (!form.street || !form.number || !form.neighborhood)) return toast.error("Preencha rua, número e bairro");
+    if (isDelivery && (!form.street || !form.number || !form.neighborhood))
+      return toast.error("Preencha rua, número e bairro");
     const storeOpenNow = isStoreOpenByBusinessHours(publicStoreStatus);
     if (!storeOpenNow) {
       if (publicStoreStatus?.closed_reservations_enabled !== true) {
@@ -2302,24 +2732,48 @@ function CustomerHome() {
         return;
       }
     }
-    if (isDelivery && areaStatus !== "supported") return toast.error("Valide sua área de entrega antes de finalizar");
+    if (isDelivery && areaStatus !== "supported")
+      return toast.error("Valide sua área de entrega antes de finalizar");
     if (isDelivery && outsideDeliveryHours && !schedulingEnabled) {
       return toast.error(deliveryWindowMessage());
     }
     if (isDelivery && outsideDeliveryHours && schedulingEnabled && !scheduleAccepted) {
-      return toast.error("Confirme o agendamento para o próximo horário disponível antes de finalizar.");
+      return toast.error(
+        "Confirme o agendamento para o próximo horário disponível antes de finalizar.",
+      );
     }
-    if ((selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card") && !selectedOnlineAvailable) return toast.error("Esta forma de pagamento online está indisponível no momento");
-    if ((selectedPaymentChoice === "delivery_card" || selectedPaymentChoice === "delivery_pix") && !isDelivery) return toast.error("Pagamento na entrega só está disponível quando você escolhe entrega.");
-    if (selectedPaymentChoice === "delivery_card" && (!payOnDeliveryEnabled || !payOnDeliveryCardEnabled)) return toast.error("Cartão na entrega está indisponível.");
-    if (selectedPaymentChoice === "delivery_pix" && (!payOnDeliveryEnabled || !payOnDeliveryPixEnabled)) return toast.error("Pix na entrega está indisponível.");
+    if (
+      (selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card") &&
+      !selectedOnlineAvailable
+    )
+      return toast.error("Esta forma de pagamento online está indisponível no momento");
+    if (
+      (selectedPaymentChoice === "delivery_card" || selectedPaymentChoice === "delivery_pix") &&
+      !isDelivery
+    )
+      return toast.error("Pagamento na entrega só está disponível quando você escolhe entrega.");
+    if (
+      selectedPaymentChoice === "delivery_card" &&
+      (!payOnDeliveryEnabled || !payOnDeliveryCardEnabled)
+    )
+      return toast.error("Cartão na entrega está indisponível.");
+    if (
+      selectedPaymentChoice === "delivery_pix" &&
+      (!payOnDeliveryEnabled || !payOnDeliveryPixEnabled)
+    )
+      return toast.error("Pix na entrega está indisponível.");
 
     trackAnalytics("checkout_started", {
-      event_category: "commerce", value: total, customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card" ? selectedProvider : selectedPaymentChoice,
+      event_category: "commerce",
+      value: total,
+      customer_name: form.name,
+      customer_phone: onlyDigits(form.phone),
+      payment_method:
+        selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card"
+          ? selectedProvider
+          : selectedPaymentChoice,
       properties: metaCommerceProperties({
-        reservation:
-          !isStoreOpenByBusinessHours(publicStoreStatus) &&
-          closedStoreReservationMode,
+        reservation: !isStoreOpenByBusinessHours(publicStoreStatus) && closedStoreReservationMode,
         reservation_date: reservationDate || null,
         cep_prefix: onlyDigits(form.cep).slice(0, 5),
       }),
@@ -2340,23 +2794,45 @@ function CustomerHome() {
           address_cep: isDelivery ? form.cep || null : null,
           payment_kind: selectedPaymentChoice,
           scheduled: isDelivery && outsideDeliveryHours && schedulingEnabled && scheduleAccepted,
-          store_reservation: !storeOpenNow && publicStoreStatus?.closed_reservations_enabled === true && closedStoreReservationMode,
+          store_reservation:
+            !storeOpenNow &&
+            publicStoreStatus?.closed_reservations_enabled === true &&
+            closedStoreReservationMode,
           reservation_date: !storeOpenNow && closedStoreReservationMode ? reservationDate : null,
-          reservation_acknowledged: !storeOpenNow && closedStoreReservationMode ? reservationConfirmedNow === true : false,
+          reservation_acknowledged:
+            !storeOpenNow && closedStoreReservationMode ? reservationConfirmedNow === true : false,
           coupon_code: appliedCoupon?.code || null,
           access_token: customerSession?.access_token || null,
           items: cart.map((i) => ({
             product_id: i.product.id,
             qty: i.qty,
             notes: i.notes || null,
-            addons: i.addons.map((a) => ({ option_id: a.option_id, qty: Math.max(1, Number(a.qty || 1)) })),
+            addons: i.addons.map((a) => ({
+              option_id: a.option_id,
+              qty: Math.max(1, Number(a.qty || 1)),
+            })),
             order_bump_id: i.orderBumpId || null,
           })),
         },
       });
       if (created?.error) throw new Error(created.error);
       if (!created?.checkout?.id) throw new Error("Checkout não criado");
-      trackAnalytics("checkout_created", { event_category: "commerce", checkout_id: String(created.checkout.id), order_id: created?.order_id ? String(created.order_id) : null, customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card" ? selectedProvider : selectedPaymentChoice, value: Number(created.checkout.total || total), properties: { pay_on_delivery: Boolean(created?.pay_on_delivery), provider: created.checkout.payment_provider || selectedProvider } });
+      trackAnalytics("checkout_created", {
+        event_category: "commerce",
+        checkout_id: String(created.checkout.id),
+        order_id: created?.order_id ? String(created.order_id) : null,
+        customer_name: form.name,
+        customer_phone: onlyDigits(form.phone),
+        payment_method:
+          selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card"
+            ? selectedProvider
+            : selectedPaymentChoice,
+        value: Number(created.checkout.total || total),
+        properties: {
+          pay_on_delivery: Boolean(created?.pay_on_delivery),
+          provider: created.checkout.payment_provider || selectedProvider,
+        },
+      });
 
       if (created?.pay_on_delivery && created?.order_id) {
         trackAnalytics("purchase", {
@@ -2365,9 +2841,7 @@ function CustomerHome() {
           order_id: String(created.order_id),
           customer_name: form.name,
           customer_phone: onlyDigits(form.phone),
-          payment_method: String(
-            created.payment_method || selectedPaymentChoice,
-          ),
+          payment_method: String(created.payment_method || selectedPaymentChoice),
           value: Number(created.checkout.total || total),
           quantity: metaCartItemCount(),
           properties: metaCommerceProperties({
@@ -2385,10 +2859,16 @@ function CustomerHome() {
 
       const rawProvider = String(created.checkout.payment_provider || "");
       if (!["mercadopago", "pagarme", "efi"].includes(rawProvider)) {
-        throw new Error("O checkout configurado não é compatível. Selecione Mercado Pago, Efí ou Pagar.me nas configurações.");
+        throw new Error(
+          "O checkout configurado não é compatível. Selecione Mercado Pago, Efí ou Pagar.me nas configurações.",
+        );
       }
       const provider = rawProvider as CheckoutPayment;
-      const onlineMethod: "pix" | "card" = String(created.checkout.payment_kind || "").endsWith("_card") ? "card" : "pix";
+      const onlineMethod: "pix" | "card" = String(created.checkout.payment_kind || "").endsWith(
+        "_card",
+      )
+        ? "card"
+        : "pix";
       if (provider === "pagarme") {
         setPaymentProvider("pagarme");
         setForm((current) => ({ ...current, payment: "pagarme" }));
@@ -2400,7 +2880,11 @@ function CustomerHome() {
           quantity: metaCartItemCount(),
           properties: metaCommerceProperties({ provider: "pagarme" }),
         });
-        setPagarmeCheckout({ id: String(created.checkout.id), total: Number(created.checkout.total || total), method: onlineMethod });
+        setPagarmeCheckout({
+          id: String(created.checkout.id),
+          total: Number(created.checkout.total || total),
+          method: onlineMethod,
+        });
         scrollToCheckoutSection("payment-section");
         return;
       }
@@ -2409,10 +2893,18 @@ function CustomerHome() {
         setPaymentProvider("efi");
         setForm((current) => ({ ...current, payment: "efi" }));
         trackAnalytics("payment_started", {
-          event_category: "payment", checkout_id: String(created.checkout.id), payment_method: onlineMethod,
-          value: Number(created.checkout.total || total), quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: "efi" }),
+          event_category: "payment",
+          checkout_id: String(created.checkout.id),
+          payment_method: onlineMethod,
+          value: Number(created.checkout.total || total),
+          quantity: metaCartItemCount(),
+          properties: metaCommerceProperties({ provider: "efi" }),
         });
-        setEfiCheckout({ id: String(created.checkout.id), total: Number(created.checkout.total || total), method: onlineMethod });
+        setEfiCheckout({
+          id: String(created.checkout.id),
+          total: Number(created.checkout.total || total),
+          method: onlineMethod,
+        });
         scrollToCheckoutSection("payment-section");
         return;
       }
@@ -2430,7 +2922,11 @@ function CustomerHome() {
             provider: "mercadopago",
           }),
         });
-        setMpCheckout({ id: String(created.checkout.id), total: Number(created.checkout.total || total), method: onlineMethod });
+        setMpCheckout({
+          id: String(created.checkout.id),
+          total: Number(created.checkout.total || total),
+          method: onlineMethod,
+        });
         scrollToCheckoutSection("payment-section");
         return;
       }
@@ -2439,7 +2935,15 @@ function CustomerHome() {
     } catch (err: any) {
       console.error(err);
       const message = String(err?.message || "Não foi possível iniciar o pagamento.");
-      trackAnalytics("checkout_error", { event_category: "error", value: total, payment_method: selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card" ? selectedProvider : selectedPaymentChoice, properties: { message: message.slice(0,300) } });
+      trackAnalytics("checkout_error", {
+        event_category: "error",
+        value: total,
+        payment_method:
+          selectedPaymentChoice === "online_pix" || selectedPaymentChoice === "online_card"
+            ? selectedProvider
+            : selectedPaymentChoice,
+        properties: { message: message.slice(0, 300) },
+      });
       if (/fora da área|fora da area|bairro|entrega/i.test(message)) void redirectOutsideArea();
       toast.error(message);
     } finally {
@@ -2451,7 +2955,12 @@ function CustomerHome() {
     if (!pagarmeCheckout) return;
     try {
       const { cancelSiteCheckout } = await import("@/lib/site-checkout.functions");
-      await cancelSiteCheckout({ data: { checkoutId: pagarmeCheckout.id, access_token: customerSession?.access_token || null } });
+      await cancelSiteCheckout({
+        data: {
+          checkoutId: pagarmeCheckout.id,
+          access_token: customerSession?.access_token || null,
+        },
+      });
     } catch {}
     setPagarmeCheckout(null);
   }
@@ -2460,7 +2969,15 @@ function CustomerHome() {
     const checkoutId = pagarmeCheckout?.id || "";
     if (orderId) {
       trackAnalytics("purchase", {
-        event_category: "commerce", checkout_id: checkoutId, order_id: String(orderId), customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: pagarmeCheckout?.method || "card", value: Number(pagarmeCheckout?.total || total), quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: "pagarme" }),
+        event_category: "commerce",
+        checkout_id: checkoutId,
+        order_id: String(orderId),
+        customer_name: form.name,
+        customer_phone: onlyDigits(form.phone),
+        payment_method: pagarmeCheckout?.method || "card",
+        value: Number(pagarmeCheckout?.total || total),
+        quantity: metaCartItemCount(),
+        properties: metaCommerceProperties({ provider: "pagarme" }),
       });
       pushMyOrder(String(orderId));
       void refreshActiveOrders();
@@ -2474,7 +2991,9 @@ function CustomerHome() {
     if (!efiCheckout) return;
     try {
       const { cancelSiteCheckout } = await import("@/lib/site-checkout.functions");
-      await cancelSiteCheckout({ data: { checkoutId: efiCheckout.id, access_token: customerSession?.access_token || null } });
+      await cancelSiteCheckout({
+        data: { checkoutId: efiCheckout.id, access_token: customerSession?.access_token || null },
+      });
     } catch {}
     setEfiCheckout(null);
   }
@@ -2482,7 +3001,17 @@ function CustomerHome() {
   function finishEfi(orderId?: string | null) {
     const checkoutId = efiCheckout?.id || "";
     if (orderId) {
-      trackAnalytics("purchase", { event_category: "commerce", checkout_id: checkoutId, order_id: String(orderId), customer_name: form.name, customer_phone: onlyDigits(form.phone), payment_method: efiCheckout?.method || "card", value: Number(efiCheckout?.total || total), quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: "efi" }) });
+      trackAnalytics("purchase", {
+        event_category: "commerce",
+        checkout_id: checkoutId,
+        order_id: String(orderId),
+        customer_name: form.name,
+        customer_phone: onlyDigits(form.phone),
+        payment_method: efiCheckout?.method || "card",
+        value: Number(efiCheckout?.total || total),
+        quantity: metaCartItemCount(),
+        properties: metaCommerceProperties({ provider: "efi" }),
+      });
       pushMyOrder(String(orderId));
       void refreshActiveOrders();
     }
@@ -2496,7 +3025,9 @@ function CustomerHome() {
     if (currentId) {
       try {
         const { cancelSiteCheckout } = await import("@/lib/site-checkout.functions");
-        await cancelSiteCheckout({ data: { checkoutId: currentId, access_token: customerSession?.access_token || null } });
+        await cancelSiteCheckout({
+          data: { checkoutId: currentId, access_token: customerSession?.access_token || null },
+        });
       } catch {}
     }
     setPagarmeCheckout(null);
@@ -2510,7 +3041,9 @@ function CustomerHome() {
     if (!mpCheckout) return;
     try {
       const { cancelSiteCheckout } = await import("@/lib/site-checkout.functions");
-      await cancelSiteCheckout({ data: { checkoutId: mpCheckout.id, access_token: customerSession?.access_token || null } });
+      await cancelSiteCheckout({
+        data: { checkoutId: mpCheckout.id, access_token: customerSession?.access_token || null },
+      });
     } catch {}
     setMpCheckout(null);
   }
@@ -2567,7 +3100,9 @@ function CustomerHome() {
             {activeOrderStatusLabel(currentActiveOrder.status)}
             {activeOrders.length > 1 ? ` • +${activeOrders.length - 1} pedido(s)` : ""}
           </p>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">Toque para acompanhar em tempo real.</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            Toque para acompanhar em tempo real.
+          </p>
         </div>
         <ChevronRight className="size-5 shrink-0 text-amber-700" />
       </div>
@@ -2579,7 +3114,9 @@ function CustomerHome() {
       <div className="grid min-h-screen place-items-center bg-[#f7f7f7] px-6">
         <div className="text-center">
           <Loader2 className="mx-auto size-7 animate-spin text-primary" />
-          <p className="mt-3 text-sm font-semibold text-muted-foreground">Carregando o cardápio...</p>
+          <p className="mt-3 text-sm font-semibold text-muted-foreground">
+            Carregando o cardápio...
+          </p>
         </div>
       </div>
     );
@@ -2589,12 +3126,24 @@ function CustomerHome() {
     return (
       <div className="grid min-h-screen place-items-center bg-[#f7f7f7] px-5">
         <div className="w-full max-w-md rounded-[32px] border bg-white p-7 text-center shadow-xl">
-          <img src={HOTBOX_LOGO_URL} alt="HotBox Delivery" className="mx-auto h-24 w-24 rounded-3xl object-contain shadow-sm" />
-          <h1 className="mt-5 font-display text-3xl font-black">Cardápio temporariamente indisponível</h1>
+          <img
+            src={HOTBOX_LOGO_URL}
+            alt="HotBox Delivery"
+            className="mx-auto h-24 w-24 rounded-3xl object-contain shadow-sm"
+          />
+          <h1 className="mt-5 font-display text-3xl font-black">
+            Cardápio temporariamente indisponível
+          </h1>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            Nosso atendimento pelo WhatsApp continua funcionando normalmente. Fale com a Hotbox e fazemos seu pedido por lá.
+            Nosso atendimento pelo WhatsApp continua funcionando normalmente. Fale com a Hotbox e
+            fazemos seu pedido por lá.
           </p>
-          <a href={WHATSAPP_URL} target="_blank" rel="noreferrer" className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#25D366] px-5 py-3.5 text-sm font-black text-white">
+          <a
+            href={WHATSAPP_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#25D366] px-5 py-3.5 text-sm font-black text-white"
+          >
             <MessageCircle className="size-5" /> Pedir pelo WhatsApp
           </a>
         </div>
@@ -2602,10 +3151,12 @@ function CustomerHome() {
     );
   }
 
-  const reservationEntryModal = (showReservationEntryModal && (
+  const reservationEntryModal = showReservationEntryModal && (
     <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/65 px-4">
       <div className="w-full max-w-md rounded-[28px] border-2 border-amber-400 bg-white p-6 shadow-2xl">
-        <div className="mx-auto grid size-14 place-items-center rounded-full bg-amber-100 text-3xl">🗓️</div>
+        <div className="mx-auto grid size-14 place-items-center rounded-full bg-amber-100 text-3xl">
+          🗓️
+        </div>
         <p className="mt-4 text-center text-xs font-black uppercase tracking-[0.16em] text-amber-700">
           Reserva HotBox
         </p>
@@ -2616,7 +3167,9 @@ function CustomerHome() {
           Você pode continuar e reservar seu pedido para o próximo dia de funcionamento.
         </p>
         <div className="mt-5">
-          <Label htmlFor="reservation-date" className="font-black">Escolha a data da reserva</Label>
+          <Label htmlFor="reservation-date" className="font-black">
+            Escolha a data da reserva
+          </Label>
           <Input
             id="reservation-date"
             type="date"
@@ -2669,12 +3222,14 @@ function CustomerHome() {
         </div>
       </div>
     </div>
-  ));
+  );
 
-  const reservationPaymentConfirmModal = (showReservationPaymentConfirm && (
+  const reservationPaymentConfirmModal = showReservationPaymentConfirm && (
     <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/65 px-4">
       <div className="w-full max-w-md rounded-[28px] border-2 border-amber-400 bg-white p-6 shadow-2xl">
-        <div className="mx-auto grid size-14 place-items-center rounded-full bg-amber-100 text-3xl">⚠️</div>
+        <div className="mx-auto grid size-14 place-items-center rounded-full bg-amber-100 text-3xl">
+          ⚠️
+        </div>
         <p className="mt-4 text-center text-xs font-black uppercase tracking-[0.16em] text-amber-700">
           Confirmação de agendamento
         </p>
@@ -2682,19 +3237,28 @@ function CustomerHome() {
           Confirme antes de pagar
         </h2>
         <p className="mt-3 text-center text-sm leading-relaxed text-zinc-700">
-          Você está finalizando um <strong>PEDIDO AGENDADO / RESERVADO</strong>.
-          O pagamento será feito agora, mas a entrega acontecerá posteriormente, dentro do horário de funcionamento.
+          Você está finalizando um <strong>PEDIDO AGENDADO / RESERVADO</strong>. O pagamento será
+          feito agora, mas a entrega acontecerá posteriormente, dentro do horário de funcionamento.
         </p>
         {reservationDate && (
           <div className="mt-4 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 text-center">
-            <p className="text-xs font-bold uppercase tracking-wide text-zinc-500">Data escolhida</p>
-            <p className="mt-1 text-base font-black text-zinc-950">{formatReservationDate(reservationDate)}</p>
+            <p className="text-xs font-bold uppercase tracking-wide text-zinc-500">
+              Data escolhida
+            </p>
+            <p className="mt-1 text-base font-black text-zinc-950">
+              {formatReservationDate(reservationDate)}
+            </p>
           </div>
         )}
         <div className="mt-4 rounded-2xl border border-amber-300 bg-amber-50 p-4">
           <p className="text-sm font-black text-amber-950">Importante</p>
           <p className="mt-1 text-sm leading-relaxed text-amber-900">
-            A <strong>HotBox irá fazer contato antes da entrega para confirmar a entrega e o horário com você</strong>.
+            A{" "}
+            <strong>
+              HotBox irá fazer contato antes da entrega para confirmar a entrega e o horário com
+              você
+            </strong>
+            .
           </p>
         </div>
         <div className="mt-5 grid gap-2">
@@ -2720,7 +3284,7 @@ function CustomerHome() {
         </div>
       </div>
     </div>
-  ));
+  );
 
   if (view === "detail") {
     if (!selectedProduct) {
@@ -2728,8 +3292,9 @@ function CustomerHome() {
       return null;
     }
 
-    const productGroups = (addonGroupsByProduct[selectedProduct.id] || [])
-      .filter((group) => group.active === true);
+    const productGroups = (addonGroupsByProduct[selectedProduct.id] || []).filter(
+      (group) => group.active === true,
+    );
     const effective = getEffectivePrice(selectedProduct);
     const selectedAddons = selectedDetailAddons(selectedProduct.id);
     const addonsUnitTotal = selectedAddons.reduce(
@@ -2754,6 +3319,7 @@ function CustomerHome() {
             type="button"
             onClick={() => {
               setDetailOrderBumpId(null);
+              setEditingCartIndex(null);
               setView(detailReturnView);
             }}
             className="grid size-10 place-items-center rounded-full border bg-white"
@@ -2794,6 +3360,7 @@ function CustomerHome() {
                     src={selectedProduct.image_url}
                     alt={selectedProduct.name}
                     className="h-[82%] w-[82%] object-contain"
+                    priority
                   />
                 </div>
               ) : (
@@ -2801,10 +3368,15 @@ function CustomerHome() {
                   src={selectedProduct.image_url}
                   alt={selectedProduct.name}
                   className="h-[300px] w-full object-cover sm:h-[380px]"
+                  loading="eager"
+                  decoding="async"
+                  fetchPriority="high"
                 />
               )
             ) : (
-              <div className="grid h-64 place-items-center bg-muted text-sm text-muted-foreground">Sem foto</div>
+              <div className="grid h-64 place-items-center bg-muted text-sm text-muted-foreground">
+                Sem foto
+              </div>
             )}
           </div>
 
@@ -2813,31 +3385,45 @@ function CustomerHome() {
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <h1 className="font-display text-2xl font-black uppercase leading-tight">{selectedProduct.name}</h1>
+                    <h1 className="font-display text-2xl font-black uppercase leading-tight">
+                      {selectedProduct.name}
+                    </h1>
                     {selectedProduct.is_combo && (
-                      <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-800">COMBO</span>
+                      <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-800">
+                        COMBO
+                      </span>
                     )}
                   </div>
                   {selectedProduct.description && (
-                    <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{selectedProduct.description}</p>
+                    <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                      {selectedProduct.description}
+                    </p>
                   )}
                 </div>
                 {!selectedProduct.active && (
-                  <span className="shrink-0 rounded-full bg-zinc-200 px-3 py-1 text-[10px] font-black uppercase text-zinc-700">Esgotado</span>
+                  <span className="shrink-0 rounded-full bg-zinc-200 px-3 py-1 text-[10px] font-black uppercase text-zinc-700">
+                    Esgotado
+                  </span>
                 )}
               </div>
 
               <div className="mt-4">
                 {effective.isPromotion ? (
                   <div className="flex items-baseline gap-2">
-                    <span className="text-sm text-muted-foreground line-through">{brl(effective.listPrice)}</span>
-                    <span className="text-2xl font-black text-fuchsia-600">{brl(effective.price)}</span>
+                    <span className="text-sm text-muted-foreground line-through">
+                      {brl(effective.listPrice)}
+                    </span>
+                    <span className="text-2xl font-black text-fuchsia-600">
+                      {brl(effective.price)}
+                    </span>
                   </div>
                 ) : (
                   <span className="text-2xl font-black text-primary">{brl(effective.price)}</span>
                 )}
                 {selectedProduct.promotion_label && effective.isPromotion && (
-                  <p className="mt-1 text-[11px] font-bold text-fuchsia-700">{selectedProduct.promotion_label}</p>
+                  <p className="mt-1 text-[11px] font-bold text-fuchsia-700">
+                    {selectedProduct.promotion_label}
+                  </p>
                 )}
               </div>
             </section>
@@ -2845,13 +3431,14 @@ function CustomerHome() {
             {publicReviews.length > 0 && (
               <button
                 type="button"
-                onClick={() => setShowPublicReviews(true)}
+                onClick={() => openReviews("product")}
                 className="flex w-full items-center gap-2 rounded-2xl border border-black/5 bg-white px-3 py-2 shadow-sm transition hover:bg-muted/30"
               >
                 <PublicReviewStars value={publicReviewsAverage} />
                 <span className="text-xs font-black">{publicReviewsAverage.toFixed(1)}</span>
                 <span className="min-w-0 flex-1 truncate text-left text-[11px] text-muted-foreground">
-                  {publicReviews.length} {publicReviews.length === 1 ? "avaliação" : "avaliações"} de clientes
+                  {publicReviews.length} {publicReviews.length === 1 ? "avaliação" : "avaliações"}{" "}
+                  de clientes
                 </span>
                 <span className="shrink-0 text-[11px] font-black text-primary">Ver avaliações</span>
                 <ChevronRight className="size-3.5 shrink-0 text-primary" />
@@ -2863,15 +3450,22 @@ function CustomerHome() {
               const max = Math.max(1, Number(group.max_select || 1));
               const selectedUnits = groupSelectedUnits(group);
               return (
-                <section key={group.id} className="rounded-[26px] border border-black/5 bg-white p-5 shadow-sm">
+                <section
+                  key={group.id}
+                  className="rounded-[26px] border border-black/5 bg-white p-5 shadow-sm"
+                >
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <h2 className="font-black">{group.display_title || group.name}</h2>
                       {(group.display_subtitle || group.description) && (
-                        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{group.display_subtitle || group.description}</p>
+                        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                          {group.display_subtitle || group.description}
+                        </p>
                       )}
                     </div>
-                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-black ${selectedUnits >= min ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
+                    <span
+                      className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-black ${selectedUnits >= min ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}
+                    >
                       {min > 0 ? `${selectedUnits}/${min} mínimo` : `até ${max}`}
                     </span>
                   </div>
@@ -2890,9 +3484,15 @@ function CustomerHome() {
                             className={`flex items-center gap-3 rounded-2xl border p-3 transition ${qty > 0 ? "border-[#ffd400] bg-amber-50/60" : "border-black/5 bg-white"} ${availability.available ? "" : "opacity-50"}`}
                           >
                             {option.image_url ? (
-                              <img src={option.image_url} alt={option.display_name || option.name} className="size-14 shrink-0 rounded-xl object-cover" />
+                              <img
+                                src={option.image_url}
+                                alt={option.display_name || option.name}
+                                className="size-14 shrink-0 rounded-xl object-cover"
+                              />
                             ) : (
-                              <div className="grid size-14 shrink-0 place-items-center rounded-xl bg-zinc-100 text-[10px] text-zinc-400">Extra</div>
+                              <div className="grid size-14 shrink-0 place-items-center rounded-xl bg-zinc-100 text-[10px] text-zinc-400">
+                                Extra
+                              </div>
                             )}
                             <button
                               type="button"
@@ -2900,19 +3500,43 @@ function CustomerHome() {
                               onClick={() => toggleDetailAddon(group, option)}
                               className="min-w-0 flex-1 text-left"
                             >
-                              <p className="text-sm font-bold">{option.display_name || option.name}</p>
+                              <p className="text-sm font-bold">
+                                {option.display_name || option.name}
+                              </p>
                               {(option.display_description || option.description) && (
-                                <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">{option.display_description || option.description}</p>
+                                <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">
+                                  {option.display_description || option.description}
+                                </p>
                               )}
-                              <p className="mt-1 text-xs font-black text-primary">{price > 0 ? `+ ${brl(price)}` : "Sem custo"}</p>
-                              {!availability.available && <p className="mt-1 text-[10px] font-bold text-red-600">{availability.reason}</p>}
+                              <p className="mt-1 text-xs font-black text-primary">
+                                {price > 0 ? `+ ${brl(price)}` : "Sem custo"}
+                              </p>
+                              {!availability.available && (
+                                <p className="mt-1 text-[10px] font-bold text-red-600">
+                                  {availability.reason}
+                                </p>
+                              )}
                             </button>
 
                             {max > 1 && availability.available ? (
                               <div className="flex items-center gap-1 rounded-full border bg-white p-1">
-                                <button type="button" onClick={() => setDetailAddonQuantity(group, option, qty - 1)} className="grid size-7 place-items-center rounded-full"><Minus className="size-3.5" /></button>
-                                <span className="min-w-5 text-center text-xs font-black">{qty}</span>
-                                <button type="button" onClick={() => setDetailAddonQuantity(group, option, qty + 1)} className="grid size-7 place-items-center rounded-full bg-[#ffd400]"><Plus className="size-3.5" /></button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDetailAddonQuantity(group, option, qty - 1)}
+                                  className="grid size-7 place-items-center rounded-full"
+                                >
+                                  <Minus className="size-3.5" />
+                                </button>
+                                <span className="min-w-5 text-center text-xs font-black">
+                                  {qty}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setDetailAddonQuantity(group, option, qty + 1)}
+                                  className="grid size-7 place-items-center rounded-full bg-[#ffd400]"
+                                >
+                                  <Plus className="size-3.5" />
+                                </button>
                               </div>
                             ) : (
                               <button
@@ -2922,7 +3546,11 @@ function CustomerHome() {
                                 className={`grid size-8 shrink-0 place-items-center rounded-full border-2 ${qty > 0 ? "border-[#ffd400] bg-[#ffd400] text-black" : "border-zinc-200 bg-white"}`}
                                 aria-label={qty > 0 ? "Remover adicional" : "Adicionar adicional"}
                               >
-                                {qty > 0 ? <CheckCircle2 className="size-4" /> : <Plus className="size-4" />}
+                                {qty > 0 ? (
+                                  <CheckCircle2 className="size-4" />
+                                ) : (
+                                  <Plus className="size-4" />
+                                )}
                               </button>
                             )}
                           </div>
@@ -2934,7 +3562,9 @@ function CustomerHome() {
             })}
 
             <section className="rounded-[26px] border border-black/5 bg-white p-5 shadow-sm">
-              <Label htmlFor="detail-notes" className="font-black">Alguma observação?</Label>
+              <Label htmlFor="detail-notes" className="font-black">
+                Alguma observação?
+              </Label>
               <Textarea
                 id="detail-notes"
                 value={detailNotes}
@@ -2953,7 +3583,7 @@ function CustomerHome() {
           average={publicReviewsAverage}
         />
 
-        <div className="fixed inset-x-0 bottom-0 z-50 border-t bg-white/95 px-4 py-3 backdrop-blur">
+        <div className="hotbox-safe-bottom fixed inset-x-0 bottom-0 z-50 border-t bg-white/95 px-4 py-3 backdrop-blur">
           <div className="mx-auto flex max-w-2xl items-center gap-2 rounded-full bg-[#ffd400] p-1.5 text-black shadow-md">
             <div className="flex shrink-0 items-center rounded-full bg-white/75 p-1">
               <button
@@ -2982,7 +3612,13 @@ function CustomerHome() {
               disabled={!selectedProduct.active}
               className="min-w-0 flex-1 justify-between rounded-full bg-transparent px-3 py-5 text-sm font-black text-black shadow-none hover:bg-black/5 disabled:bg-transparent disabled:text-zinc-500"
             >
-              <span className="truncate">{selectedProduct.active ? "Adicionar à sacola" : "Esgotado por hoje"}</span>
+              <span className="truncate">
+                {selectedProduct.active
+                  ? editingCartIndex != null
+                    ? "Salvar alterações"
+                    : "Adicionar à sacola"
+                  : "Esgotado por hoje"}
+              </span>
               <span className="shrink-0">{brl(detailTotal)}</span>
             </Button>
           </div>
@@ -3005,10 +3641,15 @@ function CustomerHome() {
 
         <div className="mx-auto max-w-2xl space-y-3 px-4 py-4">
           {!cart.length ? (
-            <p className="py-16 text-center text-sm text-muted-foreground">Seu carrinho está vazio.</p>
+            <p className="py-16 text-center text-sm text-muted-foreground">
+              Seu carrinho está vazio.
+            </p>
           ) : (
             cart.map((i, idx) => (
-              <div key={idx} className="rounded-2xl border bg-card p-3">
+              <div
+                key={`${i.product.id}-${i.orderBumpId || "regular"}-${idx}`}
+                className="rounded-[24px] border border-black/5 bg-white p-3.5 shadow-sm"
+              >
                 <div className="flex gap-3">
                   {i.product.image_url ? (
                     isBeverageProduct(i.product) ? (
@@ -3023,7 +3664,9 @@ function CustomerHome() {
                       <img
                         src={i.product.image_url}
                         alt={i.product.name}
-                        className="size-24 shrink-0 rounded-2xl object-contain"
+                        className="size-24 shrink-0 rounded-2xl object-cover"
+                        loading="lazy"
+                        decoding="async"
                       />
                     )
                   ) : (
@@ -3034,30 +3677,63 @@ function CustomerHome() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-start justify-between gap-2">
                       <h4 className="font-bold uppercase leading-tight">{i.product.name}</h4>
-                      <button
-                        onClick={() => removeItem(idx)}
-                        className="shrink-0 text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="size-4" />
-                      </button>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => openCartItemForEdit(idx)}
+                          className="grid size-9 place-items-center rounded-full bg-amber-50 text-amber-800 transition hover:bg-amber-100"
+                          aria-label={`Editar ${i.product.name}`}
+                        >
+                          <Pencil className="size-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeItem(idx)}
+                          className="grid size-9 place-items-center rounded-full text-muted-foreground transition hover:bg-red-50 hover:text-destructive"
+                          aria-label={`Remover ${i.product.name} da sacola`}
+                        >
+                          <Trash2 className="size-4" />
+                        </button>
+                      </div>
                     </div>
                     <p className="mt-0.5 font-black text-primary">{brl(cartUnitPrice(i))}</p>
-                    {i.orderBumpId && <span className="mt-1 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black uppercase text-amber-800">Oferta especial</span>}
+                    {i.orderBumpId && (
+                      <span className="mt-1 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black uppercase text-amber-800">
+                        Oferta especial
+                      </span>
+                    )}
                     {i.addons.length > 0 && (
                       <div className="mt-2 space-y-1">
                         {i.addons.map((addon) => (
                           <p key={addon.option_id} className="text-xs text-muted-foreground">
-                            + {Math.max(1, Number(addon.qty || 1)) > 1 ? `${Math.max(1, Number(addon.qty || 1))}x ` : ""}{addon.name}{Number(addon.price || 0) > 0 ? ` • ${brl(Number(addon.price) * Math.max(1, Number(addon.qty || 1)))}` : ""}
+                            +{" "}
+                            {Math.max(1, Number(addon.qty || 1)) > 1
+                              ? `${Math.max(1, Number(addon.qty || 1))}x `
+                              : ""}
+                            {addon.name}
+                            {Number(addon.price || 0) > 0
+                              ? ` • ${brl(Number(addon.price) * Math.max(1, Number(addon.qty || 1)))}`
+                              : ""}
                           </p>
                         ))}
                       </div>
                     )}
                     <div className="mt-1.5 flex w-fit items-center gap-3 rounded-full border px-2.5 py-1">
-                      <button onClick={() => changeQty(idx, -1)} className="grid size-5 place-items-center">
+                      <button
+                        type="button"
+                        onClick={() => changeQty(idx, -1)}
+                        className="grid size-8 place-items-center rounded-full"
+                        aria-label={`Diminuir quantidade de ${i.product.name}`}
+                      >
                         <Minus className="size-3.5" />
                       </button>
                       <span className="w-4 text-center text-sm font-bold">{i.qty}</span>
-                      <button onClick={() => changeQty(idx, 1)} className="grid size-5 place-items-center">
+                      <button
+                        type="button"
+                        onClick={() => changeQty(idx, 1)}
+                        className="grid size-8 place-items-center rounded-full bg-[#ffd400]"
+                        aria-label={`Aumentar quantidade de ${i.product.name}`}
+                      >
                         <Plus className="size-3.5" />
                       </button>
                     </div>
@@ -3066,6 +3742,7 @@ function CustomerHome() {
                 <Input
                   className="mt-2.5 rounded-full text-sm"
                   placeholder="Observações"
+                  aria-label={`Observações para ${i.product.name}`}
                   value={i.notes}
                   onChange={(e) => updateNotes(idx, e.target.value)}
                 />
@@ -3073,55 +3750,100 @@ function CustomerHome() {
             ))
           )}
 
-          {cart.length > 0 && orderBumps.filter((b) =>
-            b.placement === "cart" &&
-            !cart.some((i) => String(i.product.id) === String(b.product_id))
-          ).slice(0, 3).length > 0 && (
-            <div className="rounded-3xl border-2 border-amber-300 bg-gradient-to-br from-amber-50 to-orange-50 p-4 shadow-sm">
-              <div className="mb-3 flex items-start gap-2">
-                <Flame className="mt-0.5 size-5 text-orange-600" />
-                <div>
-                  <p className="font-black">Complete seu pedido 🔥</p>
-                  <p className="text-xs text-muted-foreground">Pequenos extras que combinam com o que você escolheu.</p>
+          {cart.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setView("list")}
+              className="flex w-full items-center justify-center gap-2 rounded-full border border-black/10 bg-white px-4 py-3 text-sm font-black transition hover:border-amber-400 hover:bg-amber-50"
+              data-analytics="continue-shopping"
+            >
+              <Plus className="size-4" /> Continuar comprando
+            </button>
+          )}
+
+          {cart.length > 0 &&
+            orderBumps
+              .filter(
+                (b) =>
+                  b.placement === "cart" &&
+                  !cart.some((i) => String(i.product.id) === String(b.product_id)),
+              )
+              .slice(0, 3).length > 0 && (
+              <div className="rounded-3xl border-2 border-amber-300 bg-gradient-to-br from-amber-50 to-orange-50 p-4 shadow-sm">
+                <div className="mb-3 flex items-start gap-2">
+                  <Flame className="mt-0.5 size-5 text-orange-600" />
+                  <div>
+                    <p className="font-black">Complete seu pedido 🔥</p>
+                    <p className="text-xs text-muted-foreground">
+                      Pequenos extras que combinam com o que você escolheu.
+                    </p>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {orderBumps
+                    .filter(
+                      (b) =>
+                        b.placement === "cart" &&
+                        !cart.some((i) => String(i.product.id) === String(b.product_id)),
+                    )
+                    .slice(0, 3)
+                    .map((bump) => {
+                      const product = products.find(
+                        (p) => String(p.id) === String(bump.product_id),
+                      );
+                      if (!product) return null;
+                      const bumpPrice =
+                        bump.price_override == null
+                          ? getEffectivePrice(product).price
+                          : Number(bump.price_override);
+                      return (
+                        <div
+                          key={bump.id}
+                          className="flex items-center gap-3 rounded-2xl border bg-white p-3"
+                        >
+                          {product.image_url ? (
+                            <div className="grid size-14 shrink-0 place-items-center overflow-hidden rounded-xl border border-black/5 bg-white">
+                              {isBeverageProduct(product) ? (
+                                <NormalizedBeverageImage
+                                  src={product.image_url}
+                                  alt={product.name}
+                                  className="size-12 object-contain"
+                                />
+                              ) : (
+                                <img
+                                  src={product.image_url}
+                                  alt={product.name}
+                                  className="size-full object-cover"
+                                />
+                              )}
+                            </div>
+                          ) : (
+                            <div className="size-14 rounded-xl bg-muted" />
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-black uppercase text-amber-700">
+                              {bump.title}
+                            </p>
+                            <p className="truncate text-sm font-black">{product.name}</p>
+                            {bump.subtitle && (
+                              <p className="truncate text-[11px] text-muted-foreground">
+                                {bump.subtitle}
+                              </p>
+                            )}
+                          </div>
+                          <Button
+                            size="sm"
+                            className="shrink-0 rounded-full bg-amber-500 font-black text-white hover:bg-amber-600"
+                            onClick={() => addOrderBump(bump)}
+                          >
+                            + {brl(bumpPrice)}
+                          </Button>
+                        </div>
+                      );
+                    })}
                 </div>
               </div>
-              <div className="space-y-2">
-                {orderBumps.filter((b) =>
-                  b.placement === "cart" &&
-                  !cart.some((i) => String(i.product.id) === String(b.product_id))
-                ).slice(0, 3).map((bump) => {
-                  const product = products.find((p) => String(p.id) === String(bump.product_id));
-                  if (!product) return null;
-                  const bumpPrice = bump.price_override == null ? getEffectivePrice(product).price : Number(bump.price_override);
-                  return (
-                    <div key={bump.id} className="flex items-center gap-3 rounded-2xl border bg-white p-3">
-                      {product.image_url ? (
-                        <div className="grid size-14 shrink-0 place-items-center overflow-hidden rounded-xl border border-black/5 bg-white">
-                          {isBeverageProduct(product) ? (
-                            <NormalizedBeverageImage
-                              src={product.image_url}
-                              alt={product.name}
-                              className="size-12 object-contain"
-                            />
-                          ) : (
-                            <img src={product.image_url} alt={product.name} className="size-full object-cover" />
-                          )}
-                        </div>
-                      ) : <div className="size-14 rounded-xl bg-muted" />}
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-black uppercase text-amber-700">{bump.title}</p>
-                        <p className="truncate text-sm font-black">{product.name}</p>
-                        {bump.subtitle && <p className="truncate text-[11px] text-muted-foreground">{bump.subtitle}</p>}
-                      </div>
-                      <Button size="sm" className="shrink-0 rounded-full bg-amber-500 font-black text-white hover:bg-amber-600" onClick={() => addOrderBump(bump)}>
-                        + {brl(bumpPrice)}
-                      </Button>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+            )}
 
           {cart.length > 0 && (
             <div className="rounded-2xl border bg-card p-4">
@@ -3133,7 +3855,10 @@ function CustomerHome() {
                   <span className="flex items-center gap-1.5 text-sm font-bold text-emerald-700">
                     <Ticket className="size-4" /> {appliedCoupon.code}
                   </span>
-                  <button onClick={removeCoupon} className="text-emerald-700 hover:text-destructive">
+                  <button
+                    onClick={removeCoupon}
+                    className="text-emerald-700 hover:text-destructive"
+                  >
                     <X className="size-4" />
                   </button>
                 </div>
@@ -3150,7 +3875,12 @@ function CustomerHome() {
                       }}
                       onKeyDown={(e) => e.key === "Enter" && applyCoupon()}
                     />
-                    <Button variant="outline" className="rounded-full" onClick={() => void applyCoupon()} disabled={checkingCoupon}>
+                    <Button
+                      variant="outline"
+                      className="rounded-full"
+                      onClick={() => void applyCoupon()}
+                      disabled={checkingCoupon}
+                    >
                       {checkingCoupon ? <Loader2 className="size-4 animate-spin" /> : "Aplicar"}
                     </Button>
                   </div>
@@ -3169,12 +3899,15 @@ function CustomerHome() {
                       onKeyDown={(e) => e.key === "Enter" && applyCoupon()}
                     />
                     <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
-                      Usamos o número apenas para validar as regras do cupom. Ele já ficará preenchido na finalização do pedido.
+                      Usamos o número apenas para validar as regras do cupom. Ele já ficará
+                      preenchido na finalização do pedido.
                     </p>
                   </div>
                 </div>
               )}
-              {couponError && <p className="mt-2 text-xs font-semibold text-destructive">{couponError}</p>}
+              {couponError && (
+                <p className="mt-2 text-xs font-semibold text-destructive">{couponError}</p>
+              )}
 
               <div className="mt-3 flex justify-between text-sm text-foreground/70">
                 <span>Subtotal</span>
@@ -3188,28 +3921,55 @@ function CustomerHome() {
               )}
               <div className="mt-4 flex items-center justify-between rounded-2xl border-2 border-amber-300 bg-amber-50 px-4 py-3">
                 <div>
-                  <span className="block text-xs font-black uppercase tracking-wide text-amber-900">Taxa de entrega</span>
-                  <span className="text-[11px] text-amber-800/80">{areaStatus === "supported" ? "Já incluída no total abaixo" : "Calculada na próxima etapa"}</span>
+                  <span className="block text-xs font-black uppercase tracking-wide text-amber-900">
+                    Taxa de entrega
+                  </span>
+                  <span className="text-[11px] text-amber-800/80">
+                    {areaStatus === "supported"
+                      ? "Já incluída no total abaixo"
+                      : "Calculada na próxima etapa"}
+                  </span>
                 </div>
                 <span className="text-xl font-black text-amber-950">{deliveryFeeLabel()}</span>
               </div>
               <div className="mt-2 flex justify-between border-t pt-2 text-lg font-extrabold">
-                <span>{areaStatus === "supported" || !isDelivery ? "Total" : "Subtotal do pedido"}</span>
-                <span>{brl(areaStatus === "supported" || !isDelivery ? total : Math.max(0, subtotal - couponDiscount))}</span>
+                <span>
+                  {areaStatus === "supported" || !isDelivery ? "Total" : "Subtotal do pedido"}
+                </span>
+                <span>
+                  {brl(
+                    areaStatus === "supported" || !isDelivery
+                      ? total
+                      : Math.max(0, subtotal - couponDiscount),
+                  )}
+                </span>
               </div>
             </div>
           )}
         </div>
 
         {cart.length > 0 && (
-          <div id="checkout-action" className="fixed inset-x-0 bottom-0 z-40 scroll-mt-24 border-t bg-background/95 px-4 py-3 backdrop-blur">
+          <div
+            id="checkout-action"
+            className="hotbox-safe-bottom fixed inset-x-0 bottom-0 z-40 scroll-mt-24 border-t bg-background/95 px-4 py-3 backdrop-blur"
+          >
             <div className="mx-auto max-w-2xl">
               <Button
                 onClick={goToCheckoutFromCart}
                 className="w-full justify-between rounded-full bg-[#ffd400] py-6 text-base font-black text-black shadow-md hover:bg-[#f4ca00]"
               >
-                <span>{areaStatus === "supported" || !isDelivery ? "Finalizar pedido" : "Ver entrega e continuar"}</span>
-                <span>{brl(areaStatus === "supported" || !isDelivery ? total : Math.max(0, subtotal - couponDiscount))}</span>
+                <span>
+                  {areaStatus === "supported" || !isDelivery
+                    ? "Finalizar pedido"
+                    : "Ver entrega e continuar"}
+                </span>
+                <span>
+                  {brl(
+                    areaStatus === "supported" || !isDelivery
+                      ? total
+                      : Math.max(0, subtotal - couponDiscount),
+                  )}
+                </span>
               </Button>
             </div>
           </div>
@@ -3218,13 +3978,14 @@ function CustomerHome() {
     );
   }
 
-
   if (view === "delivery_check") {
     const outside = areaStatus === "unsupported";
     return (
       <div className="min-h-screen bg-[#f7f7f7] pb-24">
         <header className="sticky top-0 z-30 flex items-center gap-3 border-b bg-white/95 px-4 py-4 backdrop-blur">
-          <button onClick={() => setView("cart")}><ArrowLeft className="size-5" /></button>
+          <button onClick={() => setView("cart")}>
+            <ArrowLeft className="size-5" />
+          </button>
           <img src={HOTBOX_LOGO_URL} alt="HotBox" className="size-9 rounded-xl object-contain" />
           <div>
             <h1 className="font-display text-lg font-black tracking-tight">Confirmar entrega</h1>
@@ -3236,10 +3997,17 @@ function CustomerHome() {
           {!outside ? (
             <div className="rounded-[30px] border bg-white p-5 shadow-sm sm:p-6">
               <div className="flex items-start gap-3">
-                <div className="grid size-11 shrink-0 place-items-center rounded-2xl bg-[#ffd400] text-black"><MapPin className="size-5" /></div>
+                <div className="grid size-11 shrink-0 place-items-center rounded-2xl bg-[#ffd400] text-black">
+                  <MapPin className="size-5" />
+                </div>
                 <div>
-                  <h2 className="font-display text-2xl font-black">Só falta confirmar sua entrega</h2>
-                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">Informe o CEP para verificarmos se entregamos no endereço e calcularmos a taxa correta.</p>
+                  <h2 className="font-display text-2xl font-black">
+                    Só falta confirmar sua entrega
+                  </h2>
+                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                    Informe o CEP para verificarmos se entregamos no endereço e calcularmos a taxa
+                    correta.
+                  </p>
                 </div>
               </div>
 
@@ -3253,10 +4021,20 @@ function CustomerHome() {
                     placeholder="00000-000"
                     value={accessCep}
                     onChange={(e) => setAccessCep(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") void validateCepAccess(); }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void validateCepAccess();
+                    }}
                   />
-                  <Button onClick={validateCepAccess} disabled={areaStatus === "checking"} className="h-12 rounded-2xl px-5 font-black">
-                    {areaStatus === "checking" ? <Loader2 className="size-4 animate-spin" /> : "Continuar"}
+                  <Button
+                    onClick={validateCepAccess}
+                    disabled={areaStatus === "checking"}
+                    className="h-12 rounded-2xl px-5 font-black"
+                  >
+                    {areaStatus === "checking" ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      "Continuar"
+                    )}
                   </Button>
                 </div>
               </div>
@@ -3264,10 +4042,24 @@ function CustomerHome() {
               {areaStatus === "needs_number" && (
                 <div className="mt-4 rounded-2xl border-2 border-primary/20 bg-primary/5 p-4">
                   <Label>Número do endereço</Label>
-                  <p className="mt-1 text-xs text-muted-foreground">Precisamos do número apenas para calcular a rota e a taxa por distância.</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Precisamos do número apenas para calcular a rota e a taxa por distância.
+                  </p>
                   <div className="mt-2 flex gap-2">
-                    <Input inputMode="numeric" className="h-11 rounded-xl" placeholder="Ex.: 492" value={accessNumber} onChange={(e) => setAccessNumber(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void validateCepAccess(); }} autoFocus />
-                    <Button onClick={validateCepAccess} disabled={areaStatus === "checking"} className="h-11 rounded-xl font-black">Calcular</Button>
+                    <Input
+                      inputMode="numeric"
+                      className="h-11 rounded-xl"
+                      placeholder="Ex.: 492"
+                      value={accessNumber}
+                      onChange={(e) => setAccessNumber(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void validateCepAccess();
+                      }}
+                      autoFocus
+                    />
+                    <Button onClick={validateCepAccess} className="h-11 rounded-xl font-black">
+                      Calcular
+                    </Button>
                   </div>
                 </div>
               )}
@@ -3276,18 +4068,41 @@ function CustomerHome() {
                 <div className="mt-4 rounded-2xl border bg-muted/30 p-4">
                   <Label>Ou informe seu bairro</Label>
                   <div className="mt-2 flex gap-2">
-                    <Input className="h-11 rounded-xl" placeholder="Ex.: Jardim Gramacho" value={manualNeighborhood} onChange={(e) => setManualNeighborhood(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void validateManualNeighborhood(); }} />
-                    <Button variant="outline" onClick={validateManualNeighborhood} disabled={areaStatus === "checking"} className="h-11 rounded-xl">Verificar</Button>
+                    <Input
+                      className="h-11 rounded-xl"
+                      placeholder="Ex.: Jardim Gramacho"
+                      value={manualNeighborhood}
+                      onChange={(e) => setManualNeighborhood(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void validateManualNeighborhood();
+                      }}
+                    />
+                    <Button
+                      variant="outline"
+                      onClick={validateManualNeighborhood}
+                      disabled={areaStatus === "checking"}
+                      className="h-11 rounded-xl"
+                    >
+                      Verificar
+                    </Button>
                   </div>
                 </div>
               )}
 
               {areaMessage && areaStatus !== "needs_number" && (
-                <div className="mt-4 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><AlertTriangle className="mt-0.5 size-4 shrink-0" /> {areaMessage}</div>
+                <div className="mt-4 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0" /> {areaMessage}
+                </div>
               )}
 
               {!manualAreaMode && areaStatus !== "error" && (
-                <button type="button" onClick={() => setManualAreaMode(true)} className="mt-4 w-full text-center text-xs font-semibold text-muted-foreground underline underline-offset-4">Não sei meu CEP</button>
+                <button
+                  type="button"
+                  onClick={() => setManualAreaMode(true)}
+                  className="mt-4 w-full text-center text-xs font-semibold text-muted-foreground underline underline-offset-4"
+                >
+                  Não sei meu CEP
+                </button>
               )}
 
               <div className="mt-5 border-t pt-4">
@@ -3295,14 +4110,19 @@ function CustomerHome() {
                   type="button"
                   onClick={() => {
                     setForm((current) => ({ ...current, deliveryMode: "pickup" }));
-                    trackAnalytics("pickup_selected_from_delivery_check", { event_category: "funnel", properties: { items_count: totalQty } });
+                    trackAnalytics("pickup_selected_from_delivery_check", {
+                      event_category: "funnel",
+                      properties: { items_count: totalQty },
+                    });
                     proceedToCheckout();
                   }}
                   className="w-full rounded-2xl border px-4 py-3 text-sm font-bold text-foreground hover:bg-muted/40"
                 >
                   Prefiro retirar na HotBox
                 </button>
-                <p className="mt-3 text-center text-[11px] leading-relaxed text-muted-foreground">Usamos o CEP somente para confirmar a disponibilidade e a taxa de entrega.</p>
+                <p className="mt-3 text-center text-[11px] leading-relaxed text-muted-foreground">
+                  Usamos o CEP somente para confirmar a disponibilidade e a taxa de entrega.
+                </p>
               </div>
             </div>
           ) : (
@@ -3311,20 +4131,60 @@ function CustomerHome() {
                 <div className="flex items-start gap-3">
                   <AlertTriangle className="mt-0.5 size-6 shrink-0 text-orange-600" />
                   <div>
-                    <h2 className="font-display text-2xl font-black">Para sua região, o pedido é pelas plataformas parceiras</h2>
-                    <p className="mt-2 text-sm leading-relaxed text-orange-950/75">Ainda não fazemos entrega própria nesse endereço. Os preços e condições nas plataformas podem ser diferentes dos valores do nosso delivery direto.</p>
-                    {validatedNeighborhood && <p className="mt-2 text-sm font-bold text-orange-950">Bairro identificado: {validatedNeighborhood}</p>}
+                    <h2 className="font-display text-2xl font-black">
+                      Para sua região, o pedido é pelas plataformas parceiras
+                    </h2>
+                    <p className="mt-2 text-sm leading-relaxed text-orange-950/75">
+                      Ainda não fazemos entrega própria nesse endereço. Os preços e condições nas
+                      plataformas podem ser diferentes dos valores do nosso delivery direto.
+                    </p>
+                    {validatedNeighborhood && (
+                      <p className="mt-2 text-sm font-bold text-orange-950">
+                        Bairro identificado: {validatedNeighborhood}
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>
 
               <div className="mt-5 grid gap-2">
-                <Button onClick={() => void redirectOutsideArea({ cep: accessCep || form.cep || null, neighborhood: validatedNeighborhood || form.neighborhood }, "ifood")} className="h-12 rounded-2xl bg-[#ea1d2c] font-black text-white hover:bg-[#d71927]">Pedir pelo iFood</Button>
-                <Button variant="outline" onClick={() => void redirectOutsideArea({ cep: accessCep || form.cep || null, neighborhood: validatedNeighborhood || form.neighborhood }, "99food")} className="h-12 rounded-2xl font-black">Ver disponibilidade na 99Food</Button>
-                <Button variant="ghost" onClick={resetAreaAccess} className="h-11 rounded-2xl">Verificar outro CEP ou bairro</Button>
+                <Button
+                  onClick={() =>
+                    void redirectOutsideArea(
+                      {
+                        cep: accessCep || form.cep || null,
+                        neighborhood: validatedNeighborhood || form.neighborhood,
+                      },
+                      "ifood",
+                    )
+                  }
+                  className="h-12 rounded-2xl bg-[#ea1d2c] font-black text-white hover:bg-[#d71927]"
+                >
+                  Pedir pelo iFood
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    void redirectOutsideArea(
+                      {
+                        cep: accessCep || form.cep || null,
+                        neighborhood: validatedNeighborhood || form.neighborhood,
+                      },
+                      "99food",
+                    )
+                  }
+                  className="h-12 rounded-2xl font-black"
+                >
+                  Ver disponibilidade na 99Food
+                </Button>
+                <Button variant="ghost" onClick={resetAreaAccess} className="h-11 rounded-2xl">
+                  Verificar outro CEP ou bairro
+                </Button>
               </div>
 
-              <p className="mt-4 text-center text-xs text-muted-foreground">Seu carrinho permanece salvo caso queira voltar e verificar outro endereço.</p>
+              <p className="mt-4 text-center text-xs text-muted-foreground">
+                Seu carrinho permanece salvo caso queira voltar e verificar outro endereço.
+              </p>
             </div>
           )}
         </div>
@@ -3332,13 +4192,17 @@ function CustomerHome() {
     );
   }
 
-
   if (view === "checkout") {
     return (
       <div className="min-h-screen bg-background pb-32">
         {reservationPaymentConfirmModal}
         <header className="sticky top-0 z-30 flex items-center gap-3 border-b bg-background/95 px-4 py-4 backdrop-blur">
-          <button onClick={() => setView("cart")}>
+          <button
+            type="button"
+            onClick={() => setView("cart")}
+            className="grid size-10 place-items-center rounded-full border bg-white"
+            aria-label="Voltar para a sacola"
+          >
             <ArrowLeft className="size-5" />
           </button>
           <img src={HOTBOX_LOGO_URL} alt="HotBox" className="size-9 rounded-xl object-contain" />
@@ -3346,12 +4210,32 @@ function CustomerHome() {
         </header>
 
         <div className="mx-auto max-w-2xl space-y-6 px-4 py-5">
+          <div className="rounded-[24px] border border-black/5 bg-white p-4 shadow-sm">
+            <div className="grid grid-cols-3 gap-2 text-center text-[10px] font-black uppercase tracking-wide">
+              <span className="text-emerald-700">✓ Sacola</span>
+              <span className="text-emerald-700">✓ Entrega</span>
+              <span className="text-primary">3. Pagamento</span>
+            </div>
+            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-zinc-100">
+              <div className="h-full w-full rounded-full bg-gradient-to-r from-[#d92d20] to-[#ffd400]" />
+            </div>
+            <div className="mt-3 flex items-center justify-center gap-2 text-xs font-semibold text-zinc-600">
+              <ShieldCheck className="size-4 text-emerald-600" /> Pagamento protegido e confirmação
+              automática
+            </div>
+          </div>
+
           <div>
-            <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">Seus dados</h3>
+            <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">
+              Seus dados
+            </h3>
             <div className="space-y-3">
               <div>
                 <Label>Nome</Label>
                 <Input
+                  id="checkout-name"
+                  name="name"
+                  autoComplete="name"
                   className="mt-1 rounded-xl"
                   placeholder="Como podemos chamar você?"
                   value={form.name}
@@ -3361,6 +4245,11 @@ function CustomerHome() {
               <div>
                 <Label>Telefone</Label>
                 <Input
+                  id="checkout-phone"
+                  name="tel"
+                  type="tel"
+                  inputMode="tel"
+                  autoComplete="tel"
                   className="mt-1 rounded-xl"
                   placeholder="(00) 00000-0000"
                   value={formatPhone(form.phone)}
@@ -3371,13 +4260,19 @@ function CustomerHome() {
           </div>
 
           <div>
-            <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">Modo de entrega</h3>
+            <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">
+              Modo de entrega
+            </h3>
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={() => {
                   setForm({ ...form, deliveryMode: "delivery" });
                   if (areaStatus !== "supported") {
-                    trackAnalytics("delivery_check_started", { event_category: "funnel", value: Number((subtotal - couponDiscount).toFixed(2)), properties: { items_count: totalQty, source: "checkout_delivery_switch" } });
+                    trackAnalytics("delivery_check_started", {
+                      event_category: "funnel",
+                      value: Number((subtotal - couponDiscount).toFixed(2)),
+                      properties: { items_count: totalQty, source: "checkout_delivery_switch" },
+                    });
                     setView("delivery_check");
                   }
                 }}
@@ -3415,12 +4310,16 @@ function CustomerHome() {
 
           {isDelivery && (
             <div>
-              <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">Endereço</h3>
+              <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">
+                Endereço
+              </h3>
               <div className="space-y-3">
                 <div className="grid grid-cols-3 gap-2">
                   <div className="col-span-2">
                     <Label>Rua</Label>
                     <Input
+                      name="address-line1"
+                      autoComplete="street-address"
                       className="mt-1 rounded-xl"
                       value={form.street}
                       onChange={(e) => setForm({ ...form, street: e.target.value })}
@@ -3429,6 +4328,9 @@ function CustomerHome() {
                   <div>
                     <Label>Número</Label>
                     <Input
+                      name="address-number"
+                      inputMode="numeric"
+                      autoComplete="address-line2"
                       className="mt-1 rounded-xl"
                       value={form.number}
                       onChange={(e) => setForm({ ...form, number: e.target.value })}
@@ -3439,6 +4341,8 @@ function CustomerHome() {
                 <div>
                   <Label>Complemento</Label>
                   <Input
+                    name="address-complement"
+                    autoComplete="address-line2"
                     className="mt-1 rounded-xl"
                     placeholder="Apto, bloco..."
                     value={form.complement}
@@ -3449,6 +4353,8 @@ function CustomerHome() {
                   <div>
                     <Label>Bairro</Label>
                     <Input
+                      name="address-level2"
+                      autoComplete="address-level2"
                       className="mt-1 rounded-xl bg-muted/40"
                       value={form.neighborhood}
                       readOnly={areaStatus === "supported"}
@@ -3458,6 +4364,8 @@ function CustomerHome() {
                   <div>
                     <Label>Cidade</Label>
                     <Input
+                      name="address-city"
+                      autoComplete="address-level1"
                       className="mt-1 rounded-xl bg-muted/40"
                       value={form.city}
                       readOnly={!!form.city && areaStatus === "supported"}
@@ -3468,9 +4376,21 @@ function CustomerHome() {
                 <div>
                   <div className="flex items-center justify-between">
                     <Label>CEP</Label>
-                    <button type="button" onClick={() => { resetAreaAccess(); setView("delivery_check"); }} className="text-[11px] font-bold text-primary underline underline-offset-2">Trocar CEP/bairro</button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        resetAreaAccess();
+                        setView("delivery_check");
+                      }}
+                      className="text-[11px] font-bold text-primary underline underline-offset-2"
+                    >
+                      Trocar CEP/bairro
+                    </button>
                   </div>
                   <Input
+                    name="postal-code"
+                    inputMode="numeric"
+                    autoComplete="postal-code"
                     className="mt-1 rounded-xl bg-muted/40"
                     placeholder="00000-000"
                     value={form.cep}
@@ -3484,9 +4404,11 @@ function CustomerHome() {
 
                     {deliveryCutoffTime && (
                       <div className="mt-1.5">
-                        <p className={`text-xs font-bold ${
-                          outsideDeliveryHours ? "text-red-700" : "text-emerald-800"
-                        }`}>
+                        <p
+                          className={`text-xs font-bold ${
+                            outsideDeliveryHours ? "text-red-700" : "text-emerald-800"
+                          }`}
+                        >
                           {outsideDeliveryHours
                             ? `Entrega encerrada às ${deliveryCutoffTime} para ${validatedNeighborhood || form.neighborhood}`
                             : `Entrega disponível até ${deliveryCutoffTime}`}
@@ -3501,9 +4423,13 @@ function CustomerHome() {
                         )}
 
                         {outsideDeliveryHours && schedulingEnabled && (
-                          <label className={`mt-2 flex cursor-pointer items-start gap-2 rounded-xl border p-2.5 ${
-                            scheduleAccepted ? "border-violet-400 bg-white" : "border-violet-200 bg-white/80"
-                          }`}>
+                          <label
+                            className={`mt-2 flex cursor-pointer items-start gap-2 rounded-xl border p-2.5 ${
+                              scheduleAccepted
+                                ? "border-violet-400 bg-white"
+                                : "border-violet-200 bg-white/80"
+                            }`}
+                          >
                             <input
                               type="checkbox"
                               checked={scheduleAccepted}
@@ -3511,9 +4437,12 @@ function CustomerHome() {
                               className="mt-0.5 size-4 accent-violet-600"
                             />
                             <span>
-                              <span className="block text-xs font-black text-violet-950">Agendar meu pedido</span>
+                              <span className="block text-xs font-black text-violet-950">
+                                Agendar meu pedido
+                              </span>
                               <span className="mt-0.5 block text-[10px] leading-relaxed text-violet-800">
-                                A HotBox entrará em contato para informar a entrega no próximo horário disponível.
+                                A HotBox entrará em contato para informar a entrega no próximo
+                                horário disponível.
                               </span>
                             </span>
                           </label>
@@ -3523,215 +4452,383 @@ function CustomerHome() {
 
                     <div className="mt-2 flex items-end justify-between gap-3">
                       <div>
-                        <span className="text-xs font-bold uppercase tracking-wide text-emerald-800">Taxa de entrega</span>
+                        <span className="text-xs font-bold uppercase tracking-wide text-emerald-800">
+                          Taxa de entrega
+                        </span>
                         <p className="mt-0.5 text-[11px] font-semibold text-emerald-700">
                           {deliveryPricingMode === "distance"
                             ? `Calculada por km${deliveryDistanceKm != null ? ` • ${deliveryDistanceKm.toFixed(1)} km` : ""}`
                             : "Valor configurado para o bairro"}
                         </p>
                       </div>
-                      <span className="text-2xl font-black text-emerald-950">{brl(deliveryFee)}</span>
+                      <span className="text-2xl font-black text-emerald-950">
+                        {brl(deliveryFee)}
+                      </span>
                     </div>
                   </div>
 
-                  {!isStoreOpenByBusinessHours(publicStoreStatus) && publicStoreStatus?.closed_reservations_enabled === true && (
-          <div className="mb-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3">
-            <p className="text-sm font-black text-amber-950">🗓️ Loja fechada agora — reservas abertas</p>
-            <p className="mt-1 text-xs leading-relaxed text-amber-900">
-              Você pode montar e pagar seu pedido normalmente. Ele ficará reservado para a data escolhida e a HotBox entrará em contato antes da entrega.
-            </p>
-          </div>
-        )}
-
+                  {!isStoreOpenByBusinessHours(publicStoreStatus) &&
+                    publicStoreStatus?.closed_reservations_enabled === true && (
+                      <div className="mb-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3">
+                        <p className="text-sm font-black text-amber-950">
+                          🗓️ Loja fechada agora — reservas abertas
+                        </p>
+                        <p className="mt-1 text-xs leading-relaxed text-amber-900">
+                          Você pode montar e pagar seu pedido normalmente. Ele ficará reservado para
+                          a data escolhida e a HotBox entrará em contato antes da entrega.
+                        </p>
+                      </div>
+                    )}
                 </div>
               </div>
             </div>
           )}
 
-          {orderBumps.filter((b) =>
-            b.placement === "checkout" &&
-            !cart.some((i) => String(i.product.id) === String(b.product_id))
-          ).slice(0, 2).length > 0 && (
+          {orderBumps
+            .filter(
+              (b) =>
+                b.placement === "checkout" &&
+                !cart.some((i) => String(i.product.id) === String(b.product_id)),
+            )
+            .slice(0, 2).length > 0 && (
             <div className="rounded-3xl border-2 border-amber-300 bg-gradient-to-br from-amber-50 to-orange-50 p-4">
-              <p className="text-xs font-black uppercase tracking-wide text-amber-800">Última chance de completar</p>
+              <p className="text-xs font-black uppercase tracking-wide text-amber-800">
+                Última chance de completar
+              </p>
               <p className="mt-1 text-sm font-black">Quer adicionar algo antes de fechar?</p>
               <div className="mt-3 space-y-2">
-                {orderBumps.filter((b) =>
-                  b.placement === "checkout" &&
-                  !cart.some((i) => String(i.product.id) === String(b.product_id))
-                ).slice(0, 2).map((bump) => {
-                  const product = products.find((p) => String(p.id) === String(bump.product_id));
-                  if (!product) return null;
-                  const bumpPrice = bump.price_override == null ? getEffectivePrice(product).price : Number(bump.price_override);
-                  return (
-                    <div key={bump.id} className="flex items-center gap-3 rounded-2xl border bg-white p-3">
-                      {product.image_url ? (
-                        <div className="grid size-12 shrink-0 place-items-center overflow-hidden rounded-xl border border-black/5 bg-white">
-                          {isBeverageProduct(product) ? (
-                            <NormalizedBeverageImage
-                              src={product.image_url}
-                              alt={product.name}
-                              className="size-10 object-contain"
-                            />
-                          ) : (
-                            <img src={product.image_url} alt={product.name} className="size-full object-cover" />
-                          )}
+                {orderBumps
+                  .filter(
+                    (b) =>
+                      b.placement === "checkout" &&
+                      !cart.some((i) => String(i.product.id) === String(b.product_id)),
+                  )
+                  .slice(0, 2)
+                  .map((bump) => {
+                    const product = products.find((p) => String(p.id) === String(bump.product_id));
+                    if (!product) return null;
+                    const bumpPrice =
+                      bump.price_override == null
+                        ? getEffectivePrice(product).price
+                        : Number(bump.price_override);
+                    return (
+                      <div
+                        key={bump.id}
+                        className="flex items-center gap-3 rounded-2xl border bg-white p-3"
+                      >
+                        {product.image_url ? (
+                          <div className="grid size-12 shrink-0 place-items-center overflow-hidden rounded-xl border border-black/5 bg-white">
+                            {isBeverageProduct(product) ? (
+                              <NormalizedBeverageImage
+                                src={product.image_url}
+                                alt={product.name}
+                                className="size-10 object-contain"
+                              />
+                            ) : (
+                              <img
+                                src={product.image_url}
+                                alt={product.name}
+                                className="size-full object-cover"
+                              />
+                            )}
+                          </div>
+                        ) : (
+                          <div className="size-12 rounded-xl bg-muted" />
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-black">{product.name}</p>
+                          <p className="truncate text-[11px] text-muted-foreground">
+                            {bump.subtitle || bump.title}
+                          </p>
                         </div>
-                      ) : <div className="size-12 rounded-xl bg-muted" />}
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-black">{product.name}</p>
-                        <p className="truncate text-[11px] text-muted-foreground">{bump.subtitle || bump.title}</p>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="shrink-0 rounded-full border-amber-400 font-black text-amber-800"
+                          onClick={() => addOrderBump(bump)}
+                        >
+                          + {brl(bumpPrice)}
+                        </Button>
                       </div>
-                      <Button size="sm" variant="outline" className="shrink-0 rounded-full border-amber-400 font-black text-amber-800" onClick={() => addOrderBump(bump)}>
-                        + {brl(bumpPrice)}
-                      </Button>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
               </div>
             </div>
           )}
 
           <div id="payment-section" className="scroll-mt-24">
-            {efiCheckout ? (
-              <EfiPayment
-                checkoutId={efiCheckout.id}
-                amount={efiCheckout.total}
-                payeeCode={efiPayeeCode}
-                environment={efiEnvironment}
-                method={efiCheckout.method}
-                maxInstallments={efiMaxInstallments}
-                customerName={form.name}
-                customerEmail={customerSession?.user?.email || null}
-                customerPhone={form.phone}
-                billingAddress={isDelivery ? { street: form.street, number: form.number, neighborhood: form.neighborhood, city: form.city || "Duque de Caxias", state: "RJ", cep: form.cep, complement: form.complement || null } : null}
-                supportWhatsappUrl={paymentSupportWhatsappUrl}
-                onPaid={finishEfi}
-                onCancel={cancelEfiCheckout}
-                onSwitchToPix={efiCheckout.method === "card" && pixEnabled && pixPaymentAvailable ? switchFailedCardToPix : undefined}
-              />
-            ) : pagarmeCheckout ? (
-              <PagarmePayment
-                checkoutId={pagarmeCheckout.id}
-                amount={pagarmeCheckout.total}
-                publicKey={pagarmePublicKey}
-                method={pagarmeCheckout.method}
-                maxInstallments={pagarmeMaxInstallments}
-                customerName={form.name}
-                customerEmail={customerSession?.user?.email || null}
-                customerPhone={form.phone}
-                billingAddress={isDelivery ? {
-                  street: form.street,
-                  number: form.number,
-                  neighborhood: form.neighborhood,
-                  city: form.city || "Duque de Caxias",
-                  state: "RJ",
-                  cep: form.cep,
-                  complement: form.complement || null,
-                } : null}
-                supportWhatsappUrl={paymentSupportWhatsappUrl}
-                onPaid={finishPagarme}
-                onCancel={cancelPagarmeCheckout}
-                onSwitchToPix={pagarmeCheckout.method === "card" && pixEnabled && pixPaymentAvailable ? switchFailedCardToPix : undefined}
-              />
-            ) : mpCheckout ? (
-              <MercadoPagoPayment
-                checkoutId={mpCheckout.id}
-                amount={mpCheckout.total}
-                publicKey={mercadoPagoPublicKey}
-                maxInstallments={mercadoPagoMaxInstallments}
-                customerEmail={customerSession?.user?.email || null}
-                origin={typeof window !== "undefined" ? window.location.origin : ""}
-                supportWhatsappUrl={paymentSupportWhatsappUrl}
-                allowedMethod={mpCheckout.method}
-                onSwitchToPix={mpCheckout.method === "card" && pixEnabled && pixPaymentAvailable ? switchFailedCardToPix : undefined}
-                onPaid={finishMercadoPago}
-                onCancel={cancelMercadoPagoCheckout}
-              />
-            ) : (
-              <div className="space-y-3">
-                {pixEnabled && pixPaymentAvailable && (
-                  <button
-                    type="button"
-                    onClick={() => { setPaymentChoice("online_pix"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "pix", value: total, quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: paymentProvider }) }); scrollToCheckoutSection("checkout-action"); }}
-                    className={`w-full rounded-2xl border-2 p-4 text-left transition ${paymentChoice === "online_pix" ? "border-emerald-500 bg-emerald-50 shadow-sm" : "border-border bg-white hover:border-emerald-300"}`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-emerald-600 text-white"><QrCode className="size-5" /></span>
-                      <div className="flex-1">
-                        <div className="flex items-center justify-between gap-2"><p className="text-sm font-black">Pix</p>{paymentChoice === "online_pix" && <span className="rounded-full bg-emerald-600 px-2 py-1 text-[10px] font-black text-white">SELECIONADO</span>}</div>
-                        <p className="text-[11px] text-muted-foreground">Pagamento rápido com confirmação automática.</p>
-                      </div>
-                    </div>
-                  </button>
-                )}
-
-                {cardEnabled && cardPaymentAvailable && (
-                  <button
-                    type="button"
-                    onClick={() => { setPaymentChoice("online_card"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "card", value: total, quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: paymentProvider }) }); scrollToCheckoutSection("checkout-action"); }}
-                    className={`w-full rounded-2xl border-2 p-4 text-left transition ${paymentChoice === "online_card" ? "border-zinc-900 bg-zinc-50 shadow-sm" : "border-border bg-white hover:border-zinc-400"}`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-zinc-900 text-white"><CreditCard className="size-5" /></span>
-                      <div className="flex-1">
-                        <div className="flex items-center justify-between gap-2"><p className="text-sm font-black">Cartão de crédito</p>{paymentChoice === "online_card" && <span className="rounded-full bg-zinc-900 px-2 py-1 text-[10px] font-black text-white">SELECIONADO</span>}</div>
-                        <p className="text-[11px] text-muted-foreground">Checkout seguro. Se houver recusa, você poderá tentar outro cartão, Pix ou WhatsApp.</p>
-                      </div>
-                    </div>
-                  </button>
-                )}
-
-                {isDelivery && payOnDeliveryEnabled && payOnDeliveryCardEnabled && (
-                  <button
-                    type="button"
-                    onClick={() => { setPaymentChoice("delivery_card"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "delivery_card", value: total, quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: "pay_on_delivery" }) }); scrollToCheckoutSection("checkout-action"); }}
-                    className={`w-full rounded-2xl border-2 p-4 text-left transition ${paymentChoice === "delivery_card" ? "border-amber-500 bg-amber-50 shadow-sm" : "border-border bg-white hover:border-amber-300"}`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-amber-500 text-white"><CreditCard className="size-5" /></span>
-                      <div className="flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-sm font-black">Cartão na entrega</p>
-                          {paymentChoice === "delivery_card" && <span className="rounded-full bg-amber-500 px-2 py-1 text-[10px] font-black text-white">SELECIONADO</span>}
-                        </div>
-                        <p className="text-[11px] text-muted-foreground">Pague ao entregador com cartão. Nenhuma cobrança é feita agora.</p>
-                      </div>
-                    </div>
-                  </button>
-                )}
-
-                {isDelivery && payOnDeliveryEnabled && payOnDeliveryPixEnabled && (
-                  <button
-                    type="button"
-                    onClick={() => { setPaymentChoice("delivery_pix"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "delivery_pix", value: total, quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: "pay_on_delivery" }) }); scrollToCheckoutSection("checkout-action"); }}
-                    className={`w-full rounded-2xl border-2 p-4 text-left transition ${paymentChoice === "delivery_pix" ? "border-amber-500 bg-amber-50 shadow-sm" : "border-border bg-white hover:border-amber-300"}`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-amber-500 text-white"><QrCode className="size-5" /></span>
-                      <div className="flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-sm font-black">Pix na entrega</p>
-                          {paymentChoice === "delivery_pix" && <span className="rounded-full bg-amber-500 px-2 py-1 text-[10px] font-black text-white">SELECIONADO</span>}
-                        </div>
-                        <p className="text-[11px] text-muted-foreground">Faça o Pix quando o pedido chegar. Nenhuma cobrança é feita agora.</p>
-                      </div>
-                    </div>
-                  </button>
-                )}
-
-                {isDelivery && payOnDeliveryEnabled && (paymentChoice === "delivery_card" || paymentChoice === "delivery_pix") && (
-                  <div className="rounded-2xl border border-amber-300 bg-amber-50 p-3 text-xs font-semibold leading-relaxed text-amber-950">
-                    <b>Pagamento na entrega:</b> seu pedido será criado imediatamente e ficará marcado como pagamento pendente até o recebimento.
-                  </div>
-                )}
+            {!efiCheckout && !pagarmeCheckout && !mpCheckout && (
+              <div className="mb-3">
+                <p className="text-xs font-black uppercase tracking-wide text-muted-foreground">
+                  Escolha como pagar
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Pix ou cartão, processados com segurança pelo checkout configurado da HotBox.
+                </p>
               </div>
             )}
+            <Suspense
+              fallback={
+                <div className="grid min-h-40 place-items-center rounded-[24px] border bg-white">
+                  <div className="text-center">
+                    <Loader2 className="mx-auto size-6 animate-spin text-primary" />
+                    <p className="mt-2 text-sm font-semibold text-muted-foreground">
+                      Preparando pagamento seguro...
+                    </p>
+                  </div>
+                </div>
+              }
+            >
+              {efiCheckout ? (
+                <EfiPayment
+                  checkoutId={efiCheckout.id}
+                  amount={efiCheckout.total}
+                  payeeCode={efiPayeeCode}
+                  environment={efiEnvironment}
+                  method={efiCheckout.method}
+                  maxInstallments={efiMaxInstallments}
+                  customerName={form.name}
+                  customerEmail={customerSession?.user?.email || null}
+                  customerPhone={form.phone}
+                  billingAddress={
+                    isDelivery
+                      ? {
+                          street: form.street,
+                          number: form.number,
+                          neighborhood: form.neighborhood,
+                          city: form.city || "Duque de Caxias",
+                          state: "RJ",
+                          cep: form.cep,
+                          complement: form.complement || null,
+                        }
+                      : null
+                  }
+                  supportWhatsappUrl={paymentSupportWhatsappUrl}
+                  onPaid={finishEfi}
+                  onCancel={cancelEfiCheckout}
+                  onSwitchToPix={
+                    efiCheckout.method === "card" && pixEnabled && pixPaymentAvailable
+                      ? switchFailedCardToPix
+                      : undefined
+                  }
+                />
+              ) : pagarmeCheckout ? (
+                <PagarmePayment
+                  checkoutId={pagarmeCheckout.id}
+                  amount={pagarmeCheckout.total}
+                  publicKey={pagarmePublicKey}
+                  method={pagarmeCheckout.method}
+                  maxInstallments={pagarmeMaxInstallments}
+                  customerName={form.name}
+                  customerEmail={customerSession?.user?.email || null}
+                  customerPhone={form.phone}
+                  billingAddress={
+                    isDelivery
+                      ? {
+                          street: form.street,
+                          number: form.number,
+                          neighborhood: form.neighborhood,
+                          city: form.city || "Duque de Caxias",
+                          state: "RJ",
+                          cep: form.cep,
+                          complement: form.complement || null,
+                        }
+                      : null
+                  }
+                  supportWhatsappUrl={paymentSupportWhatsappUrl}
+                  onPaid={finishPagarme}
+                  onCancel={cancelPagarmeCheckout}
+                  onSwitchToPix={
+                    pagarmeCheckout.method === "card" && pixEnabled && pixPaymentAvailable
+                      ? switchFailedCardToPix
+                      : undefined
+                  }
+                />
+              ) : mpCheckout ? (
+                <MercadoPagoPayment
+                  checkoutId={mpCheckout.id}
+                  amount={mpCheckout.total}
+                  publicKey={mercadoPagoPublicKey}
+                  maxInstallments={mercadoPagoMaxInstallments}
+                  customerEmail={customerSession?.user?.email || null}
+                  origin={typeof window !== "undefined" ? window.location.origin : ""}
+                  supportWhatsappUrl={paymentSupportWhatsappUrl}
+                  allowedMethod={mpCheckout.method}
+                  onSwitchToPix={
+                    mpCheckout.method === "card" && pixEnabled && pixPaymentAvailable
+                      ? switchFailedCardToPix
+                      : undefined
+                  }
+                  onPaid={finishMercadoPago}
+                  onCancel={cancelMercadoPagoCheckout}
+                />
+              ) : (
+                <div className="space-y-3">
+                  {pixEnabled && pixPaymentAvailable && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPaymentChoice("online_pix");
+                        trackAnalytics("payment_selected", {
+                          event_category: "payment",
+                          payment_method: "pix",
+                          value: total,
+                          quantity: metaCartItemCount(),
+                          properties: metaCommerceProperties({ provider: paymentProvider }),
+                        });
+                        scrollToCheckoutSection("checkout-action");
+                      }}
+                      className={`w-full rounded-2xl border-2 p-4 text-left transition ${paymentChoice === "online_pix" ? "border-emerald-500 bg-emerald-50 shadow-sm" : "border-border bg-white hover:border-emerald-300"}`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-emerald-600 text-white">
+                          <QrCode className="size-5" />
+                        </span>
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-black">Pix</p>
+                            {paymentChoice === "online_pix" && (
+                              <span className="rounded-full bg-emerald-600 px-2 py-1 text-[10px] font-black text-white">
+                                SELECIONADO
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            Pagamento rápido com confirmação automática.
+                          </p>
+                        </div>
+                      </div>
+                    </button>
+                  )}
+
+                  {cardEnabled && cardPaymentAvailable && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPaymentChoice("online_card");
+                        trackAnalytics("payment_selected", {
+                          event_category: "payment",
+                          payment_method: "card",
+                          value: total,
+                          quantity: metaCartItemCount(),
+                          properties: metaCommerceProperties({ provider: paymentProvider }),
+                        });
+                        scrollToCheckoutSection("checkout-action");
+                      }}
+                      className={`w-full rounded-2xl border-2 p-4 text-left transition ${paymentChoice === "online_card" ? "border-zinc-900 bg-zinc-50 shadow-sm" : "border-border bg-white hover:border-zinc-400"}`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-zinc-900 text-white">
+                          <CreditCard className="size-5" />
+                        </span>
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-black">Cartão de crédito</p>
+                            {paymentChoice === "online_card" && (
+                              <span className="rounded-full bg-zinc-900 px-2 py-1 text-[10px] font-black text-white">
+                                SELECIONADO
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            Checkout seguro. Se houver recusa, você poderá tentar outro cartão, Pix
+                            ou WhatsApp.
+                          </p>
+                        </div>
+                      </div>
+                    </button>
+                  )}
+
+                  {isDelivery && payOnDeliveryEnabled && payOnDeliveryCardEnabled && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPaymentChoice("delivery_card");
+                        trackAnalytics("payment_selected", {
+                          event_category: "payment",
+                          payment_method: "delivery_card",
+                          value: total,
+                          quantity: metaCartItemCount(),
+                          properties: metaCommerceProperties({ provider: "pay_on_delivery" }),
+                        });
+                        scrollToCheckoutSection("checkout-action");
+                      }}
+                      className={`w-full rounded-2xl border-2 p-4 text-left transition ${paymentChoice === "delivery_card" ? "border-amber-500 bg-amber-50 shadow-sm" : "border-border bg-white hover:border-amber-300"}`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-amber-500 text-white">
+                          <CreditCard className="size-5" />
+                        </span>
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-black">Cartão na entrega</p>
+                            {paymentChoice === "delivery_card" && (
+                              <span className="rounded-full bg-amber-500 px-2 py-1 text-[10px] font-black text-white">
+                                SELECIONADO
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            Pague ao entregador com cartão. Nenhuma cobrança é feita agora.
+                          </p>
+                        </div>
+                      </div>
+                    </button>
+                  )}
+
+                  {isDelivery && payOnDeliveryEnabled && payOnDeliveryPixEnabled && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPaymentChoice("delivery_pix");
+                        trackAnalytics("payment_selected", {
+                          event_category: "payment",
+                          payment_method: "delivery_pix",
+                          value: total,
+                          quantity: metaCartItemCount(),
+                          properties: metaCommerceProperties({ provider: "pay_on_delivery" }),
+                        });
+                        scrollToCheckoutSection("checkout-action");
+                      }}
+                      className={`w-full rounded-2xl border-2 p-4 text-left transition ${paymentChoice === "delivery_pix" ? "border-amber-500 bg-amber-50 shadow-sm" : "border-border bg-white hover:border-amber-300"}`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-amber-500 text-white">
+                          <QrCode className="size-5" />
+                        </span>
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-black">Pix na entrega</p>
+                            {paymentChoice === "delivery_pix" && (
+                              <span className="rounded-full bg-amber-500 px-2 py-1 text-[10px] font-black text-white">
+                                SELECIONADO
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            Faça o Pix quando o pedido chegar. Nenhuma cobrança é feita agora.
+                          </p>
+                        </div>
+                      </div>
+                    </button>
+                  )}
+
+                  {isDelivery &&
+                    payOnDeliveryEnabled &&
+                    (paymentChoice === "delivery_card" || paymentChoice === "delivery_pix") && (
+                      <div className="rounded-2xl border border-amber-300 bg-amber-50 p-3 text-xs font-semibold leading-relaxed text-amber-950">
+                        <b>Pagamento na entrega:</b> seu pedido será criado imediatamente e ficará
+                        marcado como pagamento pendente até o recebimento.
+                      </div>
+                    )}
+                </div>
+              )}
+            </Suspense>
           </div>
         </div>
 
         {!efiCheckout && !pagarmeCheckout && !mpCheckout && (
-          <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 px-4 py-3 backdrop-blur">
+          <div className="hotbox-safe-bottom fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 px-4 py-3 backdrop-blur">
             <div className="mx-auto max-w-2xl">
               <Button
                 onClick={requestPlaceOrder}
@@ -3739,8 +4836,10 @@ function CustomerHome() {
                   placing ||
                   (paymentChoice === "online_pix" && (!pixEnabled || !pixPaymentAvailable)) ||
                   (paymentChoice === "online_card" && (!cardEnabled || !cardPaymentAvailable)) ||
-                  (paymentChoice === "delivery_card" && (!payOnDeliveryEnabled || !payOnDeliveryCardEnabled)) ||
-                  (paymentChoice === "delivery_pix" && (!payOnDeliveryEnabled || !payOnDeliveryPixEnabled))
+                  (paymentChoice === "delivery_card" &&
+                    (!payOnDeliveryEnabled || !payOnDeliveryCardEnabled)) ||
+                  (paymentChoice === "delivery_pix" &&
+                    (!payOnDeliveryEnabled || !payOnDeliveryPixEnabled))
                 }
                 className="w-full justify-between rounded-full bg-[#ffd400] py-6 text-base font-black text-black shadow-md hover:bg-[#f4ca00]"
               >
@@ -3766,38 +4865,61 @@ function CustomerHome() {
     );
   }
 
-
   return (
     <div className="min-h-screen bg-[#f7f7f7] pb-28">
-      <div className="sticky top-0 z-50 border-b border-black/5 bg-white/95 px-4 py-3 backdrop-blur">
+      <div className="relative z-10 border-b border-black/5 bg-white px-4 py-2.5">
         <div className="mx-auto flex max-w-2xl items-center gap-3">
           <Link to="/" className="flex min-w-0 items-center gap-2.5">
-            <img src={HOTBOX_LOGO_URL} alt="HotBox Delivery" className="h-12 w-12 rounded-2xl object-contain shadow-sm ring-1 ring-black/10" />
+            <img
+              src={HOTBOX_LOGO_URL}
+              alt="HotBox Delivery"
+              className="h-12 w-12 rounded-2xl object-contain shadow-sm ring-1 ring-black/10"
+            />
             <div className="min-w-0 leading-tight">
-              <p className="font-display text-lg font-black">HOT<span className="text-[#d92d20]">BOX</span></p>
-              <p className="truncate text-[10px] font-bold uppercase tracking-widest text-[#d92d20]">{validatedNeighborhood || "Delivery"}</p>
+              <p className="font-display text-lg font-black">
+                HOT<span className="text-[#d92d20]">BOX</span>
+              </p>
+              <p className="truncate text-[10px] font-bold uppercase tracking-widest text-[#d92d20]">
+                {validatedNeighborhood || "Delivery"}
+              </p>
             </div>
           </Link>
           <div className="ml-auto flex items-center gap-1.5">
-            <button type="button" onClick={() => { if (areaStatus === "supported") { resetAreaAccess(); toast.info("O novo endereço será confirmado quando você finalizar a sacola."); } else { toast.info("A entrega será confirmada quando você finalizar a sacola."); } }} title={areaStatus === "supported" ? "Trocar endereço" : "Entrega confirmada ao finalizar"} className="grid size-9 place-items-center rounded-full border bg-white text-muted-foreground transition hover:text-foreground">
+            <button
+              type="button"
+              onClick={() => {
+                if (areaStatus === "supported") {
+                  resetAreaAccess();
+                  toast.info("O novo endereço será confirmado quando você finalizar a sacola.");
+                } else {
+                  toast.info("A entrega será confirmada quando você finalizar a sacola.");
+                }
+              }}
+              title={
+                areaStatus === "supported" ? "Trocar endereço" : "Entrega confirmada ao finalizar"
+              }
+              className="grid size-9 place-items-center rounded-full border bg-white text-muted-foreground transition hover:text-foreground"
+            >
               <MapPin className="size-4" />
             </button>
-            <a href={WHATSAPP_URL} target="_blank" rel="noreferrer" title="Ajuda pelo WhatsApp" className="grid size-9 place-items-center rounded-full bg-[#25D366] text-white shadow-sm">
+            <a
+              href={WHATSAPP_URL}
+              target="_blank"
+              rel="noreferrer"
+              title="Ajuda pelo WhatsApp"
+              className="grid size-9 place-items-center rounded-full bg-[#25D366] text-white shadow-sm"
+            >
               <MessageCircle className="size-4" />
             </a>
           </div>
         </div>
       </div>
 
-      {activeOrderBanner && (
-        <div className="bg-white px-4 pb-3 pt-2">
-          {activeOrderBanner}
-        </div>
-      )}
+      {activeOrderBanner && <div className="bg-white px-4 pb-3 pt-2">{activeOrderBanner}</div>}
 
       {/* ============ BANNER ============ */}
       <div
-        className="relative overflow-hidden bg-gradient-to-br from-[#1c0f0b] via-[#7f1d1d] to-[#f97316] px-5 py-8 text-white"
+        className="relative overflow-hidden bg-gradient-to-br from-[#1c0f0b] via-[#7f1d1d] to-[#f97316] px-5 py-6 text-white sm:py-8"
         style={
           bannerUrl
             ? {
@@ -3809,20 +4931,23 @@ function CustomerHome() {
         }
       >
         <div className="mx-auto max-w-2xl">
-          <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide backdrop-blur ${
-            isStoreOpenByBusinessHours(publicStoreStatus)
-              ? "bg-emerald-500/90 text-white"
-              : "bg-black/55 text-white"
-          }`}>
+          <span
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide backdrop-blur ${
+              isStoreOpenByBusinessHours(publicStoreStatus)
+                ? "bg-emerald-500/90 text-white"
+                : "bg-black/55 text-white"
+            }`}
+          >
             <Flame className="size-3.5" />
             {isStoreOpenByBusinessHours(publicStoreStatus) ? "Aberto agora" : "Fechado agora"}
           </span>
-          <h1 className="mt-3 font-display text-3xl font-black uppercase leading-[1.05] tracking-tight sm:text-4xl">
+          <h1 className="mt-3 font-display text-[1.7rem] font-black uppercase leading-[1.05] tracking-tight sm:text-4xl">
             Sua fome pediu.
-            <br />
-            A Hotbox caprichou.
+            <br />A Hotbox caprichou.
           </h1>
-          <p className="mt-3 max-w-md text-sm text-white/85">{bannerTagline}</p>
+          <p className="mt-2 line-clamp-3 max-w-md text-sm leading-relaxed text-white/90">
+            {bannerTagline}
+          </p>
           <div className="mt-4 grid grid-cols-2 gap-2 text-[11px] font-semibold sm:flex sm:flex-wrap sm:items-center sm:gap-4 sm:text-sm">
             <span className="flex min-w-0 items-center justify-center gap-1 rounded-full bg-white/15 px-2 py-1.5 backdrop-blur sm:justify-start sm:gap-1.5 sm:px-3">
               <MapPin className="size-3.5 shrink-0 sm:size-4" />
@@ -3836,11 +4961,15 @@ function CustomerHome() {
         </div>
       </div>
 
-      <header className="sticky top-0 z-40 border-b bg-background/95 px-4 py-3 backdrop-blur">
+      <header className="sticky top-0 z-40 border-b border-black/5 bg-white/95 px-4 py-2.5 shadow-sm backdrop-blur">
         <div className="mx-auto max-w-2xl">
           <div className="relative">
             <Search className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
+              type="search"
+              inputMode="search"
+              enterKeyHint="search"
+              aria-label="Buscar produtos no cardápio"
               className="rounded-full border-none bg-muted pl-11"
               placeholder="Buscar produtos..."
               value={query}
@@ -3852,7 +4981,13 @@ function CustomerHome() {
             {categories.map((cat) => (
               <button
                 key={cat}
-                onClick={() => setActiveCategory(cat)}
+                onClick={() => {
+                  setActiveCategory(cat);
+                  trackAnalytics("menu_category_selected", {
+                    event_category: "discovery",
+                    properties: { category: cat, previous_category: activeCategory },
+                  });
+                }}
                 className={`flex shrink-0 items-center gap-1.5 rounded-full px-4 py-2 text-sm font-bold transition ${activeCategory === cat ? "bg-gradient-to-r from-primary to-accent text-primary-foreground shadow-md" : "border bg-card text-foreground/70"}`}
               >
                 {cat === "Batata" && <Flame className="size-3.5" />}
@@ -3860,181 +4995,259 @@ function CustomerHome() {
               </button>
             ))}
           </div>
-
-
         </div>
       </header>
 
       <main className="mx-auto max-w-2xl px-4 py-5">
-        {!query && (activeCategory === "Tudo" || activeCategory === "Batata") && (
-          <div className="mb-5">
-            <CustomerLoyaltyClub
-              session={customerSession}
-              onSessionChange={setCustomerSession}
-              onUseReward={(code) => {
-                setCouponInput(code);
-                if (!cart.length) {
-                  toast.info("Adicione sua batata ao carrinho e depois use o cupom no carrinho.");
-                  return;
-                }
-                setView("cart");
-                window.setTimeout(() => void applyCoupon(code), 0);
-              }}
-            />
-          </div>
-        )}
-        {!query && (activeCategory === "Tudo" || activeCategory === "Batata") && publicReviews.length > 0 && (
-          <button
-            type="button"
-            onClick={() => setShowPublicReviews(true)}
-            className="mb-3 flex w-full items-center gap-2 rounded-2xl border border-black/5 bg-white px-3 py-2 shadow-sm transition hover:bg-muted/30"
-          >
-            <PublicReviewStars value={publicReviewsAverage} />
-            <span className="text-xs font-black">{publicReviewsAverage.toFixed(1)}</span>
-            <span className="min-w-0 flex-1 truncate text-left text-[11px] text-muted-foreground">
-              {publicReviews.length} {publicReviews.length === 1 ? "avaliação" : "avaliações"} de clientes
-            </span>
-            <span className="shrink-0 text-[11px] font-black text-primary">Ver avaliações</span>
-            <ChevronRight className="size-3.5 shrink-0 text-primary" />
-          </button>
-        )}
+        {!query &&
+          (activeCategory === "Tudo" || activeCategory === "Batata") &&
+          publicReviews.length > 0 && (
+            <button
+              type="button"
+              onClick={() => openReviews("menu")}
+              className="mb-3 flex w-full items-center gap-2 rounded-2xl border border-black/5 bg-white px-3 py-2 shadow-sm transition hover:bg-muted/30"
+            >
+              <PublicReviewStars value={publicReviewsAverage} />
+              <span className="text-xs font-black">{publicReviewsAverage.toFixed(1)}</span>
+              <span className="min-w-0 flex-1 truncate text-left text-[11px] text-muted-foreground">
+                {publicReviews.length} {publicReviews.length === 1 ? "avaliação" : "avaliações"} de
+                clientes
+              </span>
+              <span className="shrink-0 text-[11px] font-black text-primary">Ver avaliações</span>
+              <ChevronRight className="size-3.5 shrink-0 text-primary" />
+            </button>
+          )}
 
         {!products.length ? (
-          <div className="rounded-xl border border-dashed py-16 text-center">
-            <p className="text-muted-foreground">Cardápio vazio. Volte em breve!</p>
+          <div className="rounded-[28px] border border-dashed bg-white px-6 py-14 text-center shadow-sm">
+            <AlertTriangle
+              className={`mx-auto size-8 ${menuLoadError ? "text-amber-600" : "text-muted-foreground"}`}
+            />
+            <p className="mt-3 font-black">
+              {menuLoadError
+                ? "Não conseguimos carregar o cardápio"
+                : "Cardápio vazio. Volte em breve!"}
+            </p>
+            {menuLoadError && (
+              <>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Verifique sua conexão e tente novamente. Sua sacola continua salva.
+                </p>
+                <Button
+                  type="button"
+                  onClick={() => {
+                    setConfigLoaded(false);
+                    setMenuReloadAttempt((attempt) => attempt + 1);
+                    trackAnalytics("menu_reload_requested", { event_category: "recovery" });
+                  }}
+                  className="mt-5 rounded-full bg-[#ffd400] px-6 font-black text-black hover:bg-[#f4ca00]"
+                >
+                  Tentar novamente
+                </Button>
+              </>
+            )}
           </div>
         ) : (
           <div className="space-y-8">
-
-            {!query && activeCategory === "Tudo" && featured.length > 0 && (
-              <section>
-                <h2 className="mb-3 flex items-center gap-1.5 font-display text-xl font-black uppercase tracking-tight">
-                  <Flame className="size-5 text-primary" /> Ofertas e preferidos
-                </h2>
-                <div className="grid grid-cols-2 gap-3">
-                  {featured.map((p) => (
-                    <button
-                      key={p.id}
-                      onClick={() => openDetail(p)}
-                      className="group relative aspect-[4/5] overflow-hidden rounded-[24px] bg-white text-left shadow-sm ring-1 ring-black/5"
-                    >
-                      {p.image_url ? (
-                        isBeverageProduct(p) ? (
-                          <div className="absolute inset-0 grid place-items-center bg-white">
-                            <NormalizedBeverageImage
+            {!query &&
+              (activeCategory === "Tudo" || activeCategory === "Batata") &&
+              featured.length > 0 && (
+                <section>
+                  <h2 className="mb-3 flex items-center gap-1.5 font-display text-xl font-black uppercase tracking-tight">
+                    <Flame className="size-5 text-primary" /> Ofertas e preferidos
+                  </h2>
+                  <div className="grid grid-cols-2 gap-3">
+                    {featured.map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={() => openDetail(p)}
+                        className="group relative aspect-[4/5] overflow-hidden rounded-[24px] bg-white text-left shadow-sm ring-1 ring-black/5"
+                      >
+                        {p.image_url ? (
+                          isBeverageProduct(p) ? (
+                            <div className="absolute inset-0 grid place-items-center bg-white">
+                              <NormalizedBeverageImage
+                                src={p.image_url}
+                                alt={p.name}
+                                className="h-[78%] w-[78%] object-contain transition group-hover:scale-105"
+                              />
+                            </div>
+                          ) : (
+                            <img
                               src={p.image_url}
                               alt={p.name}
-                              className="h-[78%] w-[78%] object-contain transition group-hover:scale-105"
+                              className="absolute inset-0 size-full object-cover transition group-hover:scale-105"
+                              loading="lazy"
+                              decoding="async"
                             />
-                          </div>
+                          )
                         ) : (
-                          <img
-                            src={p.image_url}
-                            alt={p.name}
-                            className="absolute inset-0 size-full object-cover transition group-hover:scale-105"
-                          />
-                        )
-                      ) : (
-                        <div className="absolute inset-0 bg-muted" />
-                      )}
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/10 to-transparent" />
-                      <div className="absolute inset-x-0 bottom-0 p-3">
-                        <div className="flex items-center gap-1.5"><p className="text-[13px] font-extrabold uppercase leading-tight text-white">{p.name}</p>{p.is_combo && <span className="rounded-full bg-amber-400 px-1.5 py-0.5 text-[9px] font-black text-black">COMBO</span>}</div>
-                        {(() => {
-                          const eff = getEffectivePrice(p);
-                          return eff.isPromotion ? (
-                            <p className="mt-0.5 flex items-baseline gap-1.5">
-                              <span className="text-[10px] text-white/60 line-through">{brl(eff.listPrice)}</span>
-                              <span className="font-bold text-fuchsia-400">{brl(eff.price)}</span>
+                          <div className="absolute inset-0 bg-muted" />
+                        )}
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/10 to-transparent" />
+                        <div className="absolute inset-x-0 bottom-0 p-3">
+                          <div className="flex items-center gap-1.5">
+                            <p className="text-[13px] font-extrabold uppercase leading-tight text-white">
+                              {p.name}
                             </p>
+                            {p.is_combo && (
+                              <span className="rounded-full bg-amber-400 px-1.5 py-0.5 text-[9px] font-black text-black">
+                                COMBO
+                              </span>
+                            )}
+                          </div>
+                          {(() => {
+                            const eff = getEffectivePrice(p);
+                            return eff.isPromotion ? (
+                              <p className="mt-0.5 flex items-baseline gap-1.5">
+                                <span className="text-[10px] text-white/60 line-through">
+                                  {brl(eff.listPrice)}
+                                </span>
+                                <span className="font-bold text-fuchsia-400">{brl(eff.price)}</span>
+                              </p>
+                            ) : (
+                              <p className="mt-0.5 font-bold text-amber-400">{brl(eff.price)}</p>
+                            );
+                          })()}
+                        </div>
+                        <span
+                          className={`absolute right-3 top-3 grid size-9 place-items-center rounded-full shadow-md ${p.active ? "bg-[#ffd400] text-black" : "bg-zinc-200 text-zinc-500"}`}
+                        >
+                          {p.active ? (
+                            <Plus className="size-5 stroke-[3]" />
                           ) : (
-                            <p className="mt-0.5 font-bold text-amber-400">{brl(eff.price)}</p>
-                          );
-                        })()}
-                      </div>
-                      <span className={`grid size-9 shrink-0 place-items-center rounded-full shadow-sm ${p.active ? "bg-[#ffd400] text-black" : "bg-zinc-200 text-zinc-500"}`}>
-                        {p.active ? <Plus className="size-5 stroke-[3]" /> : <X className="size-4" />}
-                      </span>
-                    </button>
-                  ))}
-                </div>
+                            <X className="size-4" />
+                          )}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+            {!query && (activeCategory === "Tudo" || activeCategory === "Batata") && (
+              <section>
+                <CustomerLoyaltyClub
+                  session={customerSession}
+                  onSessionChange={setCustomerSession}
+                  onUseReward={(code) => {
+                    setCouponInput(code);
+                    if (!cart.length) {
+                      toast.info(
+                        "Adicione sua batata ao carrinho e depois use o cupom no carrinho.",
+                      );
+                      return;
+                    }
+                    setView("cart");
+                    window.setTimeout(() => void applyCoupon(code), 0);
+                  }}
+                />
               </section>
             )}
 
-
             <section>
-              <h2 className="mb-3 font-display text-xl font-black uppercase tracking-tight">Cardápio</h2>
+              <h2 className="mb-3 font-display text-xl font-black uppercase tracking-tight">
+                Cardápio
+              </h2>
               {!filtered.length ? (
-                <p className="py-10 text-center text-sm text-muted-foreground">Nenhum produto encontrado.</p>
+                <p className="py-10 text-center text-sm text-muted-foreground">
+                  Nenhum produto encontrado.
+                </p>
               ) : (
                 <div className="space-y-2.5">
                   {filtered.map((p, index) => (
                     <div key={p.id}>
-                    <button
-                      onClick={() => openDetail(p)}
-                      className={`flex w-full items-center gap-4 rounded-[24px] border border-black/5 bg-white p-3.5 text-left shadow-sm transition ${
-                        p.active ? "hover:-translate-y-0.5 hover:shadow-md" : "grayscale opacity-55"
-                      }`}
-                    >
-                      {p.image_url ? (
-                        isBeverageProduct(p) ? (
-                          <div className="grid size-24 shrink-0 place-items-center overflow-hidden rounded-2xl border border-black/5 bg-white">
-                            <NormalizedBeverageImage
+                      <button
+                        onClick={() => openDetail(p)}
+                        className={`flex w-full items-center gap-4 rounded-[24px] border border-black/5 bg-white p-3.5 text-left shadow-sm transition ${
+                          p.active
+                            ? "hover:-translate-y-0.5 hover:shadow-md"
+                            : "grayscale opacity-55"
+                        }`}
+                      >
+                        {p.image_url ? (
+                          isBeverageProduct(p) ? (
+                            <div className="grid size-24 shrink-0 place-items-center overflow-hidden rounded-2xl border border-black/5 bg-white">
+                              <NormalizedBeverageImage
+                                src={p.image_url}
+                                alt={p.name}
+                                className="size-20 object-contain"
+                              />
+                            </div>
+                          ) : (
+                            <img
                               src={p.image_url}
                               alt={p.name}
-                              className="size-20 object-contain"
+                              className="size-24 shrink-0 rounded-2xl object-cover"
+                              loading="lazy"
+                              decoding="async"
                             />
-                          </div>
+                          )
                         ) : (
-                          <img src={p.image_url} alt={p.name} className="size-24 shrink-0 rounded-2xl object-contain" />
-                        )
-                      ) : (
-                        <div className="grid size-24 shrink-0 place-items-center rounded-2xl bg-muted text-[9px] text-muted-foreground">
-                          Sem foto
-                        </div>
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <h4 className="font-bold uppercase leading-tight">{p.name}</h4>
-                          {p.is_combo && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-black text-amber-800">COMBO</span>}
-                          {!p.active && (
-                            <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-zinc-700">
-                              Esgotado por hoje
-                            </span>
-                          )}
-                        </div>
-                        {p.description && (
-                          <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{p.description}</p>
+                          <div className="grid size-24 shrink-0 place-items-center rounded-2xl bg-muted text-[9px] text-muted-foreground">
+                            Sem foto
+                          </div>
                         )}
-                        {(() => {
-                          const eff = getEffectivePrice(p);
-                          return eff.isPromotion ? (
-                            <p className="mt-1 flex items-baseline gap-1.5">
-                              <span className="text-xs text-muted-foreground line-through">{brl(eff.listPrice)}</span>
-                              <span className="font-extrabold text-fuchsia-600">{brl(eff.price)}</span>
-                              {p.promotion_label && (
-                                <span className="flex items-center gap-1 rounded-full bg-fuchsia-100 px-1.5 py-0.5 text-[10px] font-bold text-fuchsia-700">
-                                  <Ticket className="size-2.5" /> {p.promotion_label}
-                                </span>
-                              )}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <h4 className="font-bold uppercase leading-tight">{p.name}</h4>
+                            {p.is_combo && (
+                              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-black text-amber-800">
+                                COMBO
+                              </span>
+                            )}
+                            {!p.active && (
+                              <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-zinc-700">
+                                Esgotado por hoje
+                              </span>
+                            )}
+                          </div>
+                          {p.description && (
+                            <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+                              {p.description}
                             </p>
+                          )}
+                          {(() => {
+                            const eff = getEffectivePrice(p);
+                            return eff.isPromotion ? (
+                              <p className="mt-1 flex items-baseline gap-1.5">
+                                <span className="text-xs text-muted-foreground line-through">
+                                  {brl(eff.listPrice)}
+                                </span>
+                                <span className="font-extrabold text-fuchsia-600">
+                                  {brl(eff.price)}
+                                </span>
+                                {p.promotion_label && (
+                                  <span className="flex items-center gap-1 rounded-full bg-fuchsia-100 px-1.5 py-0.5 text-[10px] font-bold text-fuchsia-700">
+                                    <Ticket className="size-2.5" /> {p.promotion_label}
+                                  </span>
+                                )}
+                              </p>
+                            ) : (
+                              <p className="mt-1 font-extrabold text-primary">{brl(eff.price)}</p>
+                            );
+                          })()}
+                        </div>
+                        <span
+                          className={`grid size-9 shrink-0 place-items-center rounded-full shadow-sm ${
+                            p.active ? "bg-[#ffd400] text-black" : "bg-zinc-200 text-zinc-500"
+                          }`}
+                        >
+                          {p.active ? (
+                            <Plus className="size-5 stroke-[3]" />
                           ) : (
-                            <p className="mt-1 font-extrabold text-primary">{brl(eff.price)}</p>
-                          );
-                        })()}
-                      </div>
-                      <span className={`grid size-9 shrink-0 place-items-center rounded-full shadow-sm ${
-                        p.active ? "bg-[#ffd400] text-black" : "bg-zinc-200 text-zinc-500"
-                      }`}>
-                        {p.active ? <Plus className="size-5 stroke-[3]" /> : <X className="size-4" />}
-                      </span>
-                    </button>
-                    {!query && activeCategory === "Tudo" && reviewsWithComments.length > 0 && index === 3 && (
-                      <CompactInlineReview review={reviewsWithComments[0]} />
-                    )}
-                    {!query && activeCategory === "Tudo" && reviewsWithComments.length > 1 && index === 7 && (
-                      <CompactInlineReview review={reviewsWithComments[1]} />
-                    )}
+                            <X className="size-4" />
+                          )}
+                        </span>
+                      </button>
+                      {!query &&
+                        activeCategory === "Tudo" &&
+                        reviewsWithComments.length > 0 &&
+                        index === 3 && <CompactInlineReview review={reviewsWithComments[0]} />}
+                      {!query &&
+                        activeCategory === "Tudo" &&
+                        reviewsWithComments.length > 1 &&
+                        index === 7 && <CompactInlineReview review={reviewsWithComments[1]} />}
                     </div>
                   ))}
                 </div>
@@ -4044,7 +5257,7 @@ function CustomerHome() {
             {!query && activeCategory === "Tudo" && publicReviews.length > 0 && (
               <button
                 type="button"
-                onClick={() => setShowPublicReviews(true)}
+                onClick={() => openReviews("menu_footer")}
                 className="flex w-full items-center justify-between rounded-2xl border border-black/5 bg-white px-4 py-3 text-left shadow-sm"
               >
                 <div>
@@ -4071,7 +5284,6 @@ function CustomerHome() {
         <MapPin className="mx-auto mb-1 size-4" />
         {storeName} • Todos os direitos reservados
         <div className="mt-1 font-semibold">CNPJ 67.798.065/0001-03</div>
-
         <div className="mt-3 flex justify-center">
           <a
             href="https://www.instagram.com/hotboxbatata/"
@@ -4084,7 +5296,6 @@ function CustomerHome() {
             @hotboxbatata
           </a>
         </div>
-
         <div className="mt-2">
           <Link to="/politica-de-privacidade" className="underline hover:text-foreground">
             Política de Privacidade
@@ -4092,7 +5303,7 @@ function CustomerHome() {
         </div>
       </footer>
 
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 backdrop-blur">
+      <nav className="hotbox-safe-bottom fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 backdrop-blur">
         <div className="mx-auto flex max-w-2xl items-stretch gap-2 px-3 py-2">
           <Link
             to="/meus-pedidos"
