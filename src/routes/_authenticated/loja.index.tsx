@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { brl, formatDateTime, formatPhone, orderDisplayRef } from "@/lib/formatters";
+import { brasiliaDateISO, brasiliaDayRange } from "@/lib/brasilia-date";
 import { pushIfoodStatusFn } from "@/lib/ifood-push.functions";
 import { pushNfoodStatusFn } from "@/lib/nfood-push.functions";
 import { sendOrderArrivalNoticeFn } from "@/lib/order-notifications.functions";
@@ -135,6 +136,7 @@ function OrderCard({
   onAdvance,
   onArrival,
   onCancel,
+  onDismiss,
   advancing,
   arrivalLoading,
 }: {
@@ -144,6 +146,7 @@ function OrderCard({
   onAdvance: () => void;
   onArrival: () => void;
   onCancel: () => void;
+  onDismiss?: () => void;
   advancing: boolean;
   arrivalLoading: boolean;
 }) {
@@ -151,6 +154,7 @@ function OrderCard({
   const isPickup = order.delivery_mode === "pickup";
   const isNew = ["pending", "pending_review"].includes(order.status);
   const cancellation = Boolean(order.customer_cancel_requested);
+  const isFinished = order.status === "delivered";
 
   let action = "Marcar como pronto";
   let ActionIcon: any = Package;
@@ -195,7 +199,13 @@ function OrderCard({
                 <p className="truncate text-xs font-semibold text-white/90">{order.customer_name}</p>
               </div>
             </div>
-            <ChevronRight className="size-4 shrink-0 text-white/60 transition group-hover:translate-x-0.5" />
+            {isFinished ? (
+              <span className="rounded-full bg-emerald-500 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-white">
+                Entregue
+              </span>
+            ) : (
+              <ChevronRight className="size-4 shrink-0 text-white/60 transition group-hover:translate-x-0.5" />
+            )}
           </div>
         </div>
 
@@ -204,9 +214,15 @@ function OrderCard({
             <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[9px] font-bold text-zinc-700">
               {sourceLabel(order.source)}
             </span>
-            <span className={`flex items-center gap-1 text-xs font-bold ${mins >= 40 ? "text-red-600" : mins >= 25 ? "text-amber-600" : "text-zinc-500"}`}>
-              <Clock3 className="size-3" /> {mins} min
-            </span>
+            {isFinished ? (
+              <span className="flex items-center gap-1 text-[11px] font-bold text-emerald-700">
+                <CheckCircle2 className="size-3" /> {formatDateTime(order.delivered_at || order.created_at)}
+              </span>
+            ) : (
+              <span className={`flex items-center gap-1 text-xs font-bold ${mins >= 40 ? "text-red-600" : mins >= 25 ? "text-amber-600" : "text-zinc-500"}`}>
+                <Clock3 className="size-3" /> {mins} min
+              </span>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-1.5 text-[11px]">
@@ -240,6 +256,25 @@ function OrderCard({
       </button>
 
       <div className="border-t bg-zinc-50/80 p-2">
+        {isFinished ? (
+          <div className="grid grid-cols-[1fr_auto] gap-1.5">
+            <Button type="button" variant="outline" size="sm" className="h-8 rounded-lg bg-white text-xs font-bold" onClick={onOpen}>
+              Ver detalhes <ChevronRight className="ml-1 size-3.5" />
+            </Button>
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="size-8 rounded-lg text-zinc-400 hover:bg-red-50 hover:text-red-600"
+              onClick={onDismiss}
+              title="Ocultar este card (o pedido continuará salvo no histórico)"
+              aria-label="Ocultar card do pedido finalizado"
+            >
+              <Trash2 className="size-4" />
+            </Button>
+          </div>
+        ) : (
+          <>
         {order.status === "out_for_delivery" && !isPickup && (
           <Button
             type="button"
@@ -284,6 +319,8 @@ function OrderCard({
             <XCircle className="size-4" />
           </Button>
         </div>
+          </>
+        )}
       </div>
     </Card>
   );
@@ -766,18 +803,36 @@ function OrdersBoard() {
   const [unreadByPhone, setUnreadByPhone] = useState<Record<string, boolean>>({});
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
   const [arrivalOrderId, setArrivalOrderId] = useState<string | null>(null);
+  const finishedStorageKey = `hotbox:hidden-finished-orders:${brasiliaDateISO()}`;
+  const [hiddenFinishedOrderIds, setHiddenFinishedOrderIds] = useState<string[]>([]);
   const previousPendingRef = useRef(0);
 
   async function loadOrders() {
-    const { data, error } = await supabase
-      .from("orders")
-      .select("*")
-      .in("status", ACTIVE_STATUSES as any)
-      .order("created_at", { ascending: true });
+    const today = brasiliaDateISO();
+    const { since, until } = brasiliaDayRange(today, today);
+    const [activeResult, finishedResult] = await Promise.all([
+      supabase
+        .from("orders")
+        .select("*")
+        .in("status", ACTIVE_STATUSES as any)
+        .order("created_at", { ascending: true }),
+      supabase
+        .from("orders")
+        .select("*")
+        .eq("status", "delivered")
+        .gte("delivered_at", since)
+        .lte("delivered_at", until)
+        .order("delivered_at", { ascending: false }),
+    ]);
+    const error = activeResult.error || finishedResult.error;
     if (error) {
       toast.error(error.message);
     } else {
-      setOrders((data as any[]) || []);
+      const byId = new Map<string, Order>();
+      for (const order of [...(activeResult.data || []), ...(finishedResult.data || [])] as Order[]) {
+        byId.set(order.id, order);
+      }
+      setOrders(Array.from(byId.values()));
     }
     setLoading(false);
   }
@@ -791,6 +846,17 @@ function OrdersBoard() {
     }
     setUnreadByPhone(next);
   }
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(finishedStorageKey) || "[]");
+      if (Array.isArray(saved)) {
+        setHiddenFinishedOrderIds(saved.filter((id): id is string => typeof id === "string"));
+      }
+    } catch {
+      setHiddenFinishedOrderIds([]);
+    }
+  }, [finishedStorageKey]);
 
   useEffect(() => {
     void loadOrders();
@@ -854,7 +920,24 @@ function OrdersBoard() {
     preparing: filteredOrders.filter((order) => ["pending", "pending_review", "preparing"].includes(order.status)),
     ready: filteredOrders.filter((order) => order.status === "ready_pickup"),
     delivery: filteredOrders.filter((order) => order.status === "out_for_delivery"),
-  }), [filteredOrders]);
+    finished: filteredOrders
+      .filter((order) => order.status === "delivered" && !hiddenFinishedOrderIds.includes(order.id))
+      .sort((a, b) => new Date(b.delivered_at || b.created_at).getTime() - new Date(a.delivered_at || a.created_at).getTime()),
+  }), [filteredOrders, hiddenFinishedOrderIds]);
+
+  function dismissFinishedOrder(order: Order) {
+    setHiddenFinishedOrderIds((current) => {
+      const next = current.includes(order.id) ? current : [...current, order.id];
+      try {
+        window.localStorage.setItem(finishedStorageKey, JSON.stringify(next));
+      } catch {
+        // A ocultação continua válida durante a sessão mesmo se o armazenamento estiver indisponível.
+      }
+      return next;
+    });
+    if (selectedOrderId === order.id) setSelectedOrderId(null);
+    toast.success("Card ocultado. O pedido continua salvo no histórico.");
+  }
 
   async function advance(order: Order) {
     let next = "ready_pickup";
@@ -924,6 +1007,7 @@ function OrdersBoard() {
     { key: "preparing", title: "Em preparo", subtitle: "Novos pedidos e pedidos sendo preparados", icon: ChefHat, count: columns.preparing.length, accent: "bg-orange-500" },
     { key: "ready", title: "Pronto", subtitle: "Pedidos finalizados aguardando saída", icon: Package, count: columns.ready.length, accent: "bg-sky-500" },
     { key: "delivery", title: "Saiu para entrega", subtitle: "Pedidos a caminho do cliente", icon: Bike, count: columns.delivery.length, accent: "bg-emerald-500" },
+    { key: "finished", title: "Pedidos finalizados", subtitle: "Entregues ou retirados hoje", icon: CheckCircle2, count: columns.finished.length, accent: "bg-zinc-700" },
   ] as const;
 
   return (
@@ -934,7 +1018,7 @@ function OrdersBoard() {
             <div>
               <div className="flex items-center gap-2"><span className="rounded-full bg-[#ffcf00] px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-zinc-950">Operação HotBox</span>{pendingCount > 0 && <span className="rounded-full bg-red-500 px-2.5 py-1 text-[10px] font-black uppercase text-white">{pendingCount} novo(s)</span>}</div>
               <h1 className="mt-2 text-2xl font-black tracking-tight text-white sm:text-3xl">Central de pedidos</h1>
-              <p className="mt-1 text-sm text-white/60">Fluxo visual em 3 etapas. Clique em qualquer pedido para abrir o resumo completo.</p>
+              <p className="mt-1 text-sm text-white/60">Fluxo visual em 4 etapas. Clique em qualquer pedido para abrir o resumo completo.</p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -949,7 +1033,7 @@ function OrdersBoard() {
 
         <div className="relative sm:hidden"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-zinc-400" /><Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar pedido..." className="bg-white pl-9" /></div>
 
-        <div className="grid gap-4 xl:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {columnDefinitions.map((column) => {
             const Icon = column.icon;
             const list = columns[column.key];
@@ -980,6 +1064,7 @@ function OrdersBoard() {
                         onAdvance={() => void advance(order)}
                         onArrival={() => void sendArrival(order)}
                         onCancel={() => void cancel(order)}
+                        onDismiss={column.key === "finished" ? () => dismissFinishedOrder(order) : undefined}
                         advancing={busyOrderId === order.id}
                         arrivalLoading={arrivalOrderId === order.id}
                       />
