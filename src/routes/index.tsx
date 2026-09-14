@@ -2693,6 +2693,75 @@ function CustomerHome() {
     );
   }
 
+  const reservationEntryModal = (showReservationEntryModal && (
+    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/65 px-4">
+      <div className="w-full max-w-md rounded-[28px] border-2 border-amber-400 bg-white p-6 shadow-2xl">
+        <div className="mx-auto grid size-14 place-items-center rounded-full bg-amber-100 text-3xl">🗓️</div>
+        <p className="mt-4 text-center text-xs font-black uppercase tracking-[0.16em] text-amber-700">
+          Reserva HotBox
+        </p>
+        <h2 className="mt-1 text-center text-2xl font-black text-zinc-950">
+          A loja está fechada agora
+        </h2>
+        <p className="mt-3 text-center text-sm leading-relaxed text-zinc-700">
+          Você pode continuar e reservar seu pedido para o próximo dia de funcionamento.
+        </p>
+        <div className="mt-5">
+          <Label htmlFor="reservation-date" className="font-black">Escolha a data da reserva</Label>
+          <Input
+            id="reservation-date"
+            type="date"
+            min={nextReservationDate(publicStoreStatus)}
+            value={reservationDate}
+            onChange={(event) => {
+              setReservationDate(event.target.value);
+              setReservationAccepted(false);
+            }}
+            className="mt-2 rounded-2xl"
+          />
+          {reservationDate && !reservationDayAllowed(publicStoreStatus, reservationDate) && (
+            <p className="mt-2 text-xs font-bold text-red-600">
+              Escolha um dia em que a HotBox esteja em funcionamento.
+            </p>
+          )}
+        </div>
+        <div className="mt-5 grid gap-2">
+          <Button
+            type="button"
+            onClick={() => {
+              if (!reservationDate) {
+                toast.error("Escolha a data da sua reserva.");
+                return;
+              }
+              if (!reservationDayAllowed(publicStoreStatus, reservationDate)) {
+                toast.error("Escolha um dia em que a HotBox esteja em funcionamento.");
+                return;
+              }
+              setClosedStoreReservationMode(true);
+              setReservationAccepted(false);
+              setShowReservationEntryModal(false);
+              setView("checkout");
+            }}
+            className="w-full rounded-full bg-[#ffd400] py-6 font-black text-black hover:bg-[#f4ca00]"
+          >
+            Continuar para o checkout
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => {
+              setShowReservationEntryModal(false);
+              setClosedStoreReservationMode(false);
+            }}
+            className="w-full rounded-full"
+          >
+            Voltar para a sacola
+          </Button>
+        </div>
+      </div>
+    </div>
+  ));
+
   const reservationPaymentConfirmModal = (showReservationPaymentConfirm && (
     <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/65 px-4">
       <div className="w-full max-w-md rounded-[28px] border-2 border-amber-400 bg-white p-6 shadow-2xl">
@@ -2783,6 +2852,11 @@ function CustomerHome() {
           >
             <ArrowLeft className="size-5" />
           </button>
+          <img
+            src={HOTBOX_LOGO_URL}
+            alt="HotBox"
+            className="size-10 shrink-0 rounded-xl object-contain shadow-sm ring-1 ring-black/10"
+          />
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-black">{selectedProduct.name}</p>
             <p className="text-[11px] text-muted-foreground">Monte do seu jeito</p>
@@ -2826,7 +2900,7 @@ function CustomerHome() {
           </div>
 
           <div className="space-y-4 px-4 py-5">
-            <section className="rounded-[26px] border border-black/5 bg-white p-5 shadow-sm">
+            <section>
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
@@ -2844,41 +2918,36 @@ function CustomerHome() {
                 )}
               </div>
 
-              <div className="mt-4 flex items-end justify-between gap-3">
-                <div>
-                  {effective.isPromotion ? (
-                    <div className="flex items-baseline gap-2">
-                      <span className="text-sm text-muted-foreground line-through">{brl(effective.listPrice)}</span>
-                      <span className="text-2xl font-black text-fuchsia-600">{brl(effective.price)}</span>
-                    </div>
-                  ) : (
-                    <span className="text-2xl font-black text-primary">{brl(effective.price)}</span>
-                  )}
-                  {selectedProduct.promotion_label && effective.isPromotion && (
-                    <p className="mt-1 text-[11px] font-bold text-fuchsia-700">{selectedProduct.promotion_label}</p>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 rounded-full border bg-zinc-50 p-1">
-                  <button
-                    type="button"
-                    onClick={() => setDetailQty((qty) => Math.max(1, qty - 1))}
-                    className="grid size-9 place-items-center rounded-full bg-white shadow-sm"
-                    aria-label="Diminuir quantidade"
-                  >
-                    <Minus className="size-4" />
-                  </button>
-                  <span className="min-w-7 text-center text-sm font-black">{detailQty}</span>
-                  <button
-                    type="button"
-                    onClick={() => setDetailQty((qty) => qty + 1)}
-                    className="grid size-9 place-items-center rounded-full bg-[#ffd400] text-black shadow-sm"
-                    aria-label="Aumentar quantidade"
-                  >
-                    <Plus className="size-4" />
-                  </button>
-                </div>
+              <div className="mt-4">
+                {effective.isPromotion ? (
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-sm text-muted-foreground line-through">{brl(effective.listPrice)}</span>
+                    <span className="text-2xl font-black text-fuchsia-600">{brl(effective.price)}</span>
+                  </div>
+                ) : (
+                  <span className="text-2xl font-black text-primary">{brl(effective.price)}</span>
+                )}
+                {selectedProduct.promotion_label && effective.isPromotion && (
+                  <p className="mt-1 text-[11px] font-bold text-fuchsia-700">{selectedProduct.promotion_label}</p>
+                )}
               </div>
             </section>
+
+            {publicReviews.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowPublicReviews(true)}
+                className="flex w-full items-center gap-2 rounded-2xl border border-black/5 bg-white px-3 py-2 shadow-sm transition hover:bg-muted/30"
+              >
+                <PublicReviewStars value={publicReviewsAverage} />
+                <span className="text-xs font-black">{publicReviewsAverage.toFixed(1)}</span>
+                <span className="min-w-0 flex-1 truncate text-left text-[11px] text-muted-foreground">
+                  {publicReviews.length} {publicReviews.length === 1 ? "avaliação" : "avaliações"} de clientes
+                </span>
+                <span className="shrink-0 text-[11px] font-black text-primary">Ver avaliações</span>
+                <ChevronRight className="size-3.5 shrink-0 text-primary" />
+              </button>
+            )}
 
             {productGroups.map((group) => {
               const min = Math.max(0, Number(group.min_select || 0), group.required ? 1 : 0);
@@ -2968,16 +3037,44 @@ function CustomerHome() {
           </div>
         </main>
 
+        <PublicReviewsModal
+          open={showPublicReviews}
+          onClose={() => setShowPublicReviews(false)}
+          reviews={publicReviews}
+          average={publicReviewsAverage}
+        />
+
         <div className="fixed inset-x-0 bottom-0 z-50 border-t bg-white/95 px-4 py-3 backdrop-blur">
-          <div className="mx-auto max-w-2xl">
+          <div className="mx-auto flex max-w-2xl items-center gap-2 rounded-full bg-[#ffd400] p-1.5 text-black shadow-md">
+            <div className="flex shrink-0 items-center rounded-full bg-white/75 p-1">
+              <button
+                type="button"
+                onClick={() => setDetailQty((qty) => Math.max(1, qty - 1))}
+                disabled={!selectedProduct.active}
+                className="grid size-9 place-items-center rounded-full bg-white shadow-sm disabled:opacity-50"
+                aria-label="Diminuir quantidade"
+              >
+                <Minus className="size-4" />
+              </button>
+              <span className="min-w-8 text-center text-sm font-black">{detailQty}</span>
+              <button
+                type="button"
+                onClick={() => setDetailQty((qty) => qty + 1)}
+                disabled={!selectedProduct.active}
+                className="grid size-9 place-items-center rounded-full bg-black text-white shadow-sm disabled:opacity-50"
+                aria-label="Aumentar quantidade"
+              >
+                <Plus className="size-4" />
+              </button>
+            </div>
             <Button
               type="button"
               onClick={addToCartFromDetail}
               disabled={!selectedProduct.active}
-              className="w-full justify-between rounded-full bg-[#ffd400] py-6 text-base font-black text-black shadow-md hover:bg-[#f4ca00] disabled:bg-zinc-200 disabled:text-zinc-500"
+              className="min-w-0 flex-1 justify-between rounded-full bg-transparent px-3 py-5 text-sm font-black text-black shadow-none hover:bg-black/5 disabled:bg-transparent disabled:text-zinc-500"
             >
-              <span>{selectedProduct.active ? "Adicionar à sacola" : "Esgotado por hoje"}</span>
-              <span>{brl(detailTotal)}</span>
+              <span className="truncate">{selectedProduct.active ? "Adicionar à sacola" : "Esgotado por hoje"}</span>
+              <span className="shrink-0">{brl(detailTotal)}</span>
             </Button>
           </div>
         </div>
