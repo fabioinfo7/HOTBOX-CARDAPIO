@@ -1,4 +1,8 @@
-import { trackAnalyticsEvent, trackAnalyticsPresence, type AnalyticsEventInput } from "@/lib/analytics.functions";
+import {
+  trackAnalyticsEvent,
+  trackAnalyticsPresence,
+  type AnalyticsEventInput,
+} from "@/lib/analytics.functions";
 
 const VISITOR_KEY = "hb_analytics_visitor";
 const SESSION_KEY = "hb_analytics_session";
@@ -49,9 +53,7 @@ function metaBrowserSignals() {
   // Se a Meta ainda não criou _fbc, podemos formar o valor a partir do fbclid
   // da URL de entrada. Isso preserva atribuição sem inventar identificadores.
   const existingFbc = readCookie("_fbc");
-  const fbc =
-    existingFbc ||
-    (fbclid ? `fb.1.${Math.floor(Date.now())}.${fbclid}` : null);
+  const fbc = existingFbc || (fbclid ? `fb.1.${Math.floor(Date.now())}.${fbclid}` : null);
 
   return {
     _fbp: fbp,
@@ -90,8 +92,12 @@ function attribution() {
   const q = new URLSearchParams(window.location.search);
   const ref = document.referrer || "";
   const explicitSourceRaw = q.get("utm_source") || q.get("source");
-  const explicitSource = String(explicitSourceRaw || "").trim().toLowerCase();
-  const explicitMedium = String(q.get("utm_medium") || "").trim().toLowerCase();
+  const explicitSource = String(explicitSourceRaw || "")
+    .trim()
+    .toLowerCase();
+  const explicitMedium = String(q.get("utm_medium") || "")
+    .trim()
+    .toLowerCase();
   const fbclid = q.get("fbclid");
 
   let source = explicitSource || "direct";
@@ -138,11 +144,7 @@ function attribution() {
     campaign: q.get("utm_campaign"),
     term: q.get("utm_term"),
     content: q.get("utm_content"),
-    click_id:
-      fbclid ||
-      q.get("gclid") ||
-      q.get("ttclid") ||
-      q.get("msclkid"),
+    click_id: fbclid || q.get("gclid") || q.get("ttclid") || q.get("msclkid"),
   };
 
   // Mantém a primeira atribuição da sessão. Assim uma navegação interna,
@@ -150,10 +152,7 @@ function attribution() {
   try {
     const existingRaw = sessionStorage.getItem(ATTRIBUTION_KEY);
     const hasCampaignSignal =
-      Boolean(explicitSource) ||
-      Boolean(explicitMedium) ||
-      Boolean(fbclid) ||
-      Boolean(ref);
+      Boolean(explicitSource) || Boolean(explicitMedium) || Boolean(fbclid) || Boolean(ref);
 
     if (hasCampaignSignal || !existingRaw) {
       sessionStorage.setItem(ATTRIBUTION_KEY, JSON.stringify(current));
@@ -230,37 +229,23 @@ function cleanMetaContents(input: unknown): MetaContent[] {
 
   return input
     .map((raw: any) => {
-      const id = String(
-        raw?.id ?? raw?.product_id ?? raw?.option_id ?? "",
-      ).trim();
-      const quantity = Math.max(
-        1,
-        Math.round(Number(raw?.quantity ?? raw?.qty ?? 1) || 1),
-      );
-      const price = finiteNumber(
-        raw?.item_price ?? raw?.unit_price ?? raw?.price,
-      );
+      const id = String(raw?.id ?? raw?.product_id ?? raw?.option_id ?? "").trim();
+      const quantity = Math.max(1, Math.round(Number(raw?.quantity ?? raw?.qty ?? 1) || 1));
+      const price = finiteNumber(raw?.item_price ?? raw?.unit_price ?? raw?.price);
 
       if (!id) return null;
 
       return {
         id,
         quantity,
-        ...(price != null
-          ? { item_price: Number(price.toFixed(2)) }
-          : {}),
+        ...(price != null ? { item_price: Number(price.toFixed(2)) } : {}),
       } as MetaContent;
     })
     .filter(Boolean) as MetaContent[];
 }
 
-function metaEventId(
-  eventName: string,
-  extra: Partial<AnalyticsEventInput>,
-) {
-  const explicit = String(
-    (extra.properties as any)?.event_id || "",
-  ).trim();
+function metaEventId(eventName: string, extra: Partial<AnalyticsEventInput>) {
+  const explicit = String((extra.properties as any)?.event_id || "").trim();
 
   if (explicit) return explicit;
 
@@ -276,16 +261,11 @@ function metaEventId(
   try {
     return `hb_${eventName}_${crypto.randomUUID()}`;
   } catch {
-    return `hb_${eventName}_${Date.now()}_${Math.random()
-      .toString(36)
-      .slice(2)}`;
+    return `hb_${eventName}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   }
 }
 
-function trackMetaPixel(
-  event_name: string,
-  extra: Partial<AnalyticsEventInput>,
-) {
+function trackMetaPixel(event_name: string, extra: Partial<AnalyticsEventInput>) {
   if (typeof window === "undefined") return;
 
   const fbq = (window as any).fbq;
@@ -304,9 +284,7 @@ function trackMetaPixel(
   };
 
   const properties: any =
-    extra.properties && typeof extra.properties === "object"
-      ? extra.properties
-      : {};
+    extra.properties && typeof extra.properties === "object" ? extra.properties : {};
 
   const eventID = String(properties.event_id || "").trim() || undefined;
 
@@ -355,9 +333,7 @@ function trackMetaPixel(
   if (extra.product_name) params.content_name = extra.product_name;
   if (properties.category) params.content_category = String(properties.category);
 
-  const value = finiteNumber(
-    extra.value ?? properties.total ?? properties.subtotal,
-  );
+  const value = finiteNumber(extra.value ?? properties.total ?? properties.subtotal);
   if (value != null) {
     params.value = Number(value.toFixed(2));
     params.currency = "BRL";
@@ -383,9 +359,7 @@ function trackMetaPixel(
     params.subtotal = Number(Number(properties.subtotal).toFixed(2));
   }
   if (finiteNumber(properties.delivery_fee) != null) {
-    params.delivery_fee = Number(
-      Number(properties.delivery_fee).toFixed(2),
-    );
+    params.delivery_fee = Number(Number(properties.delivery_fee).toFixed(2));
   }
   if (finiteNumber(properties.discount) != null) {
     params.discount = Number(Number(properties.discount).toFixed(2));
@@ -406,19 +380,11 @@ function trackMetaPixel(
   }
 
   if (Array.isArray(properties.addons) && properties.addons.length) {
-    params.addons = properties.addons
-      .map((x: any) => String(x))
-      .join(", ");
+    params.addons = properties.addons.map((x: any) => String(x)).join(", ");
   }
 
-  fbq(
-    "track",
-    metaEvent,
-    params,
-    eventID ? { eventID } : undefined,
-  );
+  fbq("track", metaEvent, params, eventID ? { eventID } : undefined);
 }
-
 
 function currentAnalyticsPage() {
   if (typeof window === "undefined") {
@@ -429,9 +395,7 @@ function currentAnalyticsPage() {
     page_path:
       String(w[VIRTUAL_PAGE_PATH_KEY] || "").trim() ||
       `${window.location.pathname}${window.location.search}`,
-    page_title:
-      String(w[VIRTUAL_PAGE_TITLE_KEY] || "").trim() ||
-      document.title,
+    page_title: String(w[VIRTUAL_PAGE_TITLE_KEY] || "").trim() || document.title,
   };
 }
 
@@ -466,6 +430,14 @@ export function setAnalyticsVirtualPage(
 
   w[VIRTUAL_PAGE_PATH_KEY] = nextPath;
   w[VIRTUAL_PAGE_TITLE_KEY] = nextTitle;
+
+  if (previousPath !== nextPath) {
+    window.dispatchEvent(
+      new CustomEvent("hotbox:virtual-page", {
+        detail: { previousPath, nextPath, nextTitle },
+      }),
+    );
+  }
 
   sendAnalyticsPresenceNow();
 
@@ -524,7 +496,9 @@ export async function trackAnalyticsAndWait(
   const eventId = metaEventId(event_name, extra);
   const browserSignals = metaBrowserSignals();
   const richProperties = {
-    ...((extra.properties && typeof extra.properties === "object" ? extra.properties : {}) as Record<string, unknown>),
+    ...((extra.properties && typeof extra.properties === "object"
+      ? extra.properties
+      : {}) as Record<string, unknown>),
     ...browserSignals,
     event_id: eventId,
   };
@@ -552,10 +526,7 @@ export async function trackAnalyticsAndWait(
   }
 }
 
-export function trackAnalytics(
-  event_name: string,
-  extra: Partial<AnalyticsEventInput> = {},
-) {
+export function trackAnalytics(event_name: string, extra: Partial<AnalyticsEventInput> = {}) {
   if (typeof window === "undefined") return;
   if (/^\/(loja|admin|entregador)(\/|$)/.test(window.location.pathname)) {
     return;
@@ -586,9 +557,7 @@ export function trackAnalytics(
     ...deviceInfo(),
     event_name,
     event_category: extra.event_category || "engagement",
-    page_path:
-      extra.page_path ||
-      currentAnalyticsPage().page_path,
+    page_path: extra.page_path || currentAnalyticsPage().page_path,
     page_title: extra.page_title || currentAnalyticsPage().page_title,
     ...enrichedExtra,
   } as AnalyticsEventInput;
