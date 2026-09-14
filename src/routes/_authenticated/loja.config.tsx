@@ -287,50 +287,42 @@ function ConfigPage() {
 
 
   async function save() {
-    const legacyProvider = ["mercadopago", "pagarme", "efi", "appmax"].includes(String(c.digital_payment_provider || "")) ? String(c.digital_payment_provider) : "infinitepay";
-    const pixProvider = String(c.digital_pix_provider || legacyProvider);
-    const cardProvider = String(c.digital_card_provider || legacyProvider);
+    const selectedProvider = ["mercadopago", "pagarme", "efi"].includes(String(c.digital_payment_provider || ""))
+      ? String(c.digital_payment_provider)
+      : "mercadopago";
     const pixOnlineEnabled = c.digital_menu_pix_enabled !== false;
     const cardOnlineEnabled = c.digital_menu_card_enabled !== false;
     const onlinePaymentEnabled = pixOnlineEnabled || cardOnlineEnabled;
     const payOnDeliveryEnabled = c.digital_menu_pay_on_delivery_enabled === true;
 
-    function validateProvider(provider: string, label: string) {
-      if (provider === "pagarme") {
-        if (c.pagarme_enabled !== true) return `Ative o Pagar.me antes de usá-lo no ${label}.`;
+    function validateSelectedCheckout() {
+      if (selectedProvider === "pagarme") {
+        if (c.pagarme_enabled !== true) return "Ative o Pagar.me antes de selecioná-lo como checkout.";
         if (!String(c.pagarme_public_key || "").trim()) return "Informe a Public Key do Pagar.me.";
         if (!String(c.pagarme_secret_key || "").trim()) return "Informe a Secret Key do Pagar.me.";
-      } else if (provider === "efi") {
-        if (c.efi_enabled !== true) return `Ative a Efí antes de usá-la no ${label}.`;
+      } else if (selectedProvider === "efi") {
+        if (c.efi_enabled !== true) return "Ative a Efí antes de selecioná-la como checkout.";
         if (!String(c.efi_client_id || "").trim()) return "Informe o Client ID da Efí.";
         if (!String(c.efi_client_secret || "").trim()) return "Informe o Client Secret da Efí.";
-        if (label === "Pix") {
+        if (pixOnlineEnabled) {
           if (!String(c.efi_pix_key || "").trim()) return "Informe a chave Pix cadastrada na Efí.";
-          if (!String(c.efi_pix_certificate_base64 || "").trim()) return "Envie o certificado P12 da API Pix Efí.";
-        } else if (!String(c.efi_payee_code || "").trim()) return "Informe o Identificador de Conta (payee_code) da Efí.";
-      } else if (provider === "mercadopago") {
-        if (c.mercadopago_enabled !== true) return `Ative o Mercado Pago antes de usá-lo no ${label}.`;
+          if (!String(c.efi_pix_certificate_base64 || "").trim()) return "Envie o certificado P12/PFX da API Pix Efí.";
+        }
+        if (cardOnlineEnabled && !String(c.efi_payee_code || "").trim()) {
+          return "Informe o Identificador de Conta (payee_code) da Efí.";
+        }
+      } else {
+        if (c.mercadopago_enabled !== true) return "Ative o Mercado Pago antes de selecioná-lo como checkout.";
         if (!String(c.mercadopago_public_key || "").trim()) return "Informe a Public Key do Mercado Pago.";
         if (!String(c.mercadopago_access_token || "").trim()) return "Informe o Access Token do Mercado Pago.";
-      } else if (provider === "appmax") {
-        if (c.appmax_enabled !== true) return `Ative a Appmax antes de usá-la no ${label}.`;
-        if (!String(c.appmax_external_id || "").trim()) return "Informe o External ID da Appmax.";
-      } else {
-        if (c.infinitepay_enabled !== true) return `Ative a InfinitePay antes de usá-la no ${label}.`;
-        if (!String(c.infinitepay_handle || "").trim()) return "Informe a InfiniteTag / Handle da InfinitePay.";
       }
       return "";
     }
 
-    if (pixOnlineEnabled) {
-      const error = validateProvider(pixProvider, "Pix");
-      if (error) return toast.error(error);
+    if (onlinePaymentEnabled) {
+      const validationError = validateSelectedCheckout();
+      if (validationError) return toast.error(validationError);
     }
-    if (cardOnlineEnabled) {
-      const error = validateProvider(cardProvider, "cartão");
-      if (error) return toast.error(error);
-    }
-
     if (payOnDeliveryEnabled && c.digital_menu_pay_on_delivery_card_enabled !== true && c.digital_menu_pay_on_delivery_pix_enabled !== true) {
       return toast.error("Habilite pelo menos uma forma de pagamento na entrega: cartão ou Pix.");
     }
@@ -342,9 +334,13 @@ function ConfigPage() {
     const payload = stripCardOwnedFields({
       ...c,
       id: 1,
-      digital_payment_provider: cardProvider,
-      digital_pix_provider: pixProvider,
-      digital_card_provider: cardProvider,
+      digital_payment_provider: selectedProvider,
+      // Mantidos sincronizados apenas para compatibilidade com bancos antigos.
+      // O sistema usa exclusivamente digital_payment_provider.
+      digital_pix_provider: selectedProvider,
+      digital_card_provider: selectedProvider,
+      infinitepay_enabled: false,
+      appmax_enabled: false,
       mercadopago_environment: c.mercadopago_environment === "production" ? "production" : "test",
       mercadopago_max_installments: Math.min(12, Math.max(1, Number(c.mercadopago_max_installments || 1))),
       pagarme_max_installments: Math.min(12, Math.max(1, Number(c.pagarme_max_installments || 1))),
@@ -353,12 +349,20 @@ function ConfigPage() {
       default_delivery_fee: Number(c.default_delivery_fee || 0),
       delivery_cost_per_km: Number(c.delivery_cost_per_km ?? 0.9),
     });
-    const { error } = await supabase.from("store_config").upsert(payload);
+    const { error } = await supabase.from("store_config").upsert(payload, { onConflict: "id" });
     setSaving(false);
-    if (error) toast.error(error.message);
-    else toast.success(`Configurações salvas. Pix: ${pixProvider === "pagarme" ? "Pagar.me" : pixProvider === "efi" ? "Efí" : pixProvider === "mercadopago" ? "Mercado Pago" : pixProvider === "appmax" ? "Appmax" : "InfinitePay"} • Cartão: ${cardProvider === "pagarme" ? "Pagar.me" : cardProvider === "efi" ? "Efí" : cardProvider === "mercadopago" ? "Mercado Pago" : cardProvider === "appmax" ? "Appmax" : "InfinitePay"}.`);
+    if (error) {
+      const message = String(error.message || "");
+      if (/schema cache|column|relation .* does not exist/i.test(message)) {
+        toast.error("O banco está desatualizado. Execute a migration de integridade do checkout e tente novamente.");
+      } else {
+        toast.error(message);
+      }
+      return;
+    }
+    const providerLabel = selectedProvider === "pagarme" ? "Pagar.me" : selectedProvider === "efi" ? "Efí" : "Mercado Pago";
+    toast.success(`Configurações salvas. Checkout único: ${providerLabel} para Pix e cartão.`);
   }
-
 
   async function uploadAlarm(
     file: File,
@@ -865,45 +869,36 @@ function ConfigPage() {
 
       <Card className="space-y-4 border-2 border-primary/20 p-5" style={tabStyle("pagamentos")}>
         <div>
-          <p className="text-[11px] font-black uppercase tracking-[0.18em] text-primary">Roteamento inteligente</p>
-          <h2 className="mt-1 text-lg font-black">Escolha o gateway de cada forma de pagamento</h2>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Você pode usar um único gateway para tudo ou combinar dois. O cliente vê somente <b>Pix</b> e <b>Cartão</b>; a empresa que processa fica invisível para ele.</p>
+          <p className="text-[11px] font-black uppercase tracking-[0.18em] text-primary">Checkout único</p>
+          <h2 className="mt-1 text-lg font-black">Escolha a empresa que processará Pix e cartão</h2>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            O mesmo checkout será usado para todas as formas de pagamento online. O cliente escolhe Pix ou cartão e permanece no ambiente seguro da HotBox.
+          </p>
         </div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="rounded-2xl border bg-white p-4">
-            <Label>Gateway do Pix</Label>
-            <Select value={String(c.digital_pix_provider || c.digital_payment_provider || "infinitepay")} onValueChange={(v) => setC({ ...c, digital_pix_provider: v })}>
-              <SelectTrigger className="mt-2"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="infinitepay">InfinitePay</SelectItem>
-                <SelectItem value="pagarme">Pagar.me</SelectItem>
-                <SelectItem value="efi">Efí Bank</SelectItem>
-                <SelectItem value="mercadopago">Mercado Pago</SelectItem>
-                {c.appmax_enabled === true && <SelectItem value="appmax">Appmax</SelectItem>}
-              </SelectContent>
-            </Select>
-            <p className="mt-2 text-[11px] text-muted-foreground">Ex.: InfinitePay para Pix e Pagar.me para cartão.</p>
-          </div>
-          <div className="rounded-2xl border bg-white p-4">
-            <Label>Gateway do cartão</Label>
-            <Select value={String(c.digital_card_provider || c.digital_payment_provider || "infinitepay")} onValueChange={(v) => setC({ ...c, digital_card_provider: v })}>
-              <SelectTrigger className="mt-2"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="pagarme">Pagar.me</SelectItem>
-                <SelectItem value="efi">Efí Bank</SelectItem>
-                <SelectItem value="mercadopago">Mercado Pago</SelectItem>
-                <SelectItem value="infinitepay">InfinitePay</SelectItem>
-                {c.appmax_enabled === true && <SelectItem value="appmax">Appmax</SelectItem>}
-              </SelectContent>
-            </Select>
-            <p className="mt-2 text-[11px] text-muted-foreground">Você também pode escolher o mesmo gateway usado no Pix.</p>
-          </div>
+        <div className="rounded-2xl border bg-white p-4">
+          <Label>Checkout habilitado</Label>
+          <Select
+            value={["mercadopago", "pagarme", "efi"].includes(String(c.digital_payment_provider || "")) ? String(c.digital_payment_provider) : "mercadopago"}
+            onValueChange={(value) => setC({
+              ...c,
+              digital_payment_provider: value,
+              digital_pix_provider: value,
+              digital_card_provider: value,
+            })}
+          >
+            <SelectTrigger className="mt-2"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="mercadopago">Mercado Pago</SelectItem>
+              <SelectItem value="efi">Efí Bank</SelectItem>
+              <SelectItem value="pagarme">Pagar.me</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            Configure e ative abaixo somente o checkout escolhido. Pix e cartão usarão automaticamente essa mesma integração.
+          </p>
         </div>
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold leading-relaxed text-emerald-950">
-          Se um cartão for recusado, a HotBox não tenta cobrar automaticamente em outro gateway. O cliente recebe opções claras para <b>tentar outro cartão</b>, <b>pagar com Pix</b> ou <b>pedir um link pelo WhatsApp</b>. Isso evita cobrança duplicada.
-        </div>
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-950">
-          <b>InfinitePay:</b> o Checkout Integrado usa as formas de pagamento habilitadas na sua conta InfinitePay. Se você quiser usá-la exclusivamente para Pix ou exclusivamente para cartão, mantenha essa mesma forma configurada no painel da InfinitePay.
+          O cliente nunca precisa escolher a empresa de pagamento. Ele verá apenas <b>Pix</b> e <b>Cartão</b>, processados pelo checkout único selecionado.
         </div>
       </Card>
 
@@ -1001,7 +996,7 @@ function ConfigPage() {
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="font-semibold">Efí Bank — Pix e cartão</h2>
-            <p className="mt-1 text-xs text-muted-foreground">Cartão transparente dentro da HotBox e Pix com QR Code. Você pode usar a Efí somente em uma forma de pagamento ou nas duas.</p>
+            <p className="mt-1 text-xs text-muted-foreground">Cartão transparente dentro da HotBox e Pix com QR Code no mesmo checkout escolhido.</p>
           </div>
           <Switch checked={c.efi_enabled === true} onCheckedChange={(v) => setC({ ...c, efi_enabled: v })} />
         </div>
@@ -1042,23 +1037,6 @@ function ConfigPage() {
         </div>
       </Card>
 
-      <Card className="space-y-4 p-5" style={tabStyle("pagamentos")}>
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h2 className="font-semibold">InfinitePay — contingência do cardápio digital</h2>
-            <p className="mt-1 text-xs text-muted-foreground">O cliente paga no checkout seguro da InfinitePay. O pedido só é criado depois da confirmação real do pagamento.</p>
-          </div>
-          <Switch checked={c.infinitepay_enabled === true} onCheckedChange={(v) => setC({ ...c, infinitepay_enabled: v })} />
-        </div>
-        <div>
-          <Label>InfiniteTag / Handle</Label>
-          <Input value={c.infinitepay_handle || ""} onChange={(e) => setC({ ...c, infinitepay_handle: e.target.value.replace(/^\$/, "") })} placeholder="Ex.: hotboxdelivery" />
-          <p className="mt-1 text-[11px] text-muted-foreground">Use sua InfiniteTag sem o símbolo $. A integração oficial do Checkout Integrado usa a InfiniteTag para identificar sua conta.</p>
-        </div>
-        <div className="rounded-xl border bg-muted/30 p-3 text-xs leading-relaxed text-muted-foreground">
-          Webhook configurado automaticamente em <code>{typeof window !== "undefined" ? `${window.location.origin}/api/public/webhooks/infinitepay` : "/api/public/webhooks/infinitepay"}</code>. O sistema também consulta a InfinitePay para confirmar valor e status antes de criar o pedido.
-        </div>
-      </Card>
 
       <Card className="space-y-3 p-5" style={tabStyle("geral")}>
         <div className="flex items-center justify-between">

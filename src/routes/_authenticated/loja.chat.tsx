@@ -739,13 +739,13 @@ function ChatPage() {
   }, [filtered]);
 
   return (
-    <div className="flex h-[calc(100vh-5rem)] overflow-hidden md:rounded-2xl md:border md:bg-card md:shadow-lg">
+    <div className="hotbox-chat-shell flex min-h-0 min-w-0 overflow-hidden md:rounded-[28px] md:border md:border-black/10 md:bg-card md:shadow-xl">
       {/* ============ SIDEBAR ============ */}
       <div
-        className={`${selectedId ? "hidden md:flex" : "flex"} w-full shrink-0 flex-col border-r bg-muted/20 md:w-72`}
+        className={`hotbox-chat-list ${selectedId ? "hidden md:flex" : "flex"} min-w-0 w-full shrink-0 flex-col border-r bg-white md:w-80`}
       >
         {/* cabeçalho da sidebar — visual clássico do WhatsApp (verde-escuro) */}
-        <div className="bg-[#075E54] p-3 shadow-sm">
+        <div className="hotbox-chat-header bg-gradient-to-r from-zinc-950 via-black to-[#2b0d08] p-3 shadow-lg">
           <h2 className="mb-2 flex items-center gap-2 font-bold text-white">
             <MessageCircle className="size-4" /> Conversas
           </h2>
@@ -771,7 +771,7 @@ function ChatPage() {
           <button
             type="button"
             onClick={() => { loadWindowContacts(); setShowWindowBroadcast(true); setWbLog([]); }}
-            className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-full bg-emerald-400/20 px-3 py-1.5 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-400/35"
+            className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-full border border-[#ffd400]/30 bg-[#ffd400]/10 px-3 py-1.5 text-[11px] font-bold text-[#ffe76b] transition hover:bg-[#ffd400]/20"
           >
             <Clock className="size-3.5" />
             Janela 24h — últimos 2h30
@@ -816,7 +816,7 @@ function ChatPage() {
                           setSelectedId(c.id);
                         }
                       }}
-                      className={`group flex w-full cursor-pointer items-start gap-3 border-b px-3 py-3 text-left transition-colors hover:bg-muted/50 ${active ? "bg-primary/5 border-l-2 border-l-primary" : ""}`}
+                      className={`group flex w-full cursor-pointer items-start gap-3 border-b px-3 py-3 text-left transition-colors hover:bg-muted/50 ${active ? "border-l-4 border-l-[#e53935] bg-[#fff7cc]" : ""}`}
                     >
                       {/* avatar — mostra a inicial do NOME do cliente (nunca do telefone: todo
                           número no Brasil começa com o DDI "55", então usar o telefone sempre
@@ -824,7 +824,7 @@ function ChatPage() {
                           de pessoa neutro em vez de um número sem sentido. */}
                       <div className="relative shrink-0">
                         <div
-                          className={`grid size-10 place-items-center rounded-full text-sm font-bold ${active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}
+                          className={`grid size-10 place-items-center rounded-full text-sm font-bold ${active ? "bg-[#ffd400] text-black" : "bg-zinc-100 text-zinc-600"}`}
                         >
                           {c.customer_name ? c.customer_name.charAt(0).toUpperCase() : <User className="size-4.5" />}
                         </div>
@@ -937,7 +937,7 @@ function ChatPage() {
       </div>
 
       {/* ============ THREAD ============ */}
-      <div className={`${!selectedId ? "hidden md:flex" : "flex"} flex-1 flex-col overflow-hidden`}>
+      <div className={`hotbox-chat-thread ${!selectedId ? "hidden md:flex" : "flex"} min-w-0 flex-1 flex-col overflow-hidden`}>
         {!selected ? (
           <div className="grid flex-1 place-items-center">
             <div className="flex flex-col items-center gap-3 text-muted-foreground">
@@ -948,7 +948,7 @@ function ChatPage() {
         ) : (
           <>
             {/* header da conversa — visual clássico do WhatsApp */}
-            <div className="flex items-center justify-between bg-[#075E54] px-4 py-3 shadow-sm">
+            <div className="hotbox-chat-header flex min-w-0 items-center justify-between gap-2 bg-gradient-to-r from-zinc-950 via-black to-[#2b0d08] px-3 py-3 shadow-lg sm:px-4">
               <div className="flex min-w-0 items-center gap-2 md:gap-3">
                 <Button
                   variant="ghost"
@@ -1006,7 +1006,7 @@ function ChatPage() {
                   )}
                 </div>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex min-w-0 shrink-0 items-center gap-1.5 sm:gap-3">
                 <Button
                   variant="outline"
                   size="sm"
@@ -1020,10 +1020,10 @@ function ChatPage() {
                   ) : (
                     <PackagePlus className="size-3.5" />
                   )}
-                  Gerar pedido com IA
+                  <span className="hidden xl:inline">Gerar pedido com IA</span><span className="xl:hidden">Pedido IA</span>
                 </Button>
                 <label className="flex cursor-pointer items-center gap-2">
-                  <span className="text-xs font-medium text-white/80">
+                  <span className="hidden text-xs font-medium text-white/80 lg:inline">
                     {selected.bot_paused ? (
                       <span className="flex items-center gap-1 font-semibold text-amber-300">
                         <UserCog className="size-3.5" /> Manual
@@ -1041,7 +1041,7 @@ function ChatPage() {
 
             {/* mensagens — fundo estilo WhatsApp (papel de parede configurável em Configurações) */}
             <div
-              className="flex-1 overflow-y-auto p-4"
+              className="hotbox-chat-messages flex-1 overflow-y-auto overscroll-contain p-3 sm:p-4"
               style={
                 wallpaperOption === "whatsapp_teal"
                   ? {
@@ -1100,7 +1100,7 @@ function ChatPage() {
 
             {/* input — barra no padrão exato do WhatsApp: pílula branca com
                 emoji + texto + anexo + câmera, e o botão redondo verde à parte */}
-            <div className="bg-[#F0F0F0] px-2 py-2">
+            <div className="hotbox-chat-composer border-t border-black/10 bg-[#f7f4ef]/95 px-2 py-2 backdrop-blur">
               {recording && (
                 <div className="mb-2 flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm font-semibold text-red-600">
                   <Mic className="size-4 animate-pulse" /> Gravando... clique em parar para enviar
@@ -1177,7 +1177,7 @@ function ChatPage() {
                 {text.trim() ? (
                   <Button
                     size="icon"
-                    className="size-10 shrink-0 rounded-full bg-[#25D366] text-white hover:bg-[#20BD5A]"
+                    className="size-11 shrink-0 rounded-full bg-[#ffd400] text-black shadow-md hover:bg-[#f4ca00]"
                     onClick={handleSendText}
                     disabled={sending}
                   >
@@ -1187,7 +1187,7 @@ function ChatPage() {
                   <Button
                     size="icon"
                     variant={recording ? "destructive" : undefined}
-                    className={`size-10 shrink-0 rounded-full ${recording ? "" : "bg-[#25D366] text-white hover:bg-[#20BD5A]"}`}
+                    className={`size-11 shrink-0 rounded-full ${recording ? "" : "bg-[#ffd400] text-black shadow-md hover:bg-[#f4ca00]"}`}
                     onClick={recording ? stopRecording : startRecording}
                     disabled={sending}
                     title={recording ? "Parar e enviar áudio" : "Gravar áudio"}
@@ -1472,7 +1472,7 @@ function ChatPage() {
         onOpenChange={(v) => { if (!wbSending) { setShowWindowBroadcast(v); if (!v) { setWbLog([]); setWbProgress(null); } } }}
       >
         <DialogContent className="flex max-h-[90vh] w-full max-w-3xl flex-col gap-0 overflow-hidden p-0">
-          <div className="flex items-center gap-3 border-b bg-[#075E54] px-5 py-4">
+          <div className="hotbox-chat-header flex items-center gap-3 border-b bg-gradient-to-r from-zinc-950 via-black to-[#2b0d08] px-5 py-4">
             <Clock className="size-5 text-emerald-300" />
             <div>
               <p className="font-bold text-white">Janela 24h — Meta WhatsApp API</p>
@@ -1648,7 +1648,7 @@ function ChatPage() {
 
               <Button
                 disabled={wbSending || wbSelected.size === 0 || (!wbText.trim() && !wbImageUrl.trim())}
-                className="w-full gap-2 bg-[#075E54] hover:bg-[#065048] text-white"
+                className="w-full gap-2 bg-[#ffd400] font-bold text-black hover:bg-[#f4ca00]"
                 onClick={async () => {
                   if (wbSending) return;
                   setWbSending(true);
@@ -1700,8 +1700,8 @@ function MessageBubble({ m, onDelete }: { m: Message; onDelete?: () => Promise<v
     >
 
       <div
-        className={`relative max-w-[72%] rounded-lg px-2.5 py-1.5 text-[#111B21] shadow-sm ${
-          out ? "rounded-tr-none bg-[#DCF8C6]" : "rounded-tl-none bg-white"
+        className={`relative max-w-[86%] rounded-2xl px-3 py-2 text-[#18130f] shadow-sm md:max-w-[72%] ${
+          out ? "rounded-tr-sm border border-[#ebc800]/45 bg-[#fff2a8]" : "rounded-tl-sm border border-black/5 bg-white"
         }`}
       >
         {/* ── Botão apagar — aparece no canto do balão ao passar o mouse ── */}
@@ -1894,7 +1894,7 @@ function ChatDialogs({
       {mode === "broadcast" && (
         <DialogContent className="flex max-h-[90vh] w-full max-w-2xl flex-col gap-0 overflow-hidden p-0">
           {/* Cabeçalho */}
-          <div className="flex items-center gap-3 border-b bg-[#075E54] px-5 py-4">
+          <div className="flex items-center gap-3 border-b bg-gradient-to-r from-zinc-950 via-black to-[#2b0d08] px-5 py-4">
             <Radio className="size-5 text-emerald-300" />
             <div>
               <p className="font-bold text-white">Lista de transmissão</p>

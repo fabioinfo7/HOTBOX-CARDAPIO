@@ -19,13 +19,12 @@ function ObrigadoPage() {
   }
   const [state, setState] = useState<State>("checking");
   const [orderId, setOrderId] = useState<string | null>(null);
-  const [receipt, setReceipt] = useState<string | null>(null);
   const [deliveryMethod, setDeliveryMethod] = useState<"pix" | "card">("card");
 
   useEffect(() => {
     let alive = true;
     const params = new URLSearchParams(window.location.search);
-    const provider = params.get("provider") || "infinitepay";
+    const provider = params.get("provider") || "";
 
     async function confirmMercadoPago() {
       const checkoutId = params.get("checkout_id") || "";
@@ -100,22 +99,14 @@ function ObrigadoPage() {
       if (alive) setState("delivery");
     }
 
-    async function confirmInfinitePay() {
-      const order_nsu = params.get("order_nsu") || "";
-      const transaction_nsu = params.get("transaction_nsu") || "";
-      const slug = params.get("slug") || "";
-      const receipt_url = params.get("receipt_url");
-      setReceipt(receipt_url);
-      if (!order_nsu || !transaction_nsu || !slug) { if (alive) setState("pending"); return; }
-      try {
-        const { confirmInfinitePayReturn } = await import("@/lib/infinitepay.functions");
-        const result: any = await confirmInfinitePayReturn({ data: { order_nsu, transaction_nsu, slug, receipt_url } });
-        if (!alive) return;
-        if (result.ok) { setOrderId(result.order_id || null); trackPurchaseOnce(result.order_id || null, result.checkout_id || order_nsu, Number(result.total || 0), result.payment_method || "infinitepay"); setState("paid"); } else setState("pending");
-      } catch { if (alive) setState("pending"); }
-    }
+    const confirmation =
+      provider === "delivery" ? confirmPayOnDelivery()
+        : provider === "mercadopago" ? confirmMercadoPago()
+          : provider === "pagarme" ? confirmPagarme()
+            : provider === "efi" ? confirmEfi()
+              : Promise.resolve(alive && setState("pending"));
 
-    void (provider === "delivery" ? confirmPayOnDelivery() : provider === "mercadopago" ? confirmMercadoPago() : provider === "pagarme" ? confirmPagarme() : provider === "efi" ? confirmEfi() : confirmInfinitePay());
+    void confirmation;
     return () => { alive = false; };
   }, []);
 
@@ -145,7 +136,6 @@ function ObrigadoPage() {
             {orderId ? <Button asChild className="rounded-xl"><Link to="/pedido/$id" params={{ id: orderId }}><Receipt className="mr-2 size-4" /> Ver meu pedido</Link></Button> : <Button asChild className="rounded-xl"><Link to="/">Voltar ao cardápio</Link></Button>}
             <Button asChild variant="outline" className="rounded-xl"><a href={WHATSAPP_URL} target="_blank" rel="noreferrer"><MessageCircle className="mr-2 size-4" /> Falar com a HotBox</a></Button>
           </div>
-          {receipt && <a href={receipt} target="_blank" rel="noreferrer" className="block text-center text-xs font-bold text-primary underline">Abrir comprovante do pagamento</a>}
         </div>
       </div>
     </main>

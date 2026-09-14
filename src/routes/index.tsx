@@ -37,7 +37,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { CustomerLoyaltyClub } from "@/components/customer-loyalty-club";
 import { MercadoPagoPayment } from "@/components/mercadopago-payment";
-import { AppmaxPayment } from "@/components/appmax-payment";
 import { PagarmePayment } from "@/components/pagarme-payment";
 import { EfiPayment } from "@/components/efi-payment";
 import { quoteLoyaltyReward } from "@/lib/loyalty.functions";
@@ -134,7 +133,7 @@ type CartItem = {
 };
 type View = "list" | "detail" | "cart" | "delivery_check" | "checkout";
 type ActiveFilter = "ativos" | "inativos" | "todos";
-type CheckoutPayment = "infinitepay" | "mercadopago" | "pagarme" | "efi" | "appmax";
+type CheckoutPayment = "mercadopago" | "pagarme" | "efi";
 type PaymentChoice = "online_pix" | "online_card" | "delivery_card" | "delivery_pix";
 type AreaStatus = "idle" | "checking" | "needs_number" | "supported" | "unsupported" | "error";
 
@@ -701,13 +700,9 @@ function CustomerHome() {
     "Somos uma batataria apaixonada por capricho: batatas recheadas de verdade, com muito recheio e muito sabor. Peça agora e descubra o mix de sabores que espera por você.",
   );
   const [deliveryTime, setDeliveryTime] = useState<number | null>(null);
-  const [infinitepayEnabled, setInfinitepayEnabled] = useState(false);
-  const [paymentProvider, setPaymentProvider] = useState<CheckoutPayment>("infinitepay");
-  const [pixProvider, setPixProvider] = useState<CheckoutPayment>("infinitepay");
-  const [cardProvider, setCardProvider] = useState<CheckoutPayment>("infinitepay");
+  const [paymentProvider, setPaymentProvider] = useState<CheckoutPayment>("mercadopago");
   const [pixPaymentAvailable, setPixPaymentAvailable] = useState(false);
   const [cardPaymentAvailable, setCardPaymentAvailable] = useState(false);
-  const [paymentAvailable, setPaymentAvailable] = useState(false);
   const [mercadoPagoPublicKey, setMercadoPagoPublicKey] = useState("");
   const [mercadoPagoMaxInstallments, setMercadoPagoMaxInstallments] = useState(1);
   const [mpCheckout, setMpCheckout] = useState<{ id: string; total: number; method: "pix" | "card" } | null>(null);
@@ -718,9 +713,6 @@ function CustomerHome() {
   const [efiEnvironment, setEfiEnvironment] = useState<"sandbox" | "production">("sandbox");
   const [efiMaxInstallments, setEfiMaxInstallments] = useState(1);
   const [efiCheckout, setEfiCheckout] = useState<{ id: string; total: number; method: "pix" | "card" } | null>(null);
-  const [appmaxCheckout, setAppmaxCheckout] = useState<{ id: string; total: number; method: "pix" | "card" } | null>(null);
-  const [appmaxExternalId, setAppmaxExternalId] = useState("");
-  const [appmaxMaxInstallments, setAppmaxMaxInstallments] = useState(1);
   const [ifoodStoreLink, setIfoodStoreLink] = useState("");
   const [pixEnabled, setPixEnabled] = useState(true);
   const [cardEnabled, setCardEnabled] = useState(true);
@@ -814,7 +806,7 @@ function CustomerHome() {
     neighborhood: "",
     city: "",
     cep: "",
-    payment: "infinitepay" as CheckoutPayment,
+    payment: "mercadopago" as CheckoutPayment,
   });
 
   // Atualiza automaticamente o indicador Aberto/Fechado conforme o horário da loja.
@@ -1079,7 +1071,7 @@ function CustomerHome() {
       supabase
         .from("store_config_public")
         .select(
-          "store_name,default_delivery_fee,estimated_delivery_time_minutes,banner_image_url,banner_tagline,digital_menu_enabled,digital_menu_pix_enabled,digital_menu_card_enabled,infinitepay_enabled,ifood_store_link",
+          "store_name,default_delivery_fee,estimated_delivery_time_minutes,banner_image_url,banner_tagline,digital_menu_enabled,digital_menu_pix_enabled,digital_menu_card_enabled,ifood_store_link",
         )
         .maybeSingle(),
       (supabase as any).rpc("get_public_payment_config"),
@@ -1109,7 +1101,6 @@ function CustomerHome() {
 
         setDeliveryTime(data.estimated_delivery_time_minutes ?? null);
         setBannerUrl(data.banner_image_url ?? null);
-        setInfinitepayEnabled((data as any).infinitepay_enabled === true);
         setIfoodStoreLink(String((data as any).ifood_store_link || ""));
         setDigitalMenuEnabled((data as any).digital_menu_enabled !== false);
         setPixEnabled((data as any).digital_menu_pix_enabled !== false);
@@ -1123,14 +1114,13 @@ function CustomerHome() {
       }
 
       const pay = paymentResult?.data || {};
-      const normalizeProvider = (value: unknown): CheckoutPayment => value === "mercadopago" ? "mercadopago" : value === "pagarme" ? "pagarme" : value === "efi" ? "efi" : value === "appmax" ? "appmax" : "infinitepay";
-      const loadedPixProvider = normalizeProvider(pay.pix_provider || pay.provider);
-      const loadedCardProvider = normalizeProvider(pay.card_provider || pay.provider);
-      setPixProvider(loadedPixProvider);
-      setCardProvider(loadedCardProvider);
+      const normalizeProvider = (value: unknown): CheckoutPayment =>
+        value === "pagarme" ? "pagarme" : value === "efi" ? "efi" : "mercadopago";
+      const loadedProvider = normalizeProvider(pay.provider);
+      setPaymentProvider(loadedProvider);
+      setForm((current) => ({ ...current, payment: loadedProvider }));
       setPixPaymentAvailable(pay.pix_payment_available === true);
       setCardPaymentAvailable(pay.card_payment_available === true);
-      setPaymentAvailable(pay.payment_available === true);
       setMercadoPagoPublicKey(String(pay.mercadopago_public_key || ""));
       setMercadoPagoMaxInstallments(Math.min(12, Math.max(1, Number(pay.mercadopago_max_installments || 1))));
       setPagarmePublicKey(String(pay.pagarme_public_key || ""));
@@ -1138,8 +1128,6 @@ function CustomerHome() {
       setEfiPayeeCode(String(pay.efi_payee_code || ""));
       setEfiEnvironment(pay.efi_environment === "production" ? "production" : "sandbox");
       setEfiMaxInstallments(Math.min(12, Math.max(1, Number(pay.efi_max_installments || 1))));
-      setAppmaxExternalId(String(pay.appmax_external_id || ""));
-      setAppmaxMaxInstallments(Math.min(12, Math.max(1, Number(pay.appmax_max_installments || 1))));
       setPayOnDeliveryEnabled(pay.pay_on_delivery_enabled === true);
       setPayOnDeliveryCardEnabled(pay.pay_on_delivery_card_enabled !== false);
       setPayOnDeliveryPixEnabled(pay.pay_on_delivery_pix_enabled !== false);
@@ -1147,12 +1135,8 @@ function CustomerHome() {
       const canCardOnline = (data as any)?.digital_menu_card_enabled !== false && pay.card_payment_available === true;
       if (canPixOnline) {
         setPaymentChoice("online_pix");
-        setPaymentProvider(loadedPixProvider);
-        setForm((current) => ({ ...current, payment: loadedPixProvider }));
       } else if (canCardOnline) {
         setPaymentChoice("online_card");
-        setPaymentProvider(loadedCardProvider);
-        setForm((current) => ({ ...current, payment: loadedCardProvider }));
       } else if (pay.pay_on_delivery_enabled === true) {
         setPaymentChoice(pay.pay_on_delivery_card_enabled !== false ? "delivery_card" : "delivery_pix");
       }
@@ -1177,18 +1161,6 @@ function CustomerHome() {
       setConfigLoaded(true);
     });
   }, []);
-
-  useEffect(() => {
-    if (paymentChoice === "online_pix") {
-      setPaymentProvider(pixProvider);
-      setPaymentAvailable(pixPaymentAvailable);
-      if (form.payment !== pixProvider) setForm((current) => ({ ...current, payment: pixProvider }));
-    } else if (paymentChoice === "online_card") {
-      setPaymentProvider(cardProvider);
-      setPaymentAvailable(cardPaymentAvailable);
-      if (form.payment !== cardProvider) setForm((current) => ({ ...current, payment: cardProvider }));
-    }
-  }, [paymentChoice, pixProvider, cardProvider, pixPaymentAvailable, cardPaymentAvailable, form.payment]);
 
   useEffect(() => {
     if (form.deliveryMode === "pickup") {
@@ -2309,7 +2281,7 @@ function CustomerHome() {
 
   async function placeOrder(reservationConfirmedNow = false, forcedPaymentChoice?: PaymentChoice) {
     const selectedPaymentChoice = forcedPaymentChoice || paymentChoice;
-    const selectedProvider: CheckoutPayment = selectedPaymentChoice === "online_pix" ? pixProvider : selectedPaymentChoice === "online_card" ? cardProvider : paymentProvider;
+    const selectedProvider: CheckoutPayment = paymentProvider;
     const selectedOnlineAvailable = selectedPaymentChoice === "online_pix" ? pixPaymentAvailable : selectedPaymentChoice === "online_card" ? cardPaymentAvailable : false;
     if (!cart.length) return toast.error("Seu carrinho está vazio");
     if (!form.name || !form.phone) return toast.error("Preencha nome e telefone");
@@ -2411,7 +2383,11 @@ function CustomerHome() {
         return;
       }
 
-      const provider: CheckoutPayment = created.checkout.payment_provider === "mercadopago" ? "mercadopago" : created.checkout.payment_provider === "pagarme" ? "pagarme" : created.checkout.payment_provider === "efi" ? "efi" : created.checkout.payment_provider === "appmax" ? "appmax" : "infinitepay";
+      const rawProvider = String(created.checkout.payment_provider || "");
+      if (!["mercadopago", "pagarme", "efi"].includes(rawProvider)) {
+        throw new Error("O checkout configurado não é compatível. Selecione Mercado Pago, Efí ou Pagar.me nas configurações.");
+      }
+      const provider = rawProvider as CheckoutPayment;
       const onlineMethod: "pix" | "card" = String(created.checkout.payment_kind || "").endsWith("_card") ? "card" : "pix";
       if (provider === "pagarme") {
         setPaymentProvider("pagarme");
@@ -2459,38 +2435,7 @@ function CustomerHome() {
         return;
       }
 
-      if (provider === "appmax") {
-        setPaymentProvider("appmax");
-        setForm((current) => ({ ...current, payment: "appmax" }));
-        trackAnalytics("payment_started", {
-          event_category: "payment",
-          checkout_id: String(created.checkout.id),
-          payment_method: "appmax",
-          value: Number(created.checkout.total || total),
-          quantity: metaCartItemCount(),
-          properties: metaCommerceProperties({
-            provider: "appmax",
-          }),
-        });
-        setAppmaxCheckout({ id: String(created.checkout.id), total: Number(created.checkout.total || total), method: onlineMethod });
-        scrollToCheckoutSection("payment-section");
-        return;
-      }
-
-      const { createInfinitePayCheckout } = await import("@/lib/infinitepay.functions");
-      const payment = await createInfinitePayCheckout({
-        data: { checkoutId: created.checkout.id, origin: window.location.origin },
-      });
-      if (!("url" in payment) || !payment.url) {
-        const { cancelSiteCheckout } = await import("@/lib/site-checkout.functions");
-        await cancelSiteCheckout({ data: { checkoutId: created.checkout.id, access_token: customerSession?.access_token || null } });
-        throw new Error(("error" in payment && payment.error) || "Não foi possível abrir o pagamento");
-      }
-
-      trackAnalytics("payment_redirect", { event_category: "payment", checkout_id: String(created.checkout.id), payment_method: "infinitepay", value: Number(created.checkout.total || total) });
-      setCart([]);
-      removeCoupon();
-      window.location.href = payment.url;
+      throw new Error("Gateway de pagamento não reconhecido.");
     } catch (err: any) {
       console.error(err);
       const message = String(err?.message || "Não foi possível iniciar o pagamento.");
@@ -2547,7 +2492,7 @@ function CustomerHome() {
   }
 
   async function switchFailedCardToPix() {
-    const currentId = pagarmeCheckout?.id || efiCheckout?.id || mpCheckout?.id || appmaxCheckout?.id || "";
+    const currentId = pagarmeCheckout?.id || efiCheckout?.id || mpCheckout?.id || "";
     if (currentId) {
       try {
         const { cancelSiteCheckout } = await import("@/lib/site-checkout.functions");
@@ -2557,7 +2502,6 @@ function CustomerHome() {
     setPagarmeCheckout(null);
     setEfiCheckout(null);
     setMpCheckout(null);
-    setAppmaxCheckout(null);
     setPaymentChoice("online_pix");
     await placeOrder(false, "online_pix");
   }
@@ -2595,41 +2539,6 @@ function CustomerHome() {
     removeCoupon();
     setMpCheckout(null);
     window.location.href = `/obrigado?provider=mercadopago&checkout_id=${encodeURIComponent(checkoutId)}`;
-  }
-
-  async function cancelAppmaxCheckout() {
-    if (!appmaxCheckout) return;
-    try {
-      const { cancelSiteCheckout } = await import("@/lib/site-checkout.functions");
-      await cancelSiteCheckout({ data: { checkoutId: appmaxCheckout.id, access_token: customerSession?.access_token || null } });
-    } catch {}
-    setAppmaxCheckout(null);
-  }
-
-  function finishAppmax(orderId?: string | null) {
-    const checkoutId = appmaxCheckout?.id || "";
-    if (orderId) {
-      trackAnalytics("purchase", {
-        event_category: "commerce",
-        checkout_id: checkoutId,
-        order_id: String(orderId),
-        customer_name: form.name,
-        customer_phone: onlyDigits(form.phone),
-        payment_method: "appmax",
-        value: Number(appmaxCheckout?.total || total),
-        quantity: metaCartItemCount(),
-        properties: metaCommerceProperties({
-          provider: "appmax",
-          payment_timing: "online",
-        }),
-      });
-      pushMyOrder(orderId);
-      void refreshActiveOrders();
-    }
-    setCart([]);
-    removeCoupon();
-    setAppmaxCheckout(null);
-    window.location.href = `/obrigado?provider=appmax&checkout_id=${encodeURIComponent(checkoutId)}`;
   }
 
   const currentActiveOrder = activeOrders[0] || null;
@@ -2692,6 +2601,75 @@ function CustomerHome() {
       </div>
     );
   }
+
+  const reservationEntryModal = (showReservationEntryModal && (
+    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/65 px-4">
+      <div className="w-full max-w-md rounded-[28px] border-2 border-amber-400 bg-white p-6 shadow-2xl">
+        <div className="mx-auto grid size-14 place-items-center rounded-full bg-amber-100 text-3xl">🗓️</div>
+        <p className="mt-4 text-center text-xs font-black uppercase tracking-[0.16em] text-amber-700">
+          Reserva HotBox
+        </p>
+        <h2 className="mt-1 text-center text-2xl font-black text-zinc-950">
+          A loja está fechada agora
+        </h2>
+        <p className="mt-3 text-center text-sm leading-relaxed text-zinc-700">
+          Você pode continuar e reservar seu pedido para o próximo dia de funcionamento.
+        </p>
+        <div className="mt-5">
+          <Label htmlFor="reservation-date" className="font-black">Escolha a data da reserva</Label>
+          <Input
+            id="reservation-date"
+            type="date"
+            min={nextReservationDate(publicStoreStatus)}
+            value={reservationDate}
+            onChange={(event) => {
+              setReservationDate(event.target.value);
+              setReservationAccepted(false);
+            }}
+            className="mt-2 rounded-2xl"
+          />
+          {reservationDate && !reservationDayAllowed(publicStoreStatus, reservationDate) && (
+            <p className="mt-2 text-xs font-bold text-red-600">
+              Escolha um dia em que a HotBox esteja em funcionamento.
+            </p>
+          )}
+        </div>
+        <div className="mt-5 grid gap-2">
+          <Button
+            type="button"
+            onClick={() => {
+              if (!reservationDate) {
+                toast.error("Escolha a data da sua reserva.");
+                return;
+              }
+              if (!reservationDayAllowed(publicStoreStatus, reservationDate)) {
+                toast.error("Escolha um dia em que a HotBox esteja em funcionamento.");
+                return;
+              }
+              setClosedStoreReservationMode(true);
+              setReservationAccepted(false);
+              setShowReservationEntryModal(false);
+              setView("checkout");
+            }}
+            className="w-full rounded-full bg-[#ffd400] py-6 font-black text-black hover:bg-[#f4ca00]"
+          >
+            Continuar para o checkout
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => {
+              setShowReservationEntryModal(false);
+              setClosedStoreReservationMode(false);
+            }}
+            className="w-full rounded-full"
+          >
+            Voltar para a sacola
+          </Button>
+        </div>
+      </div>
+    </div>
+  ));
 
   const reservationPaymentConfirmModal = (showReservationPaymentConfirm && (
     <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/65 px-4">
@@ -2783,6 +2761,11 @@ function CustomerHome() {
           >
             <ArrowLeft className="size-5" />
           </button>
+          <img
+            src={HOTBOX_LOGO_URL}
+            alt="HotBox"
+            className="size-10 shrink-0 rounded-xl object-contain shadow-sm ring-1 ring-black/10"
+          />
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-black">{selectedProduct.name}</p>
             <p className="text-[11px] text-muted-foreground">Monte do seu jeito</p>
@@ -2826,7 +2809,7 @@ function CustomerHome() {
           </div>
 
           <div className="space-y-4 px-4 py-5">
-            <section className="rounded-[26px] border border-black/5 bg-white p-5 shadow-sm">
+            <section>
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
@@ -2844,41 +2827,36 @@ function CustomerHome() {
                 )}
               </div>
 
-              <div className="mt-4 flex items-end justify-between gap-3">
-                <div>
-                  {effective.isPromotion ? (
-                    <div className="flex items-baseline gap-2">
-                      <span className="text-sm text-muted-foreground line-through">{brl(effective.listPrice)}</span>
-                      <span className="text-2xl font-black text-fuchsia-600">{brl(effective.price)}</span>
-                    </div>
-                  ) : (
-                    <span className="text-2xl font-black text-primary">{brl(effective.price)}</span>
-                  )}
-                  {selectedProduct.promotion_label && effective.isPromotion && (
-                    <p className="mt-1 text-[11px] font-bold text-fuchsia-700">{selectedProduct.promotion_label}</p>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 rounded-full border bg-zinc-50 p-1">
-                  <button
-                    type="button"
-                    onClick={() => setDetailQty((qty) => Math.max(1, qty - 1))}
-                    className="grid size-9 place-items-center rounded-full bg-white shadow-sm"
-                    aria-label="Diminuir quantidade"
-                  >
-                    <Minus className="size-4" />
-                  </button>
-                  <span className="min-w-7 text-center text-sm font-black">{detailQty}</span>
-                  <button
-                    type="button"
-                    onClick={() => setDetailQty((qty) => qty + 1)}
-                    className="grid size-9 place-items-center rounded-full bg-[#ffd400] text-black shadow-sm"
-                    aria-label="Aumentar quantidade"
-                  >
-                    <Plus className="size-4" />
-                  </button>
-                </div>
+              <div className="mt-4">
+                {effective.isPromotion ? (
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-sm text-muted-foreground line-through">{brl(effective.listPrice)}</span>
+                    <span className="text-2xl font-black text-fuchsia-600">{brl(effective.price)}</span>
+                  </div>
+                ) : (
+                  <span className="text-2xl font-black text-primary">{brl(effective.price)}</span>
+                )}
+                {selectedProduct.promotion_label && effective.isPromotion && (
+                  <p className="mt-1 text-[11px] font-bold text-fuchsia-700">{selectedProduct.promotion_label}</p>
+                )}
               </div>
             </section>
+
+            {publicReviews.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowPublicReviews(true)}
+                className="flex w-full items-center gap-2 rounded-2xl border border-black/5 bg-white px-3 py-2 shadow-sm transition hover:bg-muted/30"
+              >
+                <PublicReviewStars value={publicReviewsAverage} />
+                <span className="text-xs font-black">{publicReviewsAverage.toFixed(1)}</span>
+                <span className="min-w-0 flex-1 truncate text-left text-[11px] text-muted-foreground">
+                  {publicReviews.length} {publicReviews.length === 1 ? "avaliação" : "avaliações"} de clientes
+                </span>
+                <span className="shrink-0 text-[11px] font-black text-primary">Ver avaliações</span>
+                <ChevronRight className="size-3.5 shrink-0 text-primary" />
+              </button>
+            )}
 
             {productGroups.map((group) => {
               const min = Math.max(0, Number(group.min_select || 0), group.required ? 1 : 0);
@@ -2968,16 +2946,44 @@ function CustomerHome() {
           </div>
         </main>
 
+        <PublicReviewsModal
+          open={showPublicReviews}
+          onClose={() => setShowPublicReviews(false)}
+          reviews={publicReviews}
+          average={publicReviewsAverage}
+        />
+
         <div className="fixed inset-x-0 bottom-0 z-50 border-t bg-white/95 px-4 py-3 backdrop-blur">
-          <div className="mx-auto max-w-2xl">
+          <div className="mx-auto flex max-w-2xl items-center gap-2 rounded-full bg-[#ffd400] p-1.5 text-black shadow-md">
+            <div className="flex shrink-0 items-center rounded-full bg-white/75 p-1">
+              <button
+                type="button"
+                onClick={() => setDetailQty((qty) => Math.max(1, qty - 1))}
+                disabled={!selectedProduct.active}
+                className="grid size-9 place-items-center rounded-full bg-white shadow-sm disabled:opacity-50"
+                aria-label="Diminuir quantidade"
+              >
+                <Minus className="size-4" />
+              </button>
+              <span className="min-w-8 text-center text-sm font-black">{detailQty}</span>
+              <button
+                type="button"
+                onClick={() => setDetailQty((qty) => qty + 1)}
+                disabled={!selectedProduct.active}
+                className="grid size-9 place-items-center rounded-full bg-black text-white shadow-sm disabled:opacity-50"
+                aria-label="Aumentar quantidade"
+              >
+                <Plus className="size-4" />
+              </button>
+            </div>
             <Button
               type="button"
               onClick={addToCartFromDetail}
               disabled={!selectedProduct.active}
-              className="w-full justify-between rounded-full bg-[#ffd400] py-6 text-base font-black text-black shadow-md hover:bg-[#f4ca00] disabled:bg-zinc-200 disabled:text-zinc-500"
+              className="min-w-0 flex-1 justify-between rounded-full bg-transparent px-3 py-5 text-sm font-black text-black shadow-none hover:bg-black/5 disabled:bg-transparent disabled:text-zinc-500"
             >
-              <span>{selectedProduct.active ? "Adicionar à sacola" : "Esgotado por hoje"}</span>
-              <span>{brl(detailTotal)}</span>
+              <span className="truncate">{selectedProduct.active ? "Adicionar à sacola" : "Esgotado por hoje"}</span>
+              <span className="shrink-0">{brl(detailTotal)}</span>
             </Button>
           </div>
         </div>
@@ -3642,24 +3648,12 @@ function CustomerHome() {
                 onPaid={finishMercadoPago}
                 onCancel={cancelMercadoPagoCheckout}
               />
-            ) : appmaxCheckout ? (
-              <AppmaxPayment
-                checkoutId={appmaxCheckout.id}
-                amount={appmaxCheckout.total}
-                externalId={appmaxExternalId}
-                maxInstallments={appmaxMaxInstallments}
-                customerName={form.name}
-                customerEmail={customerSession?.user?.email || null}
-                supportWhatsappUrl={paymentSupportWhatsappUrl}
-                onPaid={finishAppmax}
-                onCancel={cancelAppmaxCheckout}
-              />
             ) : (
               <div className="space-y-3">
                 {pixEnabled && pixPaymentAvailable && (
                   <button
                     type="button"
-                    onClick={() => { setPaymentChoice("online_pix"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "pix", value: total, quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: pixProvider }) }); scrollToCheckoutSection("checkout-action"); }}
+                    onClick={() => { setPaymentChoice("online_pix"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "pix", value: total, quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: paymentProvider }) }); scrollToCheckoutSection("checkout-action"); }}
                     className={`w-full rounded-2xl border-2 p-4 text-left transition ${paymentChoice === "online_pix" ? "border-emerald-500 bg-emerald-50 shadow-sm" : "border-border bg-white hover:border-emerald-300"}`}
                   >
                     <div className="flex items-center gap-3">
@@ -3675,7 +3669,7 @@ function CustomerHome() {
                 {cardEnabled && cardPaymentAvailable && (
                   <button
                     type="button"
-                    onClick={() => { setPaymentChoice("online_card"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "card", value: total, quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: cardProvider }) }); scrollToCheckoutSection("checkout-action"); }}
+                    onClick={() => { setPaymentChoice("online_card"); trackAnalytics("payment_selected", { event_category: "payment", payment_method: "card", value: total, quantity: metaCartItemCount(), properties: metaCommerceProperties({ provider: paymentProvider }) }); scrollToCheckoutSection("checkout-action"); }}
                     className={`w-full rounded-2xl border-2 p-4 text-left transition ${paymentChoice === "online_card" ? "border-zinc-900 bg-zinc-50 shadow-sm" : "border-border bg-white hover:border-zinc-400"}`}
                   >
                     <div className="flex items-center gap-3">
@@ -3736,7 +3730,7 @@ function CustomerHome() {
           </div>
         </div>
 
-        {!efiCheckout && !pagarmeCheckout && !mpCheckout && !appmaxCheckout && (
+        {!efiCheckout && !pagarmeCheckout && !mpCheckout && (
           <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 px-4 py-3 backdrop-blur">
             <div className="mx-auto max-w-2xl">
               <Button

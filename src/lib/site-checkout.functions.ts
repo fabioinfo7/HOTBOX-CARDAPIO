@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { getEffectivePrice } from "@/lib/promotions";
 // HOTBOX_BUILD_20260905_SITE_CHECKOUT_SERVER_SPLIT
 
-export type SitePaymentKind = "online_pix" | "online_card" | "infinitepay" | "mercadopago" | "pagarme" | "efi" | "appmax" | "delivery_card" | "delivery_pix";
+export type SitePaymentKind = "online_pix" | "online_card" | "delivery_card" | "delivery_pix";
 
 type CheckoutAddonInput = {
   option_id: string;
@@ -322,31 +322,23 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
     if (!name) return { error: "Informe o nome de quem vai receber." };
     if (phone.length < 10) return { error: "Informe um telefone válido." };
     if (!Array.isArray(data.items) || data.items.length === 0) return { error: "Seu carrinho está vazio." };
-    if (!["online_pix", "online_card", "infinitepay", "mercadopago", "pagarme", "efi", "appmax", "delivery_card", "delivery_pix"].includes(String(data.payment_kind || ""))) {
+    if (!["online_pix", "online_card", "delivery_card", "delivery_pix"].includes(String(data.payment_kind || ""))) {
       return { error: "Forma de pagamento inválida." };
     }
 
-    // Primeiro tenta o schema atual (roteamento separado para Pix/cartão).
-    // Se o banco ainda estiver na versão anterior e não possuir
-    // digital_pix_provider/digital_card_provider, recuamos para o schema legado
-    // em vez de impedir a abertura do checkout Mercado Pago.
-    const fullConfig = await supabaseAdmin
+    // Um único checkout processa Pix e cartão. A configuração pública oferece
+    // apenas Mercado Pago, Efí ou Pagar.me; credenciais secretas permanecem no servidor.
+    const { data: cfg, error: configError } = await supabaseAdmin
       .from("store_config")
-      .select("digital_payment_provider,digital_pix_provider,digital_card_provider,infinitepay_enabled,infinitepay_handle,mercadopago_enabled,mercadopago_public_key,mercadopago_access_token,pagarme_enabled,pagarme_public_key,pagarme_secret_key,efi_enabled,efi_client_id,efi_client_secret,efi_payee_code,efi_pix_key,efi_pix_certificate_base64,appmax_enabled,appmax_merchant_client_id,appmax_merchant_client_secret,appmax_external_id,digital_menu_card_enabled,digital_menu_pix_enabled,digital_menu_pay_on_delivery_enabled,digital_menu_pay_on_delivery_card_enabled,digital_menu_pay_on_delivery_pix_enabled,digital_menu_scheduling_enabled,manual_store_status,business_hours_enabled,business_hours,business_hours_closed_message,digital_menu_closed_reservations_enabled,delivery_pricing_mode,store_lat,store_lng,google_maps_api_key,delivery_fee_tiers,default_delivery_fee,fixed_delivery_city")
+      .select("digital_payment_provider,mercadopago_enabled,mercadopago_public_key,mercadopago_access_token,pagarme_enabled,pagarme_public_key,pagarme_secret_key,efi_enabled,efi_client_id,efi_client_secret,efi_payee_code,efi_pix_key,efi_pix_certificate_base64,digital_menu_card_enabled,digital_menu_pix_enabled,digital_menu_pay_on_delivery_enabled,digital_menu_pay_on_delivery_card_enabled,digital_menu_pay_on_delivery_pix_enabled,digital_menu_scheduling_enabled,manual_store_status,business_hours_enabled,business_hours,business_hours_closed_message,digital_menu_closed_reservations_enabled,delivery_pricing_mode,store_lat,store_lng,google_maps_api_key,delivery_fee_tiers,default_delivery_fee,fixed_delivery_city")
       .eq("id", 1)
       .maybeSingle();
 
-    let cfg: any = fullConfig.data;
-    if (fullConfig.error && /digital_(pix|card)_provider|schema cache|column/i.test(String(fullConfig.error.message || ""))) {
-      const legacyConfig = await supabaseAdmin
-        .from("store_config")
-        .select("digital_payment_provider,infinitepay_enabled,infinitepay_handle,mercadopago_enabled,mercadopago_public_key,mercadopago_access_token,digital_menu_card_enabled,digital_menu_pix_enabled,digital_menu_pay_on_delivery_enabled,digital_menu_pay_on_delivery_card_enabled,digital_menu_pay_on_delivery_pix_enabled,digital_menu_scheduling_enabled,manual_store_status,business_hours_enabled,business_hours,business_hours_closed_message,digital_menu_closed_reservations_enabled,delivery_pricing_mode,store_lat,store_lng,google_maps_api_key,delivery_fee_tiers,default_delivery_fee,fixed_delivery_city")
-        .eq("id", 1)
-        .maybeSingle();
-      if (legacyConfig.error) return { error: legacyConfig.error.message || "Não foi possível carregar as configurações de pagamento." };
-      cfg = legacyConfig.data;
-    } else if (fullConfig.error) {
-      return { error: fullConfig.error.message || "Não foi possível carregar as configurações de pagamento." };
+    if (configError) {
+      return { error: configError.message || "Não foi possível carregar as configurações de pagamento." };
+    }
+    if (!cfg) {
+      return { error: "As configurações da loja ainda não foram cadastradas." };
     }
 
     const storeOpenNow = storeIsOpenNow(cfg);
@@ -388,56 +380,47 @@ export const createSiteCheckout = createServerFn({ method: "POST" })
 
     const requestedPayment = String(data.payment_kind || "");
     const isPayOnDelivery = requestedPayment === "delivery_card" || requestedPayment === "delivery_pix";
-    const legacyProvider = ["mercadopago", "pagarme", "efi", "appmax"].includes(String(cfg?.digital_payment_provider || "")) ? String(cfg.digital_payment_provider) : "infinitepay";
     const onlineMethod = requestedPayment === "online_card" ? "card" : requestedPayment === "online_pix" ? "pix" : null;
-    const activeProvider = onlineMethod === "card"
-      ? String(cfg?.digital_card_provider || legacyProvider)
-      : onlineMethod === "pix"
-        ? String(cfg?.digital_pix_provider || legacyProvider)
-        : ["mercadopago", "pagarme", "efi", "appmax"].includes(requestedPayment)
-          ? requestedPayment
-          : legacyProvider;
+    const activeProvider = String(cfg.digital_payment_provider || "");
 
     if (isPayOnDelivery) {
       if (data.delivery_mode !== "delivery") return { error: "Pagamento na entrega só está disponível para pedidos com entrega." };
-      if (cfg?.digital_menu_pay_on_delivery_enabled !== true) return { error: "Pagamento na entrega está desabilitado." };
-      if (requestedPayment === "delivery_card" && cfg?.digital_menu_pay_on_delivery_card_enabled !== true) {
+      if (cfg.digital_menu_pay_on_delivery_enabled !== true) return { error: "Pagamento na entrega está desabilitado." };
+      if (requestedPayment === "delivery_card" && cfg.digital_menu_pay_on_delivery_card_enabled !== true) {
         return { error: "Cartão na entrega está desabilitado." };
       }
-      if (requestedPayment === "delivery_pix" && cfg?.digital_menu_pay_on_delivery_pix_enabled !== true) {
+      if (requestedPayment === "delivery_pix" && cfg.digital_menu_pay_on_delivery_pix_enabled !== true) {
         return { error: "Pix na entrega está desabilitado." };
       }
-    } else if (onlineMethod === "pix" && cfg?.digital_menu_pix_enabled === false) {
-      return { error: "Pix online está desabilitado." };
-    } else if (onlineMethod === "card" && cfg?.digital_menu_card_enabled === false) {
-      return { error: "Cartão online está desabilitado." };
-    } else if (activeProvider === "mercadopago") {
-      if (cfg?.mercadopago_enabled !== true || !String(cfg?.mercadopago_public_key || "").trim() || !String(cfg?.mercadopago_access_token || "").trim()) {
-        return { error: "Mercado Pago está selecionado para esta forma de pagamento, mas a integração ainda não está completamente configurada." };
+    } else {
+      if (!onlineMethod) return { error: "Forma de pagamento online inválida." };
+      if (!["mercadopago", "pagarme", "efi"].includes(activeProvider)) {
+        return { error: "Selecione Mercado Pago, Efí ou Pagar.me nas configurações do checkout." };
       }
-    } else if (activeProvider === "pagarme") {
-      if (cfg?.pagarme_enabled !== true || !String(cfg?.pagarme_public_key || "").trim() || !String(cfg?.pagarme_secret_key || "").trim()) {
-        return { error: "Pagar.me está selecionado para esta forma de pagamento, mas a integração ainda não está completamente configurada." };
+      if (onlineMethod === "pix" && cfg.digital_menu_pix_enabled === false) {
+        return { error: "Pix online está desabilitado." };
       }
-    } else if (activeProvider === "efi") {
-      const commonReady = cfg?.efi_enabled === true && !!String(cfg?.efi_client_id || "").trim() && !!String(cfg?.efi_client_secret || "").trim();
-      const methodReady = onlineMethod === "pix"
-        ? !!String(cfg?.efi_pix_key || "").trim() && !!String(cfg?.efi_pix_certificate_base64 || "").trim()
-        : !!String(cfg?.efi_payee_code || "").trim();
-      if (!commonReady || !methodReady) {
-        return { error: `Efí está selecionada para ${onlineMethod === "pix" ? "Pix" : "cartão"}, mas a integração ainda não está completamente configurada.` };
+      if (onlineMethod === "card" && cfg.digital_menu_card_enabled === false) {
+        return { error: "Cartão online está desabilitado." };
       }
-    } else if (activeProvider === "appmax") {
-      if (
-        cfg?.appmax_enabled !== true ||
-        !String(cfg?.appmax_merchant_client_id || "").trim() ||
-        !String(cfg?.appmax_merchant_client_secret || "").trim() ||
-        !String(cfg?.appmax_external_id || "").trim()
-      ) {
-        return { error: "Appmax está selecionada, mas a integração ainda não está completamente configurada." };
+
+      if (activeProvider === "mercadopago") {
+        if (cfg.mercadopago_enabled !== true || !String(cfg.mercadopago_public_key || "").trim() || !String(cfg.mercadopago_access_token || "").trim()) {
+          return { error: "O checkout Mercado Pago está selecionado, mas as credenciais ainda não estão completas." };
+        }
+      } else if (activeProvider === "pagarme") {
+        if (cfg.pagarme_enabled !== true || !String(cfg.pagarme_public_key || "").trim() || !String(cfg.pagarme_secret_key || "").trim()) {
+          return { error: "O checkout Pagar.me está selecionado, mas as credenciais ainda não estão completas." };
+        }
+      } else {
+        const commonReady = cfg.efi_enabled === true && !!String(cfg.efi_client_id || "").trim() && !!String(cfg.efi_client_secret || "").trim();
+        const methodReady = onlineMethod === "pix"
+          ? !!String(cfg.efi_pix_key || "").trim() && !!String(cfg.efi_pix_certificate_base64 || "").trim()
+          : !!String(cfg.efi_payee_code || "").trim();
+        if (!commonReady || !methodReady) {
+          return { error: `O checkout Efí está selecionado, mas a configuração de ${onlineMethod === "pix" ? "Pix" : "cartão"} ainda não está completa.` };
+        }
       }
-    } else if (cfg?.infinitepay_enabled !== true || !String(cfg?.infinitepay_handle || "").trim()) {
-      return { error: "InfinitePay está selecionada para esta forma de pagamento, mas a integração ainda não está completamente configurada." };
     }
 
     let deliveryFee = 0;
