@@ -30,6 +30,60 @@ export async function runPaymentScenarioTests(supabaseAdmin: any): Promise<Scena
   const results: ScenarioResult[] = [];
   const createdOrderIds: string[] = [];
 
+  // Verifica primeiro a integridade estrutural que sustenta configuração,
+  // cardápio, atendimento e checkout. Todas estas leituras são sem efeito colateral.
+  const requiredTables = [
+    "store_config",
+    "products",
+    "site_checkout_sessions",
+    "coupons",
+    "coupon_redemptions",
+    "bairros_nao_atendidos",
+    "ruas_nao_atendidas",
+    "pending_human_handoffs",
+    "reengagement_queue",
+  ];
+
+  for (const table of requiredTables) {
+    try {
+      const { error } = await supabaseAdmin.from(table).select("id", { head: true, count: "exact" }).limit(1);
+      results.push({
+        name: `Tabela ${table}`,
+        ok: !error,
+        detail: error?.message,
+      });
+    } catch (err: any) {
+      results.push({ name: `Tabela ${table}`, ok: false, detail: String(err?.message ?? err) });
+    }
+  }
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("store_config")
+      .select("digital_payment_provider,digital_pix_provider,digital_card_provider")
+      .eq("id", 1)
+      .maybeSingle();
+    const provider = String(data?.digital_payment_provider || "");
+    const allowed = ["mercadopago", "pagarme", "efi"].includes(provider);
+    const synchronized = data?.digital_pix_provider === provider && data?.digital_card_provider === provider;
+    results.push({
+      name: "Checkout único configurado",
+      ok: !error && allowed && synchronized,
+      detail: error?.message || (!allowed ? "Gateway fora da lista permitida" : !synchronized ? "Provedores Pix/cartão não estão sincronizados" : undefined),
+    });
+  } catch (err: any) {
+    results.push({ name: "Checkout único configurado", ok: false, detail: String(err?.message ?? err) });
+  }
+
+  for (const rpc of ["get_public_menu_products", "get_public_payment_config"]) {
+    try {
+      const { error } = await supabaseAdmin.rpc(rpc);
+      results.push({ name: `RPC ${rpc}`, ok: !error, detail: error?.message });
+    } catch (err: any) {
+      results.push({ name: `RPC ${rpc}`, ok: false, detail: String(err?.message ?? err) });
+    }
+  }
+
   for (const scenario of SCENARIOS) {
     try {
       const { data: order, error } = await supabaseAdmin.from("orders").insert({
