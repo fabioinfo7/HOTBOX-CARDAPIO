@@ -2693,376 +2693,6 @@ function CustomerHome() {
     );
   }
 
-  if (view === "detail" && selectedProduct) {
-    const p = selectedProduct;
-    return (
-      <div className={`min-h-screen bg-background pb-28 ${!p.active ? "grayscale opacity-70" : ""}`}>
-        <div className="relative">
-          <button
-            onClick={() => setView("list")}
-            className="absolute left-4 top-4 z-10 grid size-9 place-items-center rounded-full bg-black/50 text-white backdrop-blur"
-          >
-            <ArrowLeft className="size-5" />
-          </button>
-          <div className="absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-2xl bg-white/95 p-1.5 shadow-lg backdrop-blur">
-            <img src={HOTBOX_LOGO_URL} alt="HotBox Delivery" className="size-9 rounded-xl object-contain" />
-          </div>
-          <div className="absolute right-4 top-4 z-10 inline-flex items-center gap-1.5 rounded-full bg-black/65 px-3 py-2 text-xs font-black text-white shadow-lg backdrop-blur">
-            <Clock className="size-3.5" />
-            40 - 60 Minutos
-          </div>
-          {p.image_url ? (
-            isBeverageProduct(p) ? (
-              <div className="grid h-64 w-full place-items-center bg-white sm:h-80">
-                <NormalizedBeverageImage
-                  src={p.image_url}
-                  alt={p.name}
-                  className="h-56 w-56 max-w-[78%] object-contain sm:h-64 sm:w-64"
-                />
-              </div>
-            ) : (
-              <img src={p.image_url} alt={p.name} className="h-64 w-full object-cover sm:h-80" />
-            )
-          ) : (
-            <div className="grid h-64 w-full place-items-center bg-muted text-sm text-muted-foreground sm:h-80">
-              Sem foto
-            </div>
-          )}
-        </div>
-
-        <div className="mx-auto max-w-2xl px-5 py-5">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="font-display text-2xl font-black uppercase tracking-tight">{p.name}</h1>
-            {p.is_combo && <span className="rounded-full bg-amber-400 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-black">Combo</span>}
-          </div>
-          {(() => {
-            const eff = getEffectivePrice(p);
-            return eff.isPromotion ? (
-              <div className="mt-1 flex items-baseline gap-2">
-                <span className="text-base font-semibold text-muted-foreground line-through">
-                  {brl(eff.listPrice)}
-                </span>
-                <span className="text-2xl font-extrabold text-fuchsia-600">{brl(eff.price)}</span>
-                {p.promotion_label && (
-                  <span className="flex items-center gap-1 rounded-full bg-fuchsia-100 px-2 py-0.5 text-[11px] font-bold text-fuchsia-700">
-                    <Ticket className="size-3" /> {p.promotion_label}
-                  </span>
-                )}
-              </div>
-            ) : (
-              <p className="mt-1 text-2xl font-extrabold text-primary">{brl(eff.price)}</p>
-            );
-          })()}
-
-          {publicReviews.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowPublicReviews(true)}
-              className="mt-3 flex w-full items-center gap-2 rounded-2xl border border-amber-200/70 bg-amber-50/60 px-3 py-2.5 text-left shadow-sm transition hover:bg-amber-50"
-            >
-              <PublicReviewStars value={publicReviewsAverage} />
-              <span className="text-sm font-black text-zinc-900">{publicReviewsAverage.toFixed(1)}</span>
-              <span className="min-w-0 flex-1 truncate text-[11px] text-zinc-500">
-                {publicReviews.length} {publicReviews.length === 1 ? "avaliação" : "avaliações"} de clientes
-              </span>
-              <span className="shrink-0 text-[11px] font-black text-primary">Ver avaliações</span>
-              <ChevronRight className="size-3.5 shrink-0 text-primary" />
-            </button>
-          )}
-
-          {p.description && <p className="mt-3 text-sm leading-relaxed text-foreground/75">{p.description}</p>}
-          {!p.active && (
-            <div className="mt-4 rounded-2xl border border-zinc-300 bg-zinc-100 px-4 py-3 text-center">
-              <p className="font-black uppercase tracking-wide text-zinc-700">Esgotado por hoje</p>
-            </div>
-          )}
-
-          {(addonGroupsByProduct[p.id] || []).length > 0 && (
-            <div className="mt-5 space-y-4">
-              <div className="rounded-2xl bg-zinc-950 px-4 py-3 text-white shadow-sm">
-                <p className="text-sm font-black">Personalize seu pedido</p>
-                <p className="mt-0.5 text-[11px] text-white/70">Escolha adicionais e quantidades do seu jeito.</p>
-              </div>
-
-              {(addonGroupsByProduct[p.id] || []).map((group) => {
-                const selectedCount = groupSelectedUnits(group);
-                const min = Math.max(0, Number(group.min_select || 0), group.required ? 1 : 0);
-                const max = Math.max(1, Number(group.max_select || 1));
-                return (
-                  <div key={group.id} className={`overflow-hidden rounded-[22px] border border-black/5 bg-white shadow-sm ${group.active !== true ? "grayscale opacity-55" : ""}`}>
-                    <div className="flex items-start justify-between gap-3 border-b bg-zinc-50/80 px-4 py-3">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="font-black text-zinc-950">{group.display_title || group.name}</p>
-                          <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${
-                            group.required
-                              ? "bg-red-100 text-red-700"
-                              : "bg-emerald-100 text-emerald-700"
-                          }`}>
-                            {group.required ? "Obrigatório" : "Opcional"}
-                          </span>
-                          {group.active !== true && (
-                            <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-zinc-600">
-                              Indisponível
-                            </span>
-                          )}
-                        </div>
-                        {(group.display_subtitle || group.description) && <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{group.display_subtitle || group.description}</p>}
-                        <p className="mt-1 text-[10px] font-semibold text-zinc-400">
-                          {group.required
-                            ? `Escolha de ${min} até ${max} unidade(s)`
-                            : `Você pode adicionar até ${max} unidade(s)`}
-                        </p>
-                      </div>
-                      <span className="shrink-0 rounded-full bg-zinc-900 px-2.5 py-1 text-[10px] font-black text-white">
-                        {selectedCount}/{max}
-                      </span>
-                    </div>
-
-                    <div className="divide-y">
-                      {group.options.map((option) => {
-                        const optionId = String(option.id);
-                        const availability = addonOptionAvailability(option, group);
-                        const unavailable = !availability.available;
-                        const quantity = unavailable ? 0 : addonQty(optionId);
-                        const selected = quantity > 0;
-                        const unitPrice = effectiveAddonOptionPrice(option);
-                        return (
-                          <div
-                            key={option.id}
-                            className={`flex items-center gap-3 px-4 py-3 transition ${
-                              unavailable
-                                ? "bg-zinc-50 grayscale opacity-55"
-                                : selected
-                                  ? "bg-amber-50/60"
-                                  : "bg-white"
-                            }`}
-                          >
-                            <button
-                              type="button"
-                              onClick={() => toggleDetailAddon(group, option)}
-                              disabled={unavailable}
-                              className={`grid size-6 shrink-0 place-items-center border-2 disabled:cursor-not-allowed ${
-                                group.max_select === 1 ? "rounded-full" : "rounded-lg"
-                              } ${
-                                selected
-                                  ? "border-primary bg-primary text-primary-foreground"
-                                  : "border-zinc-300 bg-white"
-                              }`}
-                              aria-label={
-                                unavailable
-                                  ? `${option.display_name || option.name} indisponível`
-                                  : selected
-                                    ? `Remover ${option.display_name || option.name}`
-                                    : `Adicionar ${option.display_name || option.name}`
-                              }
-                            >
-                              {selected && <CheckCircle2 className="size-4" />}
-                            </button>
-
-                            {(() => {
-                              const linkedProduct = option.linked_product_id
-                                ? products.find((product) => String(product.id) === String(option.linked_product_id))
-                                : null;
-                              const optionImage = String(option.image_url || linkedProduct?.image_url || "").trim();
-                              return optionImage ? (
-                                <img
-                                  src={optionImage}
-                                  alt=""
-                                  loading="lazy"
-                                  decoding="async"
-                                  className="size-14 shrink-0 rounded-xl border object-cover"
-                                />
-                              ) : null;
-                            })()}
-
-                            <button
-                              type="button"
-                              onClick={() => toggleDetailAddon(group, option)}
-                              disabled={unavailable}
-                              className="min-w-0 flex-1 text-left disabled:cursor-not-allowed"
-                            >
-                              <div className="flex flex-wrap items-center gap-1.5">
-                                <p className="text-sm font-bold text-zinc-900">{option.display_name || option.name}</p>
-                                {unavailable && (
-                                  <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-zinc-600">
-                                    Esgotado
-                                  </span>
-                                )}
-                              </div>
-                              {(option.display_description || option.description) && <p className="mt-0.5 text-[11px] text-muted-foreground">{option.display_description || option.description}</p>}
-                              <p className="mt-0.5 text-xs font-black text-primary">
-                                {unitPrice > 0 ? `+ ${brl(unitPrice)} cada` : "Sem acréscimo"}
-                              </p>
-                            </button>
-
-                            {max > 1 && (
-                              <div className="flex shrink-0 items-center gap-1 rounded-full border bg-white p-1 shadow-sm">
-                                <button
-                                  type="button"
-                                  onClick={() => setDetailAddonQuantity(group, option, quantity - 1)}
-                                  disabled={unavailable || quantity <= 0}
-                                  className="grid size-7 place-items-center rounded-full text-zinc-700 disabled:cursor-not-allowed disabled:opacity-30"
-                                  aria-label={`Diminuir ${option.display_name || option.name}`}
-                                >
-                                  <Minus className="size-3.5" />
-                                </button>
-                                <span className="w-5 text-center text-xs font-black">{quantity}</span>
-                                <button
-                                  type="button"
-                                  onClick={() => setDetailAddonQuantity(group, option, quantity + 1)}
-                                  disabled={selectedCount >= max}
-                                  className="grid size-7 place-items-center rounded-full bg-zinc-900 text-white disabled:opacity-30"
-                                  aria-label={`Aumentar ${option.display_name || option.name}`}
-                                >
-                                  <Plus className="size-3.5" />
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {selectedCount < min && (
-                      <p className="border-t bg-red-50 px-4 py-2 text-[11px] font-bold text-red-700">
-                        Obrigatório: falta escolher {min - selectedCount} unidade(s).
-                      </p>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          <div className="mt-4">
-            <Label className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Observações</Label>
-            <Textarea
-              rows={2}
-              className="mt-1"
-              placeholder="Ex: sem cebola, ponto da carne, etc."
-              value={detailNotes}
-              onChange={(e) => setDetailNotes(e.target.value)}
-            />
-          </div>
-
-          {publicReviews.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowPublicReviews(true)}
-              className="mt-6 w-full rounded-[22px] border border-amber-200 bg-gradient-to-br from-amber-50 to-white p-4 text-left shadow-sm transition hover:border-amber-300"
-            >
-              <p className="text-[10px] font-black uppercase tracking-[0.14em] text-amber-700">
-                Aprovado pelos clientes
-              </p>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <PublicReviewStars value={publicReviewsAverage} />
-                <span className="text-lg font-black text-zinc-950">{publicReviewsAverage.toFixed(1)} de 5</span>
-              </div>
-              <p className="mt-1 text-sm font-semibold text-zinc-700">
-                Avaliado com {publicReviewsAverage.toFixed(1)} estrelas pelos clientes
-              </p>
-              <div className="mt-2 flex items-center justify-between gap-3">
-                <span className="text-xs text-muted-foreground">
-                  Baseado em {publicReviews.length} {publicReviews.length === 1 ? "avaliação" : "avaliações"}
-                </span>
-                <span className="flex items-center gap-1 text-xs font-black text-primary">
-                  Ver avaliações <ChevronRight className="size-3.5" />
-                </span>
-              </div>
-            </button>
-          )}
-        </div>
-
-        <PublicReviewsModal
-          open={showPublicReviews}
-          onClose={() => setShowPublicReviews(false)}
-          reviews={publicReviews}
-          average={publicReviewsAverage}
-        />
-
-        <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 px-5 py-3 backdrop-blur">
-          <div className="mx-auto flex max-w-2xl items-center gap-3">
-            <div className="flex items-center gap-3 rounded-full border px-3 py-2">
-              <button
-                onClick={() => setDetailQty((q) => Math.max(1, q - 1))}
-                disabled={!p.active}
-                className="grid size-6 place-items-center disabled:opacity-30"
-              >
-                <Minus className="size-4" />
-              </button>
-              <span className="w-4 text-center font-bold">{detailQty}</span>
-              <button onClick={() => setDetailQty((q) => q + 1)} disabled={!p.active} className="grid size-6 place-items-center disabled:opacity-30">
-                <Plus className="size-4" />
-              </button>
-            </div>
-            <Button
-              onClick={addToCartFromDetail}
-              disabled={!p.active}
-              className="flex-1 justify-between rounded-full bg-[#ffd400] py-6 text-base font-black text-black shadow-md hover:bg-[#f4ca00] disabled:bg-zinc-300 disabled:text-zinc-600"
-            >
-              <span>{p.active ? "Adicionar" : "Esgotado"}</span>
-              <span>{brl((
-                (detailOrderBumpId
-                  ? Number(orderBumps.find((b) => b.id === detailOrderBumpId)?.price_override ?? getEffectivePrice(p).price)
-                  : getEffectivePrice(p).price) +
-                selectedDetailAddons(p.id).reduce((sum, a) => sum + Number(a.price || 0) * Math.max(1, Number(a.qty || 1)), 0)
-              ) * detailQty)}</span>
-            </Button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const reservationEntryModal = (showReservationEntryModal && (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4">
-      <div className="w-full max-w-md rounded-[28px] border border-amber-300 bg-white p-6 shadow-2xl">
-        <div className="mx-auto grid size-14 place-items-center rounded-full bg-amber-100 text-3xl">🗓️</div>
-        <p className="mt-4 text-center text-xs font-black uppercase tracking-[0.16em] text-amber-700">
-          Loja fechada no momento
-        </p>
-        <h2 className="mt-1 text-center text-2xl font-black text-zinc-950">
-          Seu pedido pode ficar reservado
-        </h2>
-        <p className="mt-3 text-center text-sm leading-relaxed text-zinc-700">
-          A HotBox está fora do horário de funcionamento agora, mas você pode continuar normalmente.
-          Seu pagamento será realizado agora e o pedido ficará como <strong>AGENDADO / RESERVADO</strong> para entrega posterior.
-        </p>
-        <div className="mt-4 rounded-2xl border border-amber-300 bg-amber-50 p-4">
-          <p className="text-sm font-black text-amber-950">Antes da entrega</p>
-          <p className="mt-1 text-sm leading-relaxed text-amber-900">
-            A <strong>HotBox irá fazer contato com você antes da entrega para confirmar a entrega e o horário</strong>.
-          </p>
-        </div>
-        <p className="mt-4 text-xs leading-relaxed text-zinc-500">
-          Ao continuar, você confirma que entendeu que este pedido não será preparado nem entregue agora.
-        </p>
-        <div className="mt-5 grid gap-2">
-          <Button
-            type="button"
-            onClick={() => {
-              setReservationAccepted(true);
-              setShowReservationEntryModal(false);
-              setView("checkout");
-            }}
-            className="w-full rounded-full bg-[#ffd400] py-6 font-black text-black hover:bg-[#f4ca00]"
-          >
-            Estou ciente • continuar
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => setShowReservationEntryModal(false)}
-            className="w-full rounded-full"
-          >
-            Voltar ao carrinho
-          </Button>
-        </div>
-      </div>
-    </div>
-  ));
-
   const reservationPaymentConfirmModal = (showReservationPaymentConfirm && (
     <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/65 px-4">
       <div className="w-full max-w-md rounded-[28px] border-2 border-amber-400 bg-white p-6 shadow-2xl">
@@ -3113,6 +2743,247 @@ function CustomerHome() {
       </div>
     </div>
   ));
+
+  if (view === "detail") {
+    if (!selectedProduct) {
+      setView("list");
+      return null;
+    }
+
+    const productGroups = (addonGroupsByProduct[selectedProduct.id] || [])
+      .filter((group) => group.active === true);
+    const effective = getEffectivePrice(selectedProduct);
+    const selectedAddons = selectedDetailAddons(selectedProduct.id);
+    const addonsUnitTotal = selectedAddons.reduce(
+      (sum, addon) => sum + Number(addon.price || 0) * Math.max(1, Number(addon.qty || 1)),
+      0,
+    );
+    const bump = detailOrderBumpId
+      ? orderBumps.find((item) => String(item.id) === String(detailOrderBumpId))
+      : null;
+    const baseUnitPrice = Number(
+      detailOrderBumpId && bump?.price_override != null
+        ? bump.price_override
+        : effective.price || 0,
+    );
+    const detailUnitTotal = Number((baseUnitPrice + addonsUnitTotal).toFixed(2));
+    const detailTotal = Number((detailUnitTotal * Math.max(1, detailQty)).toFixed(2));
+
+    return (
+      <div className="min-h-screen bg-[#f7f7f7] pb-28">
+        <header className="sticky top-0 z-40 flex items-center gap-3 border-b bg-white/95 px-4 py-3 backdrop-blur">
+          <button
+            type="button"
+            onClick={() => {
+              setDetailOrderBumpId(null);
+              setView(detailReturnView);
+            }}
+            className="grid size-10 place-items-center rounded-full border bg-white"
+            aria-label="Voltar"
+          >
+            <ArrowLeft className="size-5" />
+          </button>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-black">{selectedProduct.name}</p>
+            <p className="text-[11px] text-muted-foreground">Monte do seu jeito</p>
+          </div>
+          {cart.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setView("cart")}
+              className="relative grid size-10 place-items-center rounded-full bg-[#ffd400] text-black"
+              aria-label="Abrir sacola"
+            >
+              <ShoppingCart className="size-5" />
+              <span className="absolute -right-1 -top-1 grid min-h-5 min-w-5 place-items-center rounded-full bg-black px-1 text-[10px] font-black text-white">
+                {totalQty}
+              </span>
+            </button>
+          )}
+        </header>
+
+        <main className="mx-auto max-w-2xl">
+          <div className="relative overflow-hidden bg-white">
+            {selectedProduct.image_url ? (
+              isBeverageProduct(selectedProduct) ? (
+                <div className="grid h-[300px] place-items-center bg-white sm:h-[380px]">
+                  <NormalizedBeverageImage
+                    src={selectedProduct.image_url}
+                    alt={selectedProduct.name}
+                    className="h-[82%] w-[82%] object-contain"
+                  />
+                </div>
+              ) : (
+                <img
+                  src={selectedProduct.image_url}
+                  alt={selectedProduct.name}
+                  className="h-[300px] w-full object-cover sm:h-[380px]"
+                />
+              )
+            ) : (
+              <div className="grid h-64 place-items-center bg-muted text-sm text-muted-foreground">Sem foto</div>
+            )}
+          </div>
+
+          <div className="space-y-4 px-4 py-5">
+            <section className="rounded-[26px] border border-black/5 bg-white p-5 shadow-sm">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h1 className="font-display text-2xl font-black uppercase leading-tight">{selectedProduct.name}</h1>
+                    {selectedProduct.is_combo && (
+                      <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-800">COMBO</span>
+                    )}
+                  </div>
+                  {selectedProduct.description && (
+                    <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{selectedProduct.description}</p>
+                  )}
+                </div>
+                {!selectedProduct.active && (
+                  <span className="shrink-0 rounded-full bg-zinc-200 px-3 py-1 text-[10px] font-black uppercase text-zinc-700">Esgotado</span>
+                )}
+              </div>
+
+              <div className="mt-4 flex items-end justify-between gap-3">
+                <div>
+                  {effective.isPromotion ? (
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-sm text-muted-foreground line-through">{brl(effective.listPrice)}</span>
+                      <span className="text-2xl font-black text-fuchsia-600">{brl(effective.price)}</span>
+                    </div>
+                  ) : (
+                    <span className="text-2xl font-black text-primary">{brl(effective.price)}</span>
+                  )}
+                  {selectedProduct.promotion_label && effective.isPromotion && (
+                    <p className="mt-1 text-[11px] font-bold text-fuchsia-700">{selectedProduct.promotion_label}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 rounded-full border bg-zinc-50 p-1">
+                  <button
+                    type="button"
+                    onClick={() => setDetailQty((qty) => Math.max(1, qty - 1))}
+                    className="grid size-9 place-items-center rounded-full bg-white shadow-sm"
+                    aria-label="Diminuir quantidade"
+                  >
+                    <Minus className="size-4" />
+                  </button>
+                  <span className="min-w-7 text-center text-sm font-black">{detailQty}</span>
+                  <button
+                    type="button"
+                    onClick={() => setDetailQty((qty) => qty + 1)}
+                    className="grid size-9 place-items-center rounded-full bg-[#ffd400] text-black shadow-sm"
+                    aria-label="Aumentar quantidade"
+                  >
+                    <Plus className="size-4" />
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            {productGroups.map((group) => {
+              const min = Math.max(0, Number(group.min_select || 0), group.required ? 1 : 0);
+              const max = Math.max(1, Number(group.max_select || 1));
+              const selectedUnits = groupSelectedUnits(group);
+              return (
+                <section key={group.id} className="rounded-[26px] border border-black/5 bg-white p-5 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h2 className="font-black">{group.display_title || group.name}</h2>
+                      {(group.display_subtitle || group.description) && (
+                        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{group.display_subtitle || group.description}</p>
+                      )}
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-black ${selectedUnits >= min ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
+                      {min > 0 ? `${selectedUnits}/${min} mínimo` : `até ${max}`}
+                    </span>
+                  </div>
+
+                  <div className="mt-4 space-y-2.5">
+                    {group.options
+                      .slice()
+                      .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
+                      .map((option) => {
+                        const availability = addonOptionAvailability(option, group);
+                        const qty = addonQty(String(option.id));
+                        const price = effectiveAddonOptionPrice(option);
+                        return (
+                          <div
+                            key={option.id}
+                            className={`flex items-center gap-3 rounded-2xl border p-3 transition ${qty > 0 ? "border-[#ffd400] bg-amber-50/60" : "border-black/5 bg-white"} ${availability.available ? "" : "opacity-50"}`}
+                          >
+                            {option.image_url ? (
+                              <img src={option.image_url} alt={option.display_name || option.name} className="size-14 shrink-0 rounded-xl object-cover" />
+                            ) : (
+                              <div className="grid size-14 shrink-0 place-items-center rounded-xl bg-zinc-100 text-[10px] text-zinc-400">Extra</div>
+                            )}
+                            <button
+                              type="button"
+                              disabled={!availability.available}
+                              onClick={() => toggleDetailAddon(group, option)}
+                              className="min-w-0 flex-1 text-left"
+                            >
+                              <p className="text-sm font-bold">{option.display_name || option.name}</p>
+                              {(option.display_description || option.description) && (
+                                <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">{option.display_description || option.description}</p>
+                              )}
+                              <p className="mt-1 text-xs font-black text-primary">{price > 0 ? `+ ${brl(price)}` : "Sem custo"}</p>
+                              {!availability.available && <p className="mt-1 text-[10px] font-bold text-red-600">{availability.reason}</p>}
+                            </button>
+
+                            {max > 1 && availability.available ? (
+                              <div className="flex items-center gap-1 rounded-full border bg-white p-1">
+                                <button type="button" onClick={() => setDetailAddonQuantity(group, option, qty - 1)} className="grid size-7 place-items-center rounded-full"><Minus className="size-3.5" /></button>
+                                <span className="min-w-5 text-center text-xs font-black">{qty}</span>
+                                <button type="button" onClick={() => setDetailAddonQuantity(group, option, qty + 1)} className="grid size-7 place-items-center rounded-full bg-[#ffd400]"><Plus className="size-3.5" /></button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={!availability.available}
+                                onClick={() => toggleDetailAddon(group, option)}
+                                className={`grid size-8 shrink-0 place-items-center rounded-full border-2 ${qty > 0 ? "border-[#ffd400] bg-[#ffd400] text-black" : "border-zinc-200 bg-white"}`}
+                                aria-label={qty > 0 ? "Remover adicional" : "Adicionar adicional"}
+                              >
+                                {qty > 0 ? <CheckCircle2 className="size-4" /> : <Plus className="size-4" />}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                  </div>
+                </section>
+              );
+            })}
+
+            <section className="rounded-[26px] border border-black/5 bg-white p-5 shadow-sm">
+              <Label htmlFor="detail-notes" className="font-black">Alguma observação?</Label>
+              <Textarea
+                id="detail-notes"
+                value={detailNotes}
+                onChange={(event) => setDetailNotes(event.target.value)}
+                placeholder="Ex.: sem cebola, molho separado..."
+                className="mt-2 min-h-24 rounded-2xl"
+              />
+            </section>
+          </div>
+        </main>
+
+        <div className="fixed inset-x-0 bottom-0 z-50 border-t bg-white/95 px-4 py-3 backdrop-blur">
+          <div className="mx-auto max-w-2xl">
+            <Button
+              type="button"
+              onClick={addToCartFromDetail}
+              disabled={!selectedProduct.active}
+              className="w-full justify-between rounded-full bg-[#ffd400] py-6 text-base font-black text-black shadow-md hover:bg-[#f4ca00] disabled:bg-zinc-200 disabled:text-zinc-500"
+            >
+              <span>{selectedProduct.active ? "Adicionar à sacola" : "Esgotado por hoje"}</span>
+              <span>{brl(detailTotal)}</span>
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (view === "cart") {
     return (
