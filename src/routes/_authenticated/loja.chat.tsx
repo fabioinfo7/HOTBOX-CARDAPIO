@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { formatPhone, formatDateTime, ORDER_STATUS_LABEL, orderDisplayRef } from "@/lib/formatters";
-import { sendChatText, sendChatMedia, broadcastMessage, deleteConversation, deleteMessage, sendWindowBroadcast } from "@/lib/chat.functions";
+import { sendChatText, sendChatMedia, broadcastMessage, sendMarketingEvolutionBatch, deleteConversation, deleteMessage, sendWindowBroadcast } from "@/lib/chat.functions";
 import { generateOrderFromConversation } from "@/lib/generate-order-from-chat.functions";
 import { sendSatisfactionRequestFn } from "@/lib/satisfaction.functions";
 import { sendOrderArrivalNoticeFn } from "@/lib/order-notifications.functions";
@@ -175,6 +175,7 @@ function ChatPage() {
   const [q, setQ] = useState("");
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [consentConfirmed, setConsentConfirmed] = useState(false);
   const [dialogMode, setDialogMode] = useState<DialogMode>(null);
   const [recording, setRecording] = useState(false);
   const [generatingOrder, setGeneratingOrder] = useState(false);
@@ -1838,6 +1839,7 @@ function ChatDialogs({
     setText("");
     setImageUrl("");
     setSelectedPhones([]);
+    setConsentConfirmed(false);
     setManualPhone("");
     setManualName("");
     supabase
@@ -1877,7 +1879,8 @@ function ChatDialogs({
     if (!text.trim() && !imageUrl) return toast.error("Digite a mensagem ou adicione uma imagem");
     setSending(true);
     try {
-      const res = await broadcastMessage({ data: { phones: selectedPhones, text, imageUrl: imageUrl || undefined } });
+      const res = await sendMarketingEvolutionBatch({ data: { phones: selectedPhones, text, imageUrl: imageUrl || undefined, consentConfirmed } });
+      if (!res.ok) return toast.error(res.error ?? "Falha ao enviar campanha");
       toast.success(
         `Enviado para ${res.sent} contato(s)${res.failed?.length ? `, ${res.failed.length} falharam` : ""}`,
       );
@@ -1898,7 +1901,7 @@ function ChatDialogs({
             <Radio className="size-5 text-emerald-300" />
             <div>
               <p className="font-bold text-white">Lista de transmissão</p>
-              <p className="text-xs text-emerald-200">Cada contato recebe individualmente — não é grupo</p>
+              <p className="text-xs text-emerald-200">Evolution • canal independente da API oficial • envio manual</p>
             </div>
           </div>
 
@@ -2027,10 +2030,16 @@ function ChatDialogs({
                 )}
               </div>
 
+              <label className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-900">
+                <Checkbox checked={consentConfirmed} onCheckedChange={(v) => setConsentConfirmed(v === true)} disabled={sending} />
+                <span>Confirmo que os contatos selecionados autorizaram receber esta comunicação e que o envio será feito manualmente.</span>
+              </label>
+              <p className="text-[10px] text-muted-foreground">Intervalo de 5 a 25 segundos entre contatos para controlar o ritmo. Limite de 100 contatos por campanha.</p>
+
               <Button
                 type="button"
                 onClick={send}
-                disabled={sending || uploading || !selectedPhones.length || (!text.trim() && !imageUrl)}
+                disabled={sending || uploading || !consentConfirmed || !selectedPhones.length || (!text.trim() && !imageUrl)}
                 className="w-full gap-2"
               >
                 {sending
