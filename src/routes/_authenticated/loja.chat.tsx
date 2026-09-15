@@ -1792,7 +1792,26 @@ function MessageBubble({ m, onDelete }: { m: Message; onDelete?: () => Promise<v
   );
 }
 
-type Lead = { id: string; name: string | null; phone: string; created_at: string };
+type Lead = {
+  id: string;
+  name: string | null;
+  phone: string;
+  created_at: string;
+  order_count: number | null;
+  last_order_at: string | null;
+  total_spent: number | null;
+  tags: string[] | null;
+};
+
+type ContactFilter = "all" | "customers" | "never_bought" | "messaged_no_purchase" | "inactive" | "blocked";
+
+function contactPhoneKey(phone: string) {
+  return phone.replace(/\D/g, "").replace(/^55(?=\d{10,11}$)/, "");
+}
+
+function isBlockedLead(lead: Lead) {
+  return (lead.tags ?? []).some((tag) => tag.toLocaleLowerCase("pt-BR") === "bloqueado");
+}
 
 /** Agrupa leads por data de criação — Hoje / Ontem / "14 de agosto" */
 function groupLeadsByDate(leads: Lead[]) {
@@ -1822,6 +1841,8 @@ function ChatDialogs({
   onPick: (phone: string, name: string | null) => void;
 }) {
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [conversationPhones, setConversationPhones] = useState<Set<string>>(new Set());
+  const [contactFilter, setContactFilter] = useState<ContactFilter>("all");
   const [q, setQ] = useState("");
   const [text, setText] = useState("");
   const [imageUrl, setImageUrl] = useState("");
@@ -1839,24 +1860,63 @@ function ChatDialogs({
     setText("");
     setImageUrl("");
     setSelectedPhones([]);
+    setContactFilter("all");
     setConsentConfirmed(false);
     setManualPhone("");
     setManualName("");
-    supabase
-      .from("leads")
-      .select("id,name,phone,created_at")
-      .order("created_at", { ascending: false })
-      .then(({ data }) => setLeads((data as Lead[]) ?? []));
+    Promise.all([
+      supabase
+        .from("leads")
+        .select("id,name,phone,created_at,order_count,last_order_at,total_spent,tags")
+        .order("created_at", { ascending: false }),
+      supabase.from("whatsapp_conversations").select("phone"),
+    ]).then(([leadResult, conversationResult]) => {
+      setLeads((leadResult.data as Lead[]) ?? []);
+      setConversationPhones(new Set((conversationResult.data ?? []).map((row) => contactPhoneKey(row.phone))));
+    });
   }, [mode]);
 
   const filtered = useMemo(() => {
-    if (!q) return leads;
+    const inactiveCutoff = Date.now() - 21 * 86400000;
+    const byCategory = leads.filter((lead) => {
+      const orders = Number(lead.order_count ?? 0);
+      const blocked = isBlockedLead(lead);
+      if (contactFilter === "blocked") return blocked;
+      if (blocked) return false;
+      if (contactFilter === "customers") return orders > 0;
+      if (contactFilter === "never_bought") return orders === 0;
+      if (contactFilter === "messaged_no_purchase") {
+        return orders === 0 && conversationPhones.has(contactPhoneKey(lead.phone));
+      }
+      if (contactFilter === "inactive") {
+        return orders > 0 && !!lead.last_order_at && new Date(lead.last_order_at).getTime() < inactiveCutoff;
+      }
+      return true;
+    });
+    if (!q) return byCategory;
     const s = q.toLowerCase();
-    return leads.filter((l) => (l.name ?? "").toLowerCase().includes(s) || l.phone.includes(q.replace(/\D/g, "")));
-  }, [leads, q]);
+    return byCategory.filter((l) => (l.name ?? "").toLowerCase().includes(s) || l.phone.includes(q.replace(/\D/g, "")));
+  }, [leads, q, contactFilter, conversationPhones]);
 
   const groupedLeads = useMemo(() => groupLeadsByDate(filtered), [filtered]);
-  const allSelected = selectedPhones.length === filtered.length && filtered.length > 0;
+  const selectableFiltered = contactFilter === "blocked" ? [] : filtered;
+  const allSelected = selectableFiltered.length > 0 && selectableFiltered.every((lead) => selectedPhones.includes(lead.phone));
+  const filterCounts = useMemo(() => {
+    const inactiveCutoff = Date.now() - 21 * 86400000;
+    const allowed = leads.filter((lead) => !isBlockedLead(lead));
+    return {
+      all: allowed.length,
+      customers: allowed.filter((lead) => Number(lead.order_count ?? 0) > 0).length,
+      never_bought: allowed.filter((lead) => Number(lead.order_count ?? 0) === 0).length,
+      messaged_no_purchase: allowed.filter(
+        (lead) => Number(lead.order_count ?? 0) === 0 && conversationPhones.has(contactPhoneKey(lead.phone)),
+      ).length,
+      inactive: allowed.filter(
+        (lead) => Number(lead.order_count ?? 0) > 0 && !!lead.last_order_at && new Date(lead.last_order_at).getTime() < inactiveCutoff,
+      ).length,
+      blocked: leads.filter(isBlockedLead).length,
+    };
+  }, [leads, conversationPhones]);
 
   async function uploadBroadcastImage(file: File) {
     setUploading(true);
@@ -1912,13 +1972,31 @@ function ChatDialogs({
                 <p className="text-[10px] font-semibold uppercase text-muted-foreground">Contatos</p>
                 <button
                   type="button"
-                  onClick={() => setSelectedPhones(allSelected ? [] : filtered.map((l) => l.phone))}
+                  onClick={() => setSelectedPhones(allSelected ? [] : selectableFiltered.map((l) => l.phone))}
+                  disabled={!selectableFiltered.length}
                   className="text-[10px] font-medium text-primary hover:underline"
                 >
                   {allSelected ? "Desmarcar todos" : "Marcar todos"}
                 </button>
               </div>
-              <div className="px-2 py-1.5">
+              <div className="space-y-1.5 px-2 py-1.5">
+                <select
+                  value={contactFilter}
+                  onChange={(e) => {
+                    setContactFilter(e.target.value as ContactFilter);
+                    setSelectedPhones([]);
+                  }}
+                  disabled={sending}
+                  className="h-8 w-full rounded-md border bg-background px-2 text-[11px] font-medium outline-none focus:ring-2 focus:ring-primary/30"
+                  aria-label="Filtrar contatos da transmissão"
+                >
+                  <option value="all">Todos permitidos ({filterCounts.all})</option>
+                  <option value="customers">Clientes que compraram ({filterCounts.customers})</option>
+                  <option value="never_bought">Nunca compraram ({filterCounts.never_bought})</option>
+                  <option value="messaged_no_purchase">Conversaram e não compraram ({filterCounts.messaged_no_purchase})</option>
+                  <option value="inactive">Clientes inativos há 21 dias ({filterCounts.inactive})</option>
+                  <option value="blocked">Bloqueados — não enviar ({filterCounts.blocked})</option>
+                </select>
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
                   <Input
@@ -1941,17 +2019,20 @@ function ChatDialogs({
                     {group.leads.map((l) => (
                       <div
                         key={l.id}
-                        onClick={() =>
+                        onClick={() => !isBlockedLead(l) &&
                           setSelectedPhones((prev) =>
                             prev.includes(l.phone) ? prev.filter((p) => p !== l.phone) : [...prev, l.phone],
                           )
                         }
-                        className={`flex cursor-pointer items-center gap-2 border-b px-3 py-2.5 transition hover:bg-muted/40 ${selectedPhones.includes(l.phone) ? "bg-primary/5" : ""}`}
+                        className={`flex items-center gap-2 border-b px-3 py-2.5 transition ${isBlockedLead(l) ? "cursor-not-allowed bg-red-50/60 opacity-70" : "cursor-pointer hover:bg-muted/40"} ${selectedPhones.includes(l.phone) ? "bg-primary/5" : ""}`}
                       >
-                        <input type="checkbox" readOnly checked={selectedPhones.includes(l.phone)} className="size-3.5 accent-primary" />
+                        <input type="checkbox" readOnly disabled={isBlockedLead(l)} checked={selectedPhones.includes(l.phone)} className="size-3.5 accent-primary" />
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-xs font-medium">{l.name || "Sem nome"}</p>
                           <p className="truncate text-[10px] text-muted-foreground">{formatPhone(l.phone)}</p>
+                          <p className="truncate text-[9px] text-muted-foreground">
+                            {isBlockedLead(l) ? "Bloqueado" : Number(l.order_count ?? 0) > 0 ? `${l.order_count} pedido(s)` : conversationPhones.has(contactPhoneKey(l.phone)) ? "Conversou • sem compra" : "Lead • sem compra"}
+                          </p>
                         </div>
                       </div>
                     ))}
