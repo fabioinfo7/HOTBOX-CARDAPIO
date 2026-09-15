@@ -175,7 +175,6 @@ function ChatPage() {
   const [q, setQ] = useState("");
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
-  const [consentConfirmed, setConsentConfirmed] = useState(false);
   const [dialogMode, setDialogMode] = useState<DialogMode>(null);
   const [recording, setRecording] = useState(false);
   const [generatingOrder, setGeneratingOrder] = useState(false);
@@ -1830,6 +1829,7 @@ function ChatDialogs({
   const bcFileInputRef = useRef<HTMLInputElement | null>(null);
   const [selectedPhones, setSelectedPhones] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
+  const [consentConfirmed, setConsentConfirmed] = useState(false);
   const [manualPhone, setManualPhone] = useState("");
   const [manualName, setManualName] = useState("");
 
