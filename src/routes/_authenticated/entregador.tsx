@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { getAlarmAudio, setAlarmSrc, playAlarm, pauseAlarm, playAlarmBeep, stopAlarmBeep, primeBeepUnlock } from "@/lib/alarm-audio";
 import { brl, formatDateTime, formatPhone, ORDER_STATUS_LABEL } from "@/lib/formatters";
+import { sendOrderArrivalNoticeFn } from "@/lib/order-notifications.functions";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -94,7 +95,7 @@ function periodStartISO(days: number) {
 }
 
 const DISMISSED_KEY = "hb_dismissed_orders";
-const DELIVERY_QUEUE_STATUSES = ["pending", "pending_review", "preparing", "ready_pickup"] as const;
+const DELIVERY_QUEUE_STATUSES = ["ready_pickup"] as const;
 
 function DelivererApp() {
   const nav = useNavigate();
@@ -108,6 +109,7 @@ function DelivererApp() {
   const [soundReady, setSoundReady] = useState(false);
   const [dismissed, setDismissed] = useState<string[]>([]);
   const [detailOrder, setDetailOrder] = useState<Order | null>(null);
+  const [arrivalOrderId, setArrivalOrderId] = useState<string | null>(null);
 
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyDays, setHistoryDays] = useState("1");
@@ -246,7 +248,8 @@ function DelivererApp() {
     const list = ((raw as Order[]) ?? [])
       .filter((o: any) => o.delivery_mode !== "pickup")
       .filter((o: any) => o.source !== "ifood")
-      .filter((o: any) => !(nfoodHandledExternally && o.source === "99food"));
+      .filter((o: any) => !(nfoodHandledExternally && o.source === "99food"))
+      .filter((o: any) => o.status === "ready_pickup" || (o.deliverer_id === userId && o.status === "out_for_delivery"));
 
     setOrders(list);
 
@@ -405,6 +408,20 @@ function DelivererApp() {
     );
     toast.success("Pedido marcado como entregue!");
     await Promise.all([load(), loadTodayEarnings()]);
+  }
+
+  async function sendArrival(o: Order) {
+    if (arrivalOrderId === o.id) return;
+    setArrivalOrderId(o.id);
+    try {
+      const result = await sendOrderArrivalNoticeFn({ data: { orderId: o.id } });
+      if (!result.ok) throw new Error(result.error || "Falha ao enviar aviso");
+      toast.success("Cliente avisado pelo WhatsApp: o pedido chegou!");
+    } catch (error: any) {
+      toast.error(error?.message || "Não foi possível avisar o cliente");
+    } finally {
+      setArrivalOrderId(null);
+    }
   }
 
   async function markFailed(o: Order) {
@@ -662,6 +679,8 @@ function DelivererApp() {
         onGoOut={detailOrder?.status === "ready_pickup" ? () => goOutForDelivery(detailOrder) : undefined}
         onRevoke={detailOrder && DELIVERY_QUEUE_STATUSES.includes(detailOrder.status as any) ? () => revokeAcceptance(detailOrder) : undefined}
         onDelivered={detailOrder?.status === "out_for_delivery" ? () => markDelivered(detailOrder) : undefined}
+        onArrival={detailOrder?.status === "out_for_delivery" ? () => sendArrival(detailOrder) : undefined}
+        arrivalLoading={arrivalOrderId === detailOrder?.id}
         onFailed={detailOrder?.status === "out_for_delivery" ? () => markFailed(detailOrder) : undefined}
       />
 
@@ -762,6 +781,8 @@ function DeliveryDetailSheet({
   onGoOut,
   onRevoke,
   onDelivered,
+  onArrival,
+  arrivalLoading = false,
   onFailed,
   readOnlyBadge,
 }: {
@@ -772,6 +793,8 @@ function DeliveryDetailSheet({
   onGoOut?: () => void;
   onRevoke?: () => void;
   onDelivered?: () => void;
+  onArrival?: () => void;
+  arrivalLoading?: boolean;
   onFailed?: () => void;
   readOnlyBadge?: string;
 }) {
@@ -821,9 +844,20 @@ function DeliveryDetailSheet({
               >
                 <MessageCircle className="size-4" /> WhatsApp
               </a>
+              {onArrival && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11 rounded-full border-amber-300 bg-amber-50 px-2 text-xs font-semibold text-amber-800 hover:bg-amber-100"
+                  onClick={onArrival}
+                  disabled={arrivalLoading}
+                >
+                  <MessageCircle className="size-4" /> {arrivalLoading ? "Avisando..." : "Avisar que chegou"}
+                </Button>
+              )}
               <a
                 href={`tel:+${order.customer_phone.replace(/\D/g, "").replace(/^55?/, "55")}`}
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-neutral-900 text-sm font-semibold text-white transition hover:bg-neutral-800"
+                className={`${onArrival ? "col-span-2" : ""} inline-flex h-11 items-center justify-center gap-2 rounded-full bg-neutral-900 text-sm font-semibold text-white transition hover:bg-neutral-800`}
               >
                 <Phone className="size-4" /> Ligar
               </a>
