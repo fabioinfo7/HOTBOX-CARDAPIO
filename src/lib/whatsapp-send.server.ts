@@ -59,9 +59,57 @@ function preTypingPauseMs() {
   return 200 + Math.round(Math.random() * 400);
 }
 
-function normalizePhone(phone: string): string {
+export function normalizePhone(phone: string): string {
   const digits = phone.replace(/\D/g, "");
   return digits.startsWith("55") ? digits : `55${digits}`;
+}
+
+/** Envio exclusivo de campanhas manuais pelo Evolution. Não consulta
+ * whatsapp_provider e, portanto, não altera o fluxo da API oficial. */
+export async function sendEvolutionMarketingText(
+  supabaseAdmin: any,
+  phone: string,
+  text: string,
+): Promise<{ ok: boolean; externalId?: string; error?: string }> {
+  const cfg = await loadEvoConfig(supabaseAdmin);
+  if (!cfg) return { ok: false, error: "Evolution API não configurada ou desabilitada." };
+  const number = normalizePhone(phone);
+  try {
+    const res = await fetch(`${cfg.url.replace(/\/$/, "")}/message/sendText/${encodeURIComponent(cfg.instance)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: cfg.token },
+      body: JSON.stringify({ number, textMessage: { text: text.trim() } }),
+    });
+    const detail = await res.text().catch(() => "");
+    if (!res.ok) {
+      await logSendFailure(supabaseAdmin, "evolution_marketing", number, `${res.status} ${detail}`, res.status);
+      return { ok: false, error: `Evolution retornou ${res.status}.` };
+    }
+    return { ok: true, externalId: extractEvolutionMessageId(detail) };
+  } catch (e: any) {
+    await logSendFailure(supabaseAdmin, "evolution_marketing", number, String(e?.message ?? e));
+    return { ok: false, error: "Não foi possível conectar à Evolution." };
+  }
+}
+
+/** Envio de imagem exclusivo de campanhas manuais pelo Evolution. */
+export async function sendEvolutionMarketingMedia(
+  supabaseAdmin: any,
+  phone: string,
+  mediaUrl: string,
+  caption?: string,
+): Promise<{ ok: boolean; externalId?: string; error?: string }> {
+  const cfg = await loadEvoConfig(supabaseAdmin);
+  if (!cfg) return { ok: false, error: "Evolution API não configurada ou desabilitada." };
+  const number = normalizePhone(phone);
+  try {
+    const result = await sendMediaViaEvolution(cfg, number, mediaUrl, "image", caption);
+    if (!result.ok) await logSendFailure(supabaseAdmin, "evolution_marketing", number, result.error ?? "falha");
+    return result;
+  } catch (e: any) {
+    await logSendFailure(supabaseAdmin, "evolution_marketing", number, String(e?.message ?? e));
+    return { ok: false, error: "Não foi possível enviar a imagem pela Evolution." };
+  }
 }
 
 async function logSendFailure(
