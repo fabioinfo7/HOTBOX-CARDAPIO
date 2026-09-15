@@ -483,13 +483,14 @@ function AdminLayout() {
 
   const nav_groups: { key: string; label: string; icon: typeof Pizza; items: typeof nav_pinned }[] = [
     {
-      key: "cardapio",
-      label: "Cardápio",
+      key: "vendas",
+      label: "Vendas e cardápio",
       icon: Pizza,
       items: [
         { to: "/loja/produtos", label: "Produtos", icon: Pizza },
         { to: "/loja/precificacao", label: "Precificação", icon: Calculator },
         { to: "/loja/cupons", label: "Cupons", icon: Ticket },
+        { to: "/loja/fidelidade", label: "Clube HotBox", icon: Trophy },
       ],
     },
     {
@@ -503,19 +504,26 @@ function AdminLayout() {
       ],
     },
     {
-      key: "comercial",
-      label: "Comercial",
-      icon: TrendingUp,
+      key: "marketing",
+      label: "Marketing e clientes",
+      icon: Users,
       items: [
-        { to: "/loja/pedidos", label: "Histórico", icon: History },
-        { to: "/loja/financeiro", label: "Financeiro", icon: TrendingUp },
-        { to: "/loja/analytics", label: "Analytics 360", icon: BarChart3 },
+        { to: "/loja/chat", label: "Transmissões WhatsApp", icon: MessageCircle },
+        { to: "/loja/leads", label: "Leads e clientes", icon: Users },
         { to: "/loja/reengajamento", label: "Recuperação de vendas", icon: TrendingUp },
-        { to: "/loja/financeiro-cardapio", label: "Financeiro Cardápio", icon: WalletCards },
-        { to: "/loja/fidelidade", label: "Clube HotBox", icon: Trophy },
-        { to: "/loja/receber", label: "A Receber", icon: HandCoins },
-        { to: "/loja/leads", label: "Leads", icon: Users },
         { to: "/loja/avaliacoes", label: "Avaliações", icon: ThumbsUp },
+        { to: "/loja/analytics", label: "Analytics 360", icon: BarChart3 },
+      ],
+    },
+    {
+      key: "gestao",
+      label: "Financeiro e gestão",
+      icon: WalletCards,
+      items: [
+        { to: "/loja/pedidos", label: "Histórico de pedidos", icon: History },
+        { to: "/loja/financeiro", label: "Financeiro geral", icon: TrendingUp },
+        { to: "/loja/financeiro-cardapio", label: "Financeiro do cardápio", icon: WalletCards },
+        { to: "/loja/receber", label: "Contas a receber", icon: HandCoins },
       ],
     },
     {
