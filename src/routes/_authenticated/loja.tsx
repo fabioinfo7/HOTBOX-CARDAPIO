@@ -93,7 +93,7 @@ function StoreStatusToggle({ compact = false }: { compact?: boolean }) {
     const sync = () => load();
     window.addEventListener(STORE_STATUS_EVENT, sync);
     const channel = supabase
-      .channel("admin-global-store-status")
+      .channel(`admin-global-store-status-${Math.random().toString(36).slice(2)}`)
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "store_config" }, load)
       .subscribe();
     return () => {
