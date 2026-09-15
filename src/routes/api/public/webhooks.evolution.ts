@@ -5946,7 +5946,7 @@ async function handleIncomingMessageUnlocked(
   // pedido nenhum — a IA só volta a responder normalmente dentro do horário.
   const { data: hoursCfg, error: hoursCfgError } = await supabaseAdmin
     .from("store_config")
-    .select("business_hours_enabled, business_hours, business_hours_closed_message")
+    .select("manual_store_status, business_hours_enabled, business_hours, business_hours_closed_message")
     .maybeSingle();
   if (hoursCfgError) {
     // Se a consulta falhar (ex: migration do horário de atendimento ainda
@@ -5965,33 +5965,39 @@ async function handleIncomingMessageUnlocked(
       /* alerta não pode quebrar o fluxo */
     }
   }
-  if (hoursCfg?.business_hours_enabled && Array.isArray(hoursCfg.business_hours) && hoursCfg.business_hours.length) {
-    const withinHours = isWithinBusinessHours(hoursCfg.business_hours as BusinessHourRange[], new Date());
-    if (!withinHours) {
-      const closedMessage =
-        (hoursCfg.business_hours_closed_message as string | null)?.trim() ||
-        `Olá, obrigado pelo seu contato! Nossos dias e horários de funcionamento são: ${formatBusinessHoursText(
-          hoursCfg.business_hours as BusinessHourRange[],
-        )}. Assim que abrirmos, respondemos por aqui.`;
-      // Evita mandar o aviso de "fechado" repetidas vezes seguidas pro mesmo
-      // cliente — só manda de novo se a última mensagem de saída não foi
-      // esse mesmo aviso (ex: cliente manda 3 mensagens seguidas fora de hora).
-      const { data: lastOut } = await supabaseAdmin
-        .from("whatsapp_messages")
-        .select("body, media_type")
-        .eq("conversation_id", conversation.id)
-        .eq("direction", "out")
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      const alreadyWarned = lastOut?.media_type === "system" && lastOut?.body === closedMessage;
-      if (!alreadyWarned) {
-        await replyAndLog(supabaseAdmin, conversation.id, phone, closedMessage, {
-          systemMessage: true,
-        });
-      }
-      return Response.json({ ok: true, action: "outside_business_hours" });
+  const manuallyOpen = hoursCfg?.manual_store_status === "open";
+  const manuallyClosed = hoursCfg?.manual_store_status === "closed";
+  const scheduledClosed =
+    !manuallyOpen &&
+    hoursCfg?.business_hours_enabled === true &&
+    Array.isArray(hoursCfg.business_hours) &&
+    hoursCfg.business_hours.length > 0 &&
+    !isWithinBusinessHours(hoursCfg.business_hours as BusinessHourRange[], new Date());
+
+  if (manuallyClosed || scheduledClosed) {
+    const closedMessage =
+      (hoursCfg.business_hours_closed_message as string | null)?.trim() ||
+      (Array.isArray(hoursCfg.business_hours) && hoursCfg.business_hours.length > 0
+        ? `Olá, obrigado pelo seu contato! Estamos fechados no momento. Nossos dias e horários de funcionamento são: ${formatBusinessHoursText(
+            hoursCfg.business_hours as BusinessHourRange[],
+          )}. Assim que abrirmos, respondemos por aqui.`
+        : "Olá, obrigado pelo seu contato! Estamos fechados no momento. Assim que abrirmos, respondemos por aqui.");
+
+    const { data: lastOut } = await supabaseAdmin
+      .from("whatsapp_messages")
+      .select("body, media_type")
+      .eq("conversation_id", conversation.id)
+      .eq("direction", "out")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const alreadyWarned = lastOut?.media_type === "system" && lastOut?.body === closedMessage;
+    if (!alreadyWarned) {
+      await replyAndLog(supabaseAdmin, conversation.id, phone, closedMessage, {
+        systemMessage: true,
+      });
     }
+    return Response.json({ ok: true, action: "outside_business_hours" });
   }
 
   const { data: cfgStore } = await supabaseAdmin
