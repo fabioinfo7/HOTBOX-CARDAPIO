@@ -42,17 +42,107 @@ import {
   Trophy,
   BarChart3,
   ShoppingCart,
+  PlugZap,
   X,
 } from "lucide-react";
 import { FreightApprovalPopup } from "@/components/freight-approval-popup";
 import { HumanHandoffAlert } from "@/components/human-handoff-alert";
 import { AutoPrintReceipt } from "@/components/auto-print-receipt";
 import { PwaInstallButton } from "@/components/pwa-install";
+import { isWithinBusinessHours, type BusinessHourRange } from "@/lib/business-hours";
 import "@/styles/hotbox-admin.css";
 
 import hotboxLogoUrl from "@/assets/logo-hotbox.jpeg";
 
 const HOTBOX_LOGO_URL = hotboxLogoUrl;
+const STORE_STATUS_EVENT = "hb:store-status-changed";
+
+type StoreStatusConfig = {
+  manual_store_status: "open" | "closed" | null;
+  business_hours_enabled: boolean | null;
+  business_hours: BusinessHourRange[] | null;
+};
+
+function effectiveStoreOpen(config: StoreStatusConfig | null) {
+  if (!config) return true;
+  if (config.manual_store_status === "open") return true;
+  if (config.manual_store_status === "closed") return false;
+  if (!config.business_hours_enabled) return true;
+  return Array.isArray(config.business_hours) && config.business_hours.length > 0
+    ? isWithinBusinessHours(config.business_hours, new Date())
+    : true;
+}
+
+function StoreStatusToggle({ compact = false }: { compact?: boolean }) {
+  const [config, setConfig] = useState<StoreStatusConfig | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function load() {
+    const { data } = await (supabase as any)
+      .from("store_config")
+      .select("manual_store_status,business_hours_enabled,business_hours")
+      .eq("id", 1)
+      .maybeSingle();
+    if (data) setConfig(data as StoreStatusConfig);
+  }
+
+  useEffect(() => {
+    load();
+    const interval = window.setInterval(load, 60_000);
+    const sync = () => load();
+    window.addEventListener(STORE_STATUS_EVENT, sync);
+    const channel = supabase
+      .channel("admin-global-store-status")
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "store_config" }, load)
+      .subscribe();
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener(STORE_STATUS_EVENT, sync);
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  const open = effectiveStoreOpen(config);
+
+  async function toggle() {
+    if (saving) return;
+    const next = open ? "closed" : "open";
+    setSaving(true);
+    const { error } = await (supabase as any)
+      .from("store_config")
+      .upsert({ id: 1, manual_store_status: next });
+    setSaving(false);
+    if (error) return toast.error(`Não foi possível ${open ? "fechar" : "abrir"} a loja: ${error.message}`);
+    setConfig((current) => ({
+      manual_store_status: next,
+      business_hours_enabled: current?.business_hours_enabled ?? false,
+      business_hours: current?.business_hours ?? null,
+    }));
+    window.dispatchEvent(new CustomEvent(STORE_STATUS_EVENT));
+    toast.success(next === "open" ? "Loja aberta. Cardápio e atendimento liberados." : "Loja fechada. Novos pedidos e atendimento automático bloqueados.");
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      disabled={saving || !config}
+      title={open ? "Loja aberta — clique para fechar" : "Loja fechada — clique para abrir"}
+      aria-label={open ? "Fechar a loja" : "Abrir a loja"}
+      aria-pressed={open}
+      className={`flex shrink-0 items-center gap-2 rounded-full border px-2 py-1 shadow-md transition disabled:cursor-wait disabled:opacity-60 ${
+        open ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-red-300 bg-red-50 text-red-800"
+      }`}
+    >
+      <span className={`relative h-6 w-11 rounded-full transition ${open ? "bg-emerald-500" : "bg-red-500"}`}>
+        <span className={`absolute top-0.5 grid size-5 place-items-center rounded-full bg-white shadow transition ${open ? "left-[22px]" : "left-0.5"}`}>
+          <PlugZap className={`size-3 ${open ? "text-emerald-600" : "text-red-600"}`} />
+        </span>
+      </span>
+      {!compact && <span className="pr-1 text-[11px] font-black uppercase tracking-wide">{saving ? "Alterando" : open ? "Aberta" : "Fechada"}</span>}
+    </button>
+  );
+}
 
 export const Route = createFileRoute("/_authenticated/loja")({
   component: AdminLayout,
@@ -612,7 +702,8 @@ function AdminLayout() {
       <AutoPrintReceipt />
       {/* botões de tela larga / tela cheia — fixos, aparecem em qualquer página */}
 
-      <div className="fixed right-3 top-3 z-50 hidden gap-1.5 lg:flex">
+      <div className={`fixed right-3 top-3 z-50 hidden gap-1.5 ${horizontal ? "" : "lg:flex"}`}>
+        <StoreStatusToggle />
         <Button
           variant="outline"
           size="icon"
@@ -753,6 +844,7 @@ function AdminLayout() {
                 <p className="truncate text-[10px] font-black uppercase tracking-[0.18em] text-white/55">HOTBOX DELIVERY</p>
                 <h1 className="truncate text-base font-black text-white">{mobileTitle}</h1>
               </div>
+              <StoreStatusToggle compact />
               <PwaInstallButton compact />
               <Button
                 variant="ghost"
@@ -860,6 +952,7 @@ function AdminLayout() {
                 </DropdownMenu>
               );
             })}
+            <StoreStatusToggle />
             <Button
               variant="ghost"
               size="sm"
