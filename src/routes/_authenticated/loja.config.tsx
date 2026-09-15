@@ -2869,6 +2869,9 @@ function ManualStoreStatusCard() {
 
   useEffect(() => {
     load();
+    const sync = () => load();
+    window.addEventListener("hb:store-status-changed", sync);
+    return () => window.removeEventListener("hb:store-status-changed", sync);
   }, []);
 
   async function setManualStatus(next: "auto" | "open" | "closed") {
@@ -2882,6 +2885,7 @@ function ManualStoreStatusCard() {
       return;
     }
     setStatus(next);
+    window.dispatchEvent(new CustomEvent("hb:store-status-changed"));
     toast.success(
       next === "auto"
         ? "Voltou a seguir o horário automático."
