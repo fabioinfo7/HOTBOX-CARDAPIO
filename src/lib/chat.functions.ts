@@ -140,6 +140,54 @@ export const broadcastMessage = createServerFn({ method: "POST" })
     return { ok: true, sent, failed };
   });
 
+/** Campanha manual independente: sempre usa as credenciais Evolution da
+ * configuração, sem consultar ou alterar o provedor oficial do atendimento. */
+export const sendMarketingEvolutionBatch = createServerFn({ method: "POST" })
+  .inputValidator((data: { phones: string[]; text: string; imageUrl?: string; consentConfirmed?: boolean }) => data)
+  .handler(async ({ data }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { sendEvolutionMarketingText, sendEvolutionMarketingMedia, normalizePhone } = await import("./whatsapp-send.server");
+    if (!data.consentConfirmed) return { ok: false, error: "Confirme que os contatos autorizaram receber mensagens." };
+    const text = (data.text ?? "").trim();
+    if (!text && !data.imageUrl) return { ok: false, error: "Informe um texto ou uma imagem." };
+    const phones = [...new Set((data.phones ?? []).map(normalizePhone).filter((p) => p.length >= 12))].slice(0, 100);
+    if (!phones.length) return { ok: false, error: "Selecione pelo menos um contato válido." };
+    const results: { phone: string; status: "sent" | "failed" }[] = [];
+    for (let i = 0; i < phones.length; i++) {
+      const phone = phones[i];
+      const result = data.imageUrl
+        ? await sendEvolutionMarketingMedia(supabaseAdmin, phone, data.imageUrl, text || undefined)
+        : await sendEvolutionMarketingText(supabaseAdmin, phone, text);
+      if (!result.ok) {
+        results.push({ phone, status: "failed" });
+        continue;
+      }
+      const preview = text || "[imagem]";
+      const { data: conv } = await supabaseAdmin
+        .from("whatsapp_conversations")
+        .upsert({ phone, last_message_at: new Date().toISOString(), last_message_preview: preview.slice(0, 140) }, { onConflict: "phone" })
+        .select("id")
+        .single();
+      if (conv?.id) {
+        await supabaseAdmin.from("whatsapp_messages").insert({
+          conversation_id: conv.id,
+          direction: "out",
+          // O schema atual restringe sender_type a customer/bot/admin. Mantemos
+          // admin para não exigir migration; a origem Evolution fica registrada
+          // no log de envio (e o provedor oficial continua intocado).
+          sender_type: "admin",
+          body: text || null,
+          media_url: data.imageUrl || null,
+          media_type: data.imageUrl ? "image" : null,
+          external_id: result.externalId ?? null,
+        });
+      }
+      results.push({ phone, status: "sent" });
+      if (i < phones.length - 1) await new Promise((resolve) => setTimeout(resolve, 5000 + Math.floor(Math.random() * 20001)));
+    }
+    return { ok: true, sent: results.filter((r) => r.status === "sent").length, failed: results.filter((r) => r.status === "failed").map((r) => r.phone), limited: (data.phones?.length ?? 0) > 100 };
+  });
+
 /** Apaga uma mensagem ENVIADA para todos.
  *  Primeiro revoga a mensagem no WhatsApp pela Evolution API. Somente depois
  *  marca deleted_at no banco para removê-la do painel. Se o WhatsApp rejeitar
