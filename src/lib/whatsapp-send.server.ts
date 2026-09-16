@@ -78,12 +78,12 @@ export async function sendEvolutionMarketingText(
     const res = await fetch(`${cfg.url.replace(/\/$/, "")}/message/sendText/${encodeURIComponent(cfg.instance)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", apikey: cfg.token },
-      body: JSON.stringify({ number, textMessage: { text: text.trim() } }),
+      body: JSON.stringify({ number, text: text.trim() }),
     });
     const detail = await res.text().catch(() => "");
     if (!res.ok) {
       await logSendFailure(supabaseAdmin, "evolution_marketing", number, `${res.status} ${detail}`, res.status);
-      return { ok: false, error: `Evolution retornou ${res.status}.` };
+      return { ok: false, error: `Evolution retornou ${res.status}: ${detail.slice(0, 240) || "sem detalhes"}` };
     }
     return { ok: true, externalId: extractEvolutionMessageId(detail) };
   } catch (e: any) {
@@ -175,8 +175,8 @@ async function sendViaEvolution(
     const res = await fetch(`${cfg.url.replace(/\/$/, "")}/message/sendText/${encodeURIComponent(cfg.instance)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", apikey: cfg.token },
-      // Evolution API v2 usa "textMessage: { text }" — não "text" direto na raiz
-      body: JSON.stringify({ number: numberWithDDI, textMessage: { text } }),
+      // Evolution API v2.3.x recebe o texto diretamente na propriedade "text".
+      body: JSON.stringify({ number: numberWithDDI, text }),
     });
     const detail = await res.text().catch(() => "");
     if (!res.ok) {
