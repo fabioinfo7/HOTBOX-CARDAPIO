@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { sendWhatsappText } from "@/lib/whatsapp-send.server";
+import { sendEvolutionMarketingText, sendWhatsappText } from "@/lib/whatsapp-send.server";
 
 // Chamado por pg_cron a cada 5min. Lê alertas não notificados, envia pelo
 // WhatsApp (Evolution ou Meta, conforme o provedor ativo em /loja/config)
@@ -119,13 +119,13 @@ async function processAutomaticSalesRecovery(supabaseAdmin: any) {
     }
 
     try {
-      const result = await sendWhatsappText(supabaseAdmin, phone, message);
+      const result = await sendEvolutionMarketingText(supabaseAdmin, phone, message);
       await supabaseAdmin.from("sales_recovery_log").insert({
         analytics_session_id: String(session.id), customer_phone: phone, customer_name: session.customer_name || null,
         recovery_type: recoveryType, mode: "automatic", status: result.ok ? "sent" : "failed", message,
         source: session.source || null, campaign: session.campaign || null, checkout_id: session.checkout_id || null,
         order_id: session.order_id || null, sent_at: result.ok ? new Date().toISOString() : null,
-        error_message: result.ok ? null : "falha_no_provedor_whatsapp",
+        error_message: result.ok ? null : (result.error || "falha_no_numero_promocional_evolution"),
       });
       if (result.ok) sent++; else failed++;
     } catch (error: any) {

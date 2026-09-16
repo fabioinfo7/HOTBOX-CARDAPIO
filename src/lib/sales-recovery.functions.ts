@@ -197,8 +197,8 @@ export const sendSalesRecoveryNow = createServerFn({ method: "POST" })
     const fallback = data.recoveryType === "rejected_payment" ? cfg?.rejected_message : cfg?.abandoned_message;
     const message = String(data.message || fallback || "Olá! Aqui é da HotBox Delivery. Posso te ajudar a finalizar seu pedido?").trim();
 
-    const { sendWhatsappText } = await import("@/lib/whatsapp-send.server");
-    const result = await sendWhatsappText(supabaseAdmin, phone, message);
+    const { sendEvolutionMarketingText } = await import("@/lib/whatsapp-send.server");
+    const result = await sendEvolutionMarketingText(supabaseAdmin, phone, message);
 
     await (supabaseAdmin as any).from("sales_recovery_log").insert({
       analytics_session_id: String(session.id),
@@ -213,10 +213,10 @@ export const sendSalesRecoveryNow = createServerFn({ method: "POST" })
       checkout_id: session.checkout_id || null,
       order_id: session.order_id || null,
       sent_at: result.ok ? new Date().toISOString() : null,
-      error_message: result.ok ? null : "Falha no provedor de WhatsApp",
+      error_message: result.ok ? null : (result.error || "Falha no número promocional da Evolution"),
     });
 
     return result.ok
       ? { ok: true as const }
-      : { ok: false as const, error: "Não foi possível enviar a mensagem pelo WhatsApp." };
+      : { ok: false as const, error: result.error || "Não foi possível enviar pelo número promocional da Evolution." };
   });
