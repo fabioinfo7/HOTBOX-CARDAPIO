@@ -267,7 +267,7 @@ export const sendReengagementBatch = createServerFn({ method: "POST" })
   .inputValidator((data: { phones: string[]; message: string }) => data)
   .handler(async ({ data }) => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { sendWhatsappText, sendWhatsappMedia, deleteWhatsappMessageForEveryone } = await import("./whatsapp-send.server");
+    const { sendEvolutionMarketingText } = await import("./whatsapp-send.server");
     const results: { phone: string; status: "sent" | "skipped" | "failed" }[] = [];
 
     for (const phone of data.phones) {
@@ -284,24 +284,15 @@ export const sendReengagementBatch = createServerFn({ method: "POST" })
         continue;
       }
 
-      const result = await sendWhatsappText(supabaseAdmin, phone, data.message);
-
-      // Busca a conversa para registrar no histórico do chat
-      const { data: conv } = await supabaseAdmin
-        .from("whatsapp_conversations").select("id").eq("phone", phone).maybeSingle();
+      const result = await sendEvolutionMarketingText(supabaseAdmin, phone, data.message);
 
       if (result.ok) {
         await supabaseAdmin.from("reengagement_queue").insert({
-          phone, conversation_id: conv?.id ?? null,
+          phone, conversation_id: null,
           scheduled_for: new Date().toISOString(),
           sent_at: new Date().toISOString(), status: "sent",
         });
-        if (conv?.id) {
-          await supabaseAdmin.from("whatsapp_messages").insert({
-            conversation_id: conv.id, direction: "out", sender_type: "admin",
-            body: data.message, external_id: result.externalId ?? null,
-          });
-        }
+        // Não registra no Chat: reengajamento usa somente o número promocional Evolution.
         results.push({ phone, status: "sent" });
       } else {
         results.push({ phone, status: "failed" });
