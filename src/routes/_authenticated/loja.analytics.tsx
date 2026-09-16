@@ -36,6 +36,9 @@ import {
   Facebook,
   Globe2,
   MessageCircle,
+  Link2,
+  Trash2,
+  Loader2,
 } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/loja/analytics")({
@@ -374,6 +377,12 @@ function AnalyticsPage() {
   const [utmCampaign, setUtmCampaign] = useState("");
   const [utmContent, setUtmContent] = useState("");
   const [utmCopied, setUtmCopied] = useState(false);
+  const [shortDestination, setShortDestination] = useState("");
+  const [shortSlug, setShortSlug] = useState("");
+  const [shortLinks, setShortLinks] = useState<any[]>([]);
+  const [shortLinkError, setShortLinkError] = useState("");
+  const [shortLinkSaving, setShortLinkSaving] = useState(false);
+  const [shortLinkCopied, setShortLinkCopied] = useState<string | null>(null);
   const [livePageFilter, setLivePageFilter] = useState("all");
   const [liveOriginFilter, setLiveOriginFilter] = useState("all");
   const [campaignOriginFilter, setCampaignOriginFilter] = useState("all");
@@ -442,9 +451,16 @@ function AnalyticsPage() {
     setLoading(false);
   }
 
+  async function loadShortLinks() {
+    const { data } = await (supabase as any).from("short_links").select("id,slug,destination_url,created_at").order("created_at", { ascending: false }).limit(50);
+    setShortLinks(data || []);
+  }
+
   useEffect(() => {
     void load();
   }, [days]);
+
+  useEffect(() => { void loadShortLinks(); }, []);
 
   useEffect(() => {
     void loadLive();
@@ -1188,6 +1204,70 @@ function AnalyticsPage() {
     }
   }
 
+  function normalizeShortSlug(value: string) {
+    return value
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60);
+  }
+
+  function isReservedShortSlug(slug: string) {
+    return new Set(["api", "app", "bio", "admin", "entregador", "pedido", "produto", "avaliacao", "checkout", "obrigado", "meus-pedidos", "politica-de-privacidade"]).has(slug);
+  }
+
+  function shortUrl(slug: string) {
+    return `${window.location.origin}/${slug}`;
+  }
+
+  async function copyShortLink(slug: string) {
+    try {
+      await navigator.clipboard.writeText(shortUrl(slug));
+      setShortLinkCopied(slug);
+      window.setTimeout(() => setShortLinkCopied(null), 1600);
+    } catch { setShortLinkCopied(null); }
+  }
+
+  async function createShortLink() {
+    const slug = normalizeShortSlug(shortSlug);
+    const destination = shortDestination.trim();
+    setShortLinkError("");
+    if (!/^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$/.test(slug)) {
+      setShortLinkError("Escolha um nome entre 3 e 60 caracteres, usando letras, números e hífen.");
+      return;
+    }
+    if (isReservedShortSlug(slug)) {
+      setShortLinkError("Esse nome é reservado por uma página do sistema. Escolha outro.");
+      return;
+    }
+    try {
+      const url = new URL(destination);
+      if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("protocol");
+    } catch {
+      setShortLinkError("Informe um link completo e válido, começando com https:// ou http://.");
+      return;
+    }
+    setShortLinkSaving(true);
+    const { error } = await (supabase as any).from("short_links").insert({ slug, destination_url: destination });
+    setShortLinkSaving(false);
+    if (error) {
+      setShortLinkError(error.code === "23505" ? "Esse nome já está sendo usado. Escolha outro." : (error.message || "Não foi possível criar o link curto."));
+      return;
+    }
+    setShortSlug("");
+    setShortDestination("");
+    await loadShortLinks();
+    void copyShortLink(slug);
+  }
+
+  async function deleteShortLink(id: string, slug: string) {
+    if (!window.confirm(`Excluir o link curto /${slug}? Ele deixará de funcionar imediatamente.`)) return;
+    const { error } = await (supabase as any).from("short_links").delete().eq("id", id);
+    if (!error) await loadShortLinks();
+  }
+
   return (
     <div className="hotbox-admin-page space-y-5 print:p-0">
       <div className="hotbox-admin-header print:hidden">
@@ -1427,6 +1507,23 @@ function AnalyticsPage() {
                     <p className="mt-2 break-all rounded-xl bg-white p-3 text-sm font-medium shadow-sm">{utmUrl}</p>
                     <Button className="mt-3 w-full bg-zinc-950 font-black text-white hover:bg-zinc-800" onClick={copyUtm}><Copy className="mr-2 size-4" /> {utmCopied ? "Link copiado" : "Copiar link UTM"}</Button>
                   </div>
+                </div>
+              </Card>
+
+              <Card className="hotbox-admin-card overflow-hidden">
+                <div className="border-b bg-zinc-950 p-5 text-white">
+                  <h2 className="flex items-center gap-2 text-lg font-black"><Link2 className="size-5 text-[#ffcf00]" /> Encurtador de links personalizado</h2>
+                  <p className="mt-1 text-sm text-white/65">Cole qualquer link e escolha o nome que ele terá depois da barra. Ex.: {window.location.origin}/promo-costela</p>
+                </div>
+                <div className="grid gap-4 p-5 lg:grid-cols-[1fr_260px_auto]">
+                  <div><label className="mb-1 block text-xs font-black uppercase text-zinc-500">Link de destino</label><Input value={shortDestination} onChange={(e) => { setShortDestination(e.target.value); setShortLinkError(""); }} placeholder="https://www.ifood.com.br/..." /></div>
+                  <div><label className="mb-1 block text-xs font-black uppercase text-zinc-500">Nome personalizado</label><div className="flex overflow-hidden rounded-md border bg-white"><span className="flex shrink-0 items-center border-r bg-zinc-50 px-2 text-xs text-zinc-500">/</span><Input className="border-0 shadow-none focus-visible:ring-0" value={shortSlug} onChange={(e) => { setShortSlug(normalizeShortSlug(e.target.value)); setShortLinkError(""); }} placeholder="promo-costela" /></div></div>
+                  <Button className="self-end bg-zinc-950 font-black text-white hover:bg-zinc-800" onClick={createShortLink} disabled={shortLinkSaving}>{shortLinkSaving ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Link2 className="mr-2 size-4" />}{shortLinkSaving ? "Criando..." : "Criar e copiar"}</Button>
+                </div>
+                {shortLinkError && <p className="mx-5 mb-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{shortLinkError}</p>}
+                <div className="border-t p-5">
+                  <p className="mb-3 text-xs font-black uppercase text-zinc-500">Links criados</p>
+                  {shortLinks.length ? <div className="space-y-2">{shortLinks.map((link) => <div key={link.id} className="flex flex-col gap-2 rounded-xl border bg-zinc-50 p-3 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><p className="truncate font-bold text-zinc-900">{shortUrl(link.slug)}</p><p className="truncate text-xs text-zinc-500">→ {link.destination_url}</p></div><div className="flex shrink-0 gap-2"><Button size="sm" variant="outline" onClick={() => void copyShortLink(link.slug)}><Copy className="mr-1.5 size-3.5" />{shortLinkCopied === link.slug ? "Copiado" : "Copiar"}</Button><Button size="sm" variant="outline" className="text-red-600 hover:text-red-700" onClick={() => void deleteShortLink(link.id, link.slug)}><Trash2 className="size-3.5" /><span className="sr-only">Excluir</span></Button></div></div>)}</div> : <p className="text-sm text-zinc-500">Nenhum link curto criado ainda.</p>}
                 </div>
               </Card>
 
