@@ -165,12 +165,6 @@ async function sendViaEvolution(
     return { ok: false };
   }
 
-  await sleep(preTypingPauseMs());
-  const typingDelay = humanTypingDelayMs(text);
-  await evoSendPresence(cfg, numberWithDDI, "composing", typingDelay);
-  await sleep(typingDelay);
-  await evoSendPresence(cfg, numberWithDDI, "paused", 0);
-
   try {
     const res = await fetch(`${cfg.url.replace(/\/$/, "")}/message/sendText/${encodeURIComponent(cfg.instance)}`, {
       method: "POST",
@@ -241,9 +235,6 @@ async function sendViaMeta(
     return { ok: false };
   }
 
-  await sleep(preTypingPauseMs());
-  const typingDelay = humanTypingDelayMs(text, 4500); // teto um pouco maior que o padrão — a Meta já mostra "digitando" por conta própria
-
   // o indicador de "digitando" da Meta precisa do wamid da mensagem que está
   // sendo respondida — guardado em whatsapp_conversations a cada mensagem recebida
   const { data: conv } = await supabaseAdmin
@@ -251,10 +242,7 @@ async function sendViaMeta(
     .select("last_inbound_meta_message_id")
     .eq("phone", numberWithDDI.replace(/^55/, ""))
     .maybeSingle();
-  if (conv?.last_inbound_meta_message_id) {
-    await metaMarkReadWithTyping(cfg, conv.last_inbound_meta_message_id);
-  }
-  await sleep(typingDelay);
+  if (conv?.last_inbound_meta_message_id) await metaMarkReadWithTyping(cfg, conv.last_inbound_meta_message_id);
 
   const result = await metaSendText(cfg, numberWithDDI, text);
   if (!result.ok) {
