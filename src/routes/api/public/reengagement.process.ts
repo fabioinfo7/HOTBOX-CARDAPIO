@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { sendWhatsappText } from "@/lib/whatsapp-send.server";
+import { sendEvolutionMarketingText } from "@/lib/whatsapp-send.server";
 // ============================================================
 // Endpoint: GET /api/protected/reengagement/process
 // Caminho:  src/routes/api/public/reengagement.process.ts
@@ -92,7 +92,7 @@ export const Route = createFileRoute("/api/public/reengagement/process")({
       }
 
       // ── Envia a mensagem ────────────────────────────────────────────
-      const result = await sendWhatsappText(
+      const result = await sendEvolutionMarketingText(
         supabaseAdmin,
         job.phone,
         MENSAGEM_REENGAJAMENTO,
@@ -108,25 +108,8 @@ export const Route = createFileRoute("/api/public/reengagement/process")({
           })
           .eq("id", job.id);
 
-        // Registra no histórico da conversa (aparece no painel /loja/chat)
-        if (job.conversation_id) {
-          await supabaseAdmin.from("whatsapp_messages").insert({
-            conversation_id: job.conversation_id,
-            direction: "out",
-            sender_type: "bot",
-            body: MENSAGEM_REENGAJAMENTO,
-            external_id: result.externalId ?? null,
-          });
-
-          // Atualiza preview da conversa
-          await supabaseAdmin
-            .from("whatsapp_conversations")
-            .update({
-              last_message_at: new Date().toISOString(),
-              last_message_preview: MENSAGEM_REENGAJAMENTO.slice(0, 140),
-            })
-            .eq("id", job.conversation_id);
-        }
+        // O envio promocional permanece somente na fila de reengajamento;
+        // nunca cria mensagem nem atualiza o Chat do atendimento oficial.
 
         sent++;
       } else {
