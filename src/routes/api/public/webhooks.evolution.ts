@@ -7290,9 +7290,9 @@ export async function handleIncomingMessage(
       external_id: externalId,
     });
 
-    // Debounce humano: clientes frequentemente mandam 2 ou 3 mensagens em
-    // sequência. Damos 1,2 s para elas chegarem antes de montar a resposta.
-    await new Promise((r) => setTimeout(r, 1200));
+    // Debounce mínimo: agrupa apenas mensagens praticamente simultâneas sem
+    // fazer o cliente esperar enquanto o atendente "digita".
+    await new Promise((r) => setTimeout(r, 150));
 
     const locked = await acquireWhatsappProcessingLock(supabaseAdmin, phone);
     if (!locked) {
