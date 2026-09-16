@@ -1211,6 +1211,14 @@ async function resolveFreightImmediatelyForCompleteDraft(
       ruasNaoAtendidas,
     );
 
+    // No modo por bairro, a taxa cadastrada no bairro vence qualquer fallback
+    // de distância/configuração antiga. Isso impede que um bairro configurado
+    // seja anunciado como R$ 0,00 por uma RPC ou cálculo incompleto.
+    if (cfgRow.delivery_pricing_mode !== "distance" && !result.outOfArea) {
+      const configuredFee = await getConfiguredNeighborhoodFee(supabaseAdmin, draft.address_neighborhood);
+      if (configuredFee != null) result.fee = configuredFee;
+    }
+
     if (result.outOfArea) {
       // Não reclassifica silenciosamente um bairro ativo. A proteção autoritativa
       // de bairros continua sendo a fonte de verdade da cobertura.
@@ -1388,10 +1396,20 @@ async function persistObviousProductMemoryFromTurn(
   const previousAssistant = [...history].reverse().find((m) => m.role === "assistant")?.content ?? "";
   const previousAskedQuantity = /quantidade|quantas|quantos/.test(normalizeStreet(previousAssistant));
 
-  const { data: products } = await supabaseAdmin.from("products").select("name").eq("active", true);
+  const { data: products } = await supabaseAdmin
+    .from("products")
+    .select("name,category")
+    .eq("active", true)
+    .order("category")
+    .order("name");
   if (!products?.length) return;
 
   const candidatesFrom = (source: string) => {
+    const menuNumber = normalizeStreet(source).match(/\b(?:numero|n[ºo]?|item|opcao|opcao do cardapio)\s*([0-9]{1,2})\b/);
+    if (menuNumber) {
+      const index = Number(menuNumber[1]) - 1;
+      if (index >= 0 && index < products.length) return [products[index]];
+    }
     const userTokens = new Set(normalizeStreet(source).split(/\s+/).filter((x) => x.length >= 3));
     return (products ?? []).filter((p: any) => {
       const tokens = significantProductTokens(String(p.name ?? ""));
@@ -1466,7 +1484,10 @@ async function persistObviousProductMemoryFromTurn(
   let candidates = candidatesFrom(userText);
   let resolvedQty = qty;
   if (resolvedQty == null && previousWasBeverageOffer && candidates.length === 1) resolvedQty = 1;
-  if (resolvedQty == null && !previousAskedQuantity) return;
+  // Item sem quantidade explícita significa uma unidade. Só usamos contexto
+  // anterior para recuperar o nome quando o cliente respondeu apenas a uma
+  // pergunta de quantidade.
+  if (resolvedQty == null && candidates.length === 1) resolvedQty = 1;
 
   if (!candidates.length && resolvedQty != null && previousAskedQuantity) {
     const previousUserTexts = [...history].reverse().filter((m) => m.role === "user").map((m) => m.content).slice(0, 5);
@@ -1504,6 +1525,9 @@ function assistantPromisesActionButDoesNothing(text: string): boolean {
 function isDeliveryFeeQuestion(text: string): boolean {
   const t = normalizeStreet(text);
   if (!t) return false;
+  // "Quanto tempo para entrega?" é prazo, não taxa. Esta exclusão precisa
+  // acontecer antes dos padrões mais genéricos abaixo.
+  if (isDeliveryTimeQuestion(text)) return false;
   return (
     /\b(?:taxa|frete)\b/.test(t) ||
     /\b(?:valor|preco|quanto|quanto custa|qual o valor).{0,30}\bentrega\b/.test(t) ||
@@ -1615,14 +1639,57 @@ async function getNeighborhoodQuoteForInformation(
       },
     );
 
+    // A RPC é a primeira opção, mas a tabela de bairros é a fonte de verdade
+    // da taxa configurada. Em instalações antigas a RPC pode retornar zero ou
+    // não existir; nesse caso recuperamos a taxa diretamente do cadastro.
+    if (data && data.supported !== false && data.fee != null && Number(data.fee) > 0) {
+      return {
+        supported: true,
+        fee: Number(data.fee),
+        pricingMode: data.pricing_mode ? String(data.pricing_mode) : undefined,
+        needsNumber: data.needs_number === true,
+      };
+    }
+
+    const { data: configuredNeighborhood } = await (supabaseAdmin as any)
+      .from("bairros_atendidos")
+      .select("nome, delivery_fee, ativo")
+      .eq("ativo", true)
+      .ilike("nome", neighborhood)
+      .maybeSingle();
+    if (configuredNeighborhood) {
+      const configuredFee = Number(configuredNeighborhood.delivery_fee);
+      if (Number.isFinite(configuredFee)) {
+        return { supported: true, fee: configuredFee };
+      }
+    }
+
     if (error || !data) return null;
 
+    if (data.supported === false || data.fee == null || !Number.isFinite(Number(data.fee))) return null;
     return {
-      supported: data.supported !== false,
-      fee: data.fee == null ? null : Number(data.fee),
+      supported: true,
+      fee: Number(data.fee),
       pricingMode: data.pricing_mode ? String(data.pricing_mode) : undefined,
       needsNumber: data.needs_number === true,
     };
+  } catch {
+    return null;
+  }
+}
+
+async function getConfiguredNeighborhoodFee(supabaseAdmin: any, neighborhood: string | null | undefined): Promise<number | null> {
+  const value = String(neighborhood ?? "").trim();
+  if (!value) return null;
+  try {
+    const { data } = await supabaseAdmin
+      .from("bairros_atendidos")
+      .select("delivery_fee")
+      .eq("ativo", true)
+      .ilike("nome", value)
+      .maybeSingle();
+    const fee = Number(data?.delivery_fee);
+    return Number.isFinite(fee) ? fee : null;
   } catch {
     return null;
   }
@@ -1659,6 +1726,18 @@ async function handleInformationalQuestionBeforeAi(opts: {
     bairrosNaoAtendidos,
     bairrosAtendidosLoadOk,
   } = opts;
+
+  // PRAZO tem prioridade absoluta sobre taxa: perguntas como "quanto tempo
+  // para entrega" nunca podem cair no cálculo de frete.
+  if (isDeliveryTimeQuestion(text)) {
+    await replyAndLog(
+      supabaseAdmin,
+      conversationId,
+      phone,
+      "O prazo de entrega é de aproximadamente *40 minutos*, mas geralmente chega bem antes desse tempo. Quando o pedido estiver em andamento, você receberá as atualizações pelo WhatsApp.",
+    );
+    return Response.json({ ok: true, action: "info_delivery_time" });
+  }
 
   // 1) TAXA / VALOR DA ENTREGA — responde a intenção real, nunca pergunta produto.
   if (isDeliveryFeeQuestion(text)) {
@@ -1774,7 +1853,7 @@ async function handleInformationalQuestionBeforeAi(opts: {
         ? Number(quote.fee)
         : Number(cfgStore?.default_delivery_fee ?? 0);
 
-    if (Number.isFinite(configuredFee) && configuredFee >= 0) {
+    if (Number.isFinite(configuredFee) && (quote?.fee != null || configuredFee > 0)) {
       await replyAndLog(
         supabaseAdmin,
         conversationId,
@@ -2755,7 +2834,8 @@ Sua missão é coletar os dados necessários para fechar o pedido com o MENOR N�
 - Se for entrega: depois que os itens estiverem definidos, peça numa única mensagem ORGANIZADA o nome de quem vai receber + o endereço (rua e número), somente se esses campos ainda estiverem faltando. Não peça a forma de pagamento nessa mesma mensagem; ela vem depois da confirmação da taxa, salvo se o cliente já a informar espontaneamente. Para o endereço atual do pedido, rua e número precisam ser informados pelo cliente. O BAIRRO JÁ VALIDADO NO INÍCIO DA CONVERSA CONTINUA VÁLIDO E DEVE SER REUTILIZADO AUTOMATICAMENTE — NUNCA peça o bairro novamente se ele já foi confirmado neste atendimento. Exemplo: bairro validado = "Chacrinha"; cliente depois responde "Rua Andaraí, 10" → registre rua=Rua Andaraí, número=10 e mantenha bairro=Chacrinha. Só pergunte bairro novamente se nenhum bairro tiver sido validado ainda ou se o próprio cliente disser que quer corrigir/mudar o bairro. NUNCA revele ao cliente um endereço salvo de pedidos anteriores e nunca pergunte se é "o mesmo endereço". Se quiser passar referência, ótimo, mas não é obrigatório. NUNCA pergunte a cidade. Se for retirada, NÃO precisa de endereço nenhum — pula direto pros itens.
 - 🚨 CHAME update_order_draft NA HORA ASSIM QUE TIVER RUA + NÚMERO E JÁ EXISTIR BAIRRO VALIDADO NA CONVERSA. Não espere o cliente repetir o bairro. O sistema deve combinar rua+número recém-informados com o bairro validado no início e calcular a taxa imediatamente. Se o cliente informar um novo bairro explicitamente, aí sim atualize o bairro e revalide antes de calcular.
 - Itens do pedido — use SOMENTE os nomes e preços exatos do cardápio abaixo, nunca invente produto nem preço
-- QUANTIDADE INTELIGENTE — NUNCA pergunte quantidade quando ela já estiver explícita na frase do cliente. Artigos e números contam como quantidade: "uma de costela", "uma costela", "1 costela" = 1 unidade; "duas de pizza", "2 de pizza" = 2 unidades; "quero uma" = 1 unidade. Absorva a quantidade junto com o produto e chame update_order_draft. Só pergunte quantidade se realmente nenhuma quantidade puder ser inferida do que o cliente disse.
+- QUANTIDADE INTELIGENTE — se o cliente pedir um produto sem dizer quantidade, registre automaticamente 1 unidade. Só use outra quantidade quando o próprio cliente disser explicitamente o número. Artigos e números contam como quantidade: "uma de costela", "uma costela", "1 costela" = 1 unidade; "duas de pizza", "2 de pizza" = 2 unidades; "quero a número 1 do cardápio" = produto número 1 e 1 unidade. Nunca pergunte quantas unidades quando nenhuma quantidade foi dita: assuma 1.
+- CONFIRMAÇÃO DE ITEM: assim que o cliente informar um produto, responda primeiro "Ok, anotado:" e, na linha seguinte, o nome exato do item com a quantidade e o preço efetivo do cardápio. Depois siga diretamente para o próximo dado faltante; não repita a pergunta sobre quantidade.
 - Forma de pagamento: quando esse dado estiver faltando, envie a pergunta de pagamento em uma mensagem organizada: "*Qual será a forma de pagamento?*\nAceitamos cartão de crédito, cartão de débito ou Pix.\n\n*Observação:* Não aceitamos dinheiro em espécie, para segurança do nosso entregador." Não favoreça nenhuma opção. Se o cliente disser "cartão", registre CARTÃO e continue — NUNCA pergunte crédito ou débito. Se disser "Pix", registre PIX e continue — NUNCA pergunte se será agora ou na entrega. Se ele espontaneamente disser "Pix agora", respeite essa informação.
 - Se o cliente pedir dinheiro em espécie, explique com educação que, por segurança do entregador, a loja não trabalha com dinheiro e peça para escolher Pix, crédito à vista ou débito. Nunca pergunte sobre troco.
 
@@ -2795,7 +2875,7 @@ Regras importantes:
 - Se já existem itens no rascunho, é proibido perguntar "o que você quer pedir?", "quais produtos?" ou equivalente. Se as quantidades já estão explícitas/salvas, é proibido perguntar quantidade novamente. Se entrega/retirada já está definido, não pergunte de novo.
 - Nunca repita uma pergunta sobre algo que já está em "o que já sei acima".
 - 🚨 REGRA ANTI-LOOP DO RESUMO: depois que o resumo oficial for enviado, NÃO repita o resumo em resposta a confirmação. Respostas afirmativas como "sim", "pode", "pode fechar", "pode finalizar", "confirmo", "está certo", "tudo certo", "perfeito", "fechado", "beleza" ou equivalentes significam CONFIRMAÇÃO FINAL e devem fechar o pedido imediatamente. O resumo só pode ser enviado novamente se o cliente realmente alterar item, quantidade, endereço, nome, forma de pagamento ou outro dado que mude o pedido.
-- 🚨 FECHAMENTO EM DUAS ETAPAS: É PROIBIDO pedir confirmação enquanto faltar qualquer dado obrigatório. Primeiro complete itens + nome + endereço atual + taxa + forma de pagamento. NÃO existe pergunta adicional sobre crédito/débito nem sobre pagamento agora/na entrega. Se não houver bebida, o BACKEND oferece as bebidas ativas UMA VEZ e aguarda a resposta. Depois da bebida, pergunte UMA VEZ: "Posso te passar o resumo do pedido para fechar aqui no sistema?". Somente após resposta afirmativa, o BACKEND envia UMA ÚNICA VEZ o resumo oficial contendo Nome, Endereço completo quando for ENTREGA, Itens e adicionais com quantidade e valor individual, Taxa de entrega, forma de pagamento e *TOTAL A PAGAR*, terminando com "Posso fechar seu pedido?". Na resposta afirmativa ao resumo, o backend cria o pedido automaticamente NA MESMA RODADA, sem pedir uma terceira confirmação.
+- 🚨 FECHAMENTO DIRETO: É PROIBIDO pedir confirmação enquanto faltar qualquer dado obrigatório. Primeiro complete itens + nome + endereço atual + taxa + forma de pagamento. NÃO existe pergunta adicional sobre crédito/débito nem sobre pagamento agora/na entrega. Se não houver bebida, o BACKEND oferece as bebidas ativas UMA VEZ e aguarda a resposta. Depois da resposta à oferta de bebida (ou se o cliente já tiver bebida), o BACKEND envia imediatamente uma ÚNICA VEZ o resumo oficial contendo Nome, Endereço completo quando for ENTREGA, Itens e adicionais com quantidade e valor individual, Taxa de entrega, forma de pagamento e *TOTAL A PAGAR*, terminando com "Posso fechar seu pedido?". Na resposta afirmativa ao resumo, o backend cria o pedido automaticamente NA MESMA RODADA, sem pedir uma confirmação intermediária.
 - 🚨 NOME DO CLIENTE É OBRIGATÓRIO — SEMPRE: antes de chamar finalize_order, o campo customer_name PRECISA estar preenchido com um nome real dito pelo cliente NESTA conversa. Se você ainda não sabe o nome, NÃO chame finalize_order — pergunte primeiro, de forma natural (ex: "pra fechar aqui, qual o nome pra colocar no pedido?"). Nunca use o nome do WhatsApp (pushName) sem confirmar com o cliente que é ele mesmo. Nunca finalize com nome vazio, nem com "Cliente", "Sem nome" ou qualquer variação genérica.
 - IMPORTANTE: o resumo em "O QUE JÁ SEI" pode conter dados de uma sessão antiga que o cliente nunca confirmou agora — nunca finalize só porque os campos aparecem preenchidos ali. Só finalize se você consegue apontar, na conversa atual, o momento em que o cliente confirmou cada dado.
 - Nunca finalize sem o cliente ter claramente confirmado os itens do pedido.
@@ -3993,22 +4073,8 @@ async function executeTool(
         (draft.delivery_mode === "pickup" ||
           Boolean(draft.address_street && draft.address_number && draft.address_neighborhood && draft.estimated_delivery_fee != null));
 
-      if (drinkOfferAnswered && structurallyComplete) {
-        draft.stage = "awaiting_summary_permission";
-        await supabaseAdmin
-          .from("order_drafts")
-          .update({ stage: "awaiting_summary_permission", awaiting_final_confirmation: false, updated_at: new Date().toISOString() })
-          .eq("conversation_id", conversation.id);
-        await replyAndLog(
-          supabaseAdmin,
-          conversation.id,
-          conversation.phone,
-          "Posso te passar o resumo do pedido para fechar aqui no sistema?",
-          { systemMessage: true },
-        );
-        if (ctx.flags) ctx.flags.silenced = true;
-        return { result: { status: "awaiting_summary_permission" } };
-      }
+      // Depois da resposta à bebida e com os dados completos, a execução segue
+      // diretamente para o resumo oficial abaixo.
     }
 
     // Quando esta própria ferramenta acabou de calcular/aprovar o frete, o
@@ -4183,28 +4249,6 @@ async function executeTool(
           };
         }
       }
-    }
-
-    // O cliente pediu um fechamento em duas etapas: primeiro autoriza receber
-    // o resumo; somente então recebe os valores e confirma a criação do pedido.
-    if (!ctx.finalConfirmationAllowed && args.__summary_permission_confirmed !== true) {
-      if (draft.stage !== "awaiting_summary_permission") {
-        draft.stage = "awaiting_summary_permission";
-        draft.awaiting_final_confirmation = false;
-        await supabaseAdmin
-          .from("order_drafts")
-          .update({ stage: "awaiting_summary_permission", awaiting_final_confirmation: false, updated_at: new Date().toISOString() })
-          .eq("conversation_id", conversation.id);
-        await replyAndLog(
-          supabaseAdmin,
-          conversation.id,
-          conversation.phone,
-          "Posso te passar o resumo do pedido para fechar aqui no sistema?",
-          { systemMessage: true },
-        );
-      }
-      ctx.flags.silenced = true;
-      return { result: { status: "awaiting_summary_permission" } };
     }
 
     // Só depois de TODOS os dados obrigatórios estarem completos o sistema pode
@@ -5219,54 +5263,6 @@ async function runConversationalTurn(opts: {
     return -1;
   })();
   const lastUserText = lastUserIndex >= 0 ? (opts.history[lastUserIndex]?.content ?? "") : "";
-
-  // ============ AUTORIZAÇÃO PARA MOSTRAR O RESUMO ============
-  // Esta etapa é separada da confirmação que efetivamente cria o pedido.
-  if (!opts.forceNoTools && opts.draft.stage === "awaiting_summary_permission") {
-    if (isExplicitPendingActionConfirmation(lastUserText)) {
-      opts.draft.stage = "collecting";
-      await opts.supabaseAdmin
-        .from("order_drafts")
-        .update({ stage: "collecting", updated_at: new Date().toISOString() })
-        .eq("conversation_id", opts.conversation.id);
-      const summary = await executeTool("finalize_order", { __summary_permission_confirmed: true }, {
-        supabaseAdmin: opts.supabaseAdmin,
-        conversation: opts.conversation,
-        draft: opts.draft,
-        flags,
-        finalConfirmationAllowed: false,
-        bairrosAtendidos: opts.bairrosAtendidos,
-        bairrosNaoAtendidos: opts.bairrosNaoAtendidos,
-        ruasNaoAtendidas: opts.ruasNaoAtendidas,
-        currentUserText: lastUserText,
-      });
-      if (!flags.silenced && summary.result?.status !== "final_confirmation_summary_sent") {
-        await replyAndLog(
-          opts.supabaseAdmin,
-          opts.conversation.id,
-          opts.conversation.phone,
-          "Não consegui montar o resumo agora. Poderia tentar novamente em instantes, por favor?",
-          { systemMessage: true },
-        );
-      }
-      return { silenced: true, finalText: "", pixBlock: null, pixKeyLabel: null, pixKeyMessage: null, sendMenuImage: false };
-    }
-    if (isExplicitOrderRejection(lastUserText)) {
-      opts.draft.stage = "collecting";
-      await opts.supabaseAdmin
-        .from("order_drafts")
-        .update({ stage: "collecting", updated_at: new Date().toISOString() })
-        .eq("conversation_id", opts.conversation.id);
-      await replyAndLog(
-        opts.supabaseAdmin,
-        opts.conversation.id,
-        opts.conversation.phone,
-        "Tudo bem! Seu pedido ainda não foi fechado. Quando quiser continuar, estou à disposição.",
-        { systemMessage: true },
-      );
-      return { silenced: true, finalText: "", pixBlock: null, pixKeyLabel: null, pixKeyMessage: null, sendMenuImage: false };
-    }
-  }
 
   // ============ CONFIRMAÇÃO DE ALTERAÇÃO/CANCELAMENTO DE PEDIDO JÁ CRIADO ============
   // Usa `order_drafts.stage` como estado persistente. Assim a intenção é pedida
