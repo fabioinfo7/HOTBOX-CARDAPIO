@@ -813,34 +813,12 @@ async function loadOrCreateDraft(supabaseAdmin: any, conversationId: string): Pr
   if (selectErr) throw new Error(`Falha ao buscar rascunho (order_drafts select): ${selectErr.message}`);
 
   if (data) {
-    const hasContent = Boolean(
-      data.customer_name || data.address_street || data.payment_method || (data.items ?? []).length,
-    );
     const ageMs = data.updated_at ? Date.now() - new Date(data.updated_at).getTime() : Infinity;
     if (ageMs >= DRAFT_STALE_MS) {
-      const cleared = {
-        customer_name: null,
-        delivery_mode: null,
-        address_street: null,
-        address_number: null,
-        address_complement: null,
-        address_neighborhood: null,
-        address_city: null,
-        address_reference: null,
-        items: [],
-        payment_method: null,
-        card_type: null,
-        payment_timing: null,
-        change_for: null,
-        notes: null,
-        estimated_delivery_fee: null,
-        estimated_distance_km: null,
-        out_of_delivery_area: false,
-        awaiting_final_confirmation: false,
-        stage: "collecting",
-        updated_at: new Date().toISOString(),
-      };
-      await supabaseAdmin.from("order_drafts").update(cleared).eq("conversation_id", conversationId);
+      await supabaseAdmin
+        .from("order_drafts")
+        .update(freshDraftSessionPatch(new Date().toISOString()))
+        .eq("conversation_id", conversationId);
       return { items: [] };
     }
     return { ...data, items: data.items ?? [] };
