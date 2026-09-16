@@ -883,17 +883,13 @@ function buildContinuityFallback(draft: Draft): string {
   if (draft.delivery_mode === "delivery") {
     if (!draft.address_neighborhood) return "Para continuar com a entrega, poderia me informar seu bairro, por favor?";
 
-    // FLUXO ENXUTO E ORGANIZADO: primeiro coletamos NOME + ENDEREÇO juntos.
-    // O pagamento é solicitado somente depois que o endereço estiver completo e
-    // a taxa tiver sido confirmada. Se o cliente informar pagamento antes, ele é
-    // aproveitado e não será perguntado novamente.
+    // FLUXO ENXUTO: no máximo dois dados por mensagem. Primeiro, nome + endereço.
     if (!draft.address_street && !draft.address_number) {
       if (missingName) {
         return (
           "*Por favor, me informe:*\n\n" +
           "*Nome de quem vai receber:*\n" +
-          "*Endereço para entrega (rua e número):*\n" +
-          "*Complemento ou referência, se houver:*"
+          "*Endereço para entrega (rua e número):*"
         );
       }
       return `${namePrefix}por favor, me informe o endereço completo para entrega (rua e número).`;
@@ -932,6 +928,14 @@ function buildContinuityFallback(draft: Draft): string {
     }
   }
 
+  if (missingName && missingPayment) {
+    return (
+      "*Para continuar, me informe:*\n\n" +
+      "*Nome de quem vai receber:*\n" +
+      "*Forma de pagamento:* Pix ou cartão (crédito/débito).\n\n" +
+      "*Observação:* Não aceitamos dinheiro em espécie, para segurança do nosso entregador."
+    );
+  }
   if (missingName) return "Para continuar, qual é o nome de quem vai receber o pedido, por favor?";
   if (missingPayment) {
     return (
@@ -2881,10 +2885,10 @@ Você também é um ótimo vendedor, do nível dos melhores atendentes de delive
 - Nunca ofereça mais de uma sugestão por pedido — uma sugestão bem colocada vende mais que várias seguidas, que soa insistente.
 - Isso é sempre secundário ao objetivo principal: fechar o pedido rápido e sem fricção. Se o cliente já está com pressa ou objetivo claro, não perca tempo com sugestão nenhuma.
 
-Sua missão é coletar os dados necessários para fechar o pedido com o MENOR NÚMERO DE MENSAGENS possível, sem deixar as mensagens emboladas. Depois que os itens estiverem definidos, agrupe NOME DE QUEM VAI RECEBER + ENDEREÇO COMPLETO na mesma solicitação, com diagramação clara. Com o endereço em mãos, confirme a taxa primeiro. Depois peça somente os dados que ainda estiverem faltando, como a forma de pagamento. Se o cliente fornecer espontaneamente algum desses dados antes, aproveite e nunca pergunte de novo:
+Sua missão é coletar os dados necessários para fechar o pedido com o MENOR NÚMERO DE MENSAGENS possível, sem deixar as mensagens emboladas. Sempre que faltarem dois dados compatíveis, peça os dois juntos, com diagramação clara; NUNCA peça mais de dois dados na mesma mensagem. Depois que os itens estiverem definidos, priorize NOME DE QUEM VAI RECEBER + ENDEREÇO COMPLETO. Com o endereço em mãos, confirme a taxa primeiro. Se, depois da taxa, ainda faltarem NOME + FORMA DE PAGAMENTO, peça os dois juntos. Se o cliente fornecer espontaneamente algum desses dados antes, aproveite e nunca pergunte de novo:
 - Nome de quem vai receber esse pedido específico${pushName ? ` (o nome do WhatsApp de quem está conversando é "${pushName}", mas pode não ser o nome real, ou pode estar pedindo pra outra pessoa — confirme)` : ""}
 - Se é pra ENTREGAR ou se o cliente vai RETIRAR na loja — pergunte isso naturalmente cedo na conversa (ex: "é pra entrega ou você prefere buscar aqui?"). Isso muda tudo o que vem depois.
-- Se for entrega: depois que os itens estiverem definidos, peça numa única mensagem ORGANIZADA o nome de quem vai receber + o endereço (rua e número), somente se esses campos ainda estiverem faltando. Não peça a forma de pagamento nessa mesma mensagem; ela vem depois da confirmação da taxa, salvo se o cliente já a informar espontaneamente. Para o endereço atual do pedido, rua e número precisam ser informados pelo cliente. O BAIRRO JÁ VALIDADO NO INÍCIO DA CONVERSA CONTINUA VÁLIDO E DEVE SER REUTILIZADO AUTOMATICAMENTE — NUNCA peça o bairro novamente se ele já foi confirmado neste atendimento. Exemplo: bairro validado = "Chacrinha"; cliente depois responde "Rua Andaraí, 10" → registre rua=Rua Andaraí, número=10 e mantenha bairro=Chacrinha. Só pergunte bairro novamente se nenhum bairro tiver sido validado ainda ou se o próprio cliente disser que quer corrigir/mudar o bairro. NUNCA revele ao cliente um endereço salvo de pedidos anteriores e nunca pergunte se é "o mesmo endereço". Se quiser passar referência, ótimo, mas não é obrigatório. NUNCA pergunte a cidade. Se for retirada, NÃO precisa de endereço nenhum — pula direto pros itens.
+- Se for entrega: depois que os itens estiverem definidos, peça numa única mensagem ORGANIZADA o nome de quem vai receber + o endereço (rua e número), somente se esses campos ainda estiverem faltando. Isso já corresponde ao limite de dois dados; não acrescente outra pergunta. A forma de pagamento vem depois da confirmação da taxa, salvo se o cliente já a informar espontaneamente. Se o cliente informar apenas o endereço e, após a taxa, ainda faltarem nome + pagamento, peça esses dois juntos. Para o endereço atual do pedido, rua e número precisam ser informados pelo cliente. O BAIRRO JÁ VALIDADO NO INÍCIO DA CONVERSA CONTINUA VÁLIDO E DEVE SER REUTILIZADO AUTOMATICAMENTE — NUNCA peça o bairro novamente se ele já foi confirmado neste atendimento. Exemplo: bairro validado = "Chacrinha"; cliente depois responde "Rua Andaraí, 10" → registre rua=Rua Andaraí, número=10 e mantenha bairro=Chacrinha. Só pergunte bairro novamente se nenhum bairro tiver sido validado ainda ou se o próprio cliente disser que quer corrigir/mudar o bairro. NUNCA revele ao cliente um endereço salvo de pedidos anteriores e nunca pergunte se é "o mesmo endereço". Se quiser passar referência, ótimo, mas não é obrigatório. NUNCA pergunte a cidade. Se for retirada, NÃO precisa de endereço nenhum — pula direto pros itens.
 - 🚨 CHAME update_order_draft NA HORA ASSIM QUE TIVER RUA + NÚMERO E JÁ EXISTIR BAIRRO VALIDADO NA CONVERSA. Não espere o cliente repetir o bairro. O sistema deve combinar rua+número recém-informados com o bairro validado no início e calcular a taxa imediatamente. Se o cliente informar um novo bairro explicitamente, aí sim atualize o bairro e revalide antes de calcular.
 - Itens do pedido — use SOMENTE os nomes e preços exatos do cardápio abaixo, nunca invente produto nem preço
 - QUANTIDADE INTELIGENTE — se o cliente pedir um produto sem dizer quantidade, registre automaticamente 1 unidade. Só use outra quantidade quando o próprio cliente disser explicitamente o número. Artigos e números contam como quantidade: "uma de costela", "uma costela", "1 costela" = 1 unidade; "duas de pizza", "2 de pizza" = 2 unidades; "quero a número 1 do cardápio" = produto número 1 e 1 unidade. Nunca pergunte quantas unidades quando nenhuma quantidade foi dita: assuma 1.
@@ -3765,6 +3769,49 @@ async function draftHasActiveBeverage(supabaseAdmin: any, draft: Draft): Promise
       return itemName === drinkName || itemName.includes(drinkName) || drinkName.includes(itemName);
     });
   });
+}
+
+async function captureSoleOfferedBeverageReply(
+  supabaseAdmin: any,
+  conversationId: string,
+  text: string,
+  draft: Draft,
+): Promise<boolean> {
+  if (draft.stage !== "awaiting_beverage_response") return false;
+  const normalized = normalizeStreet(text).replace(/[.!?]/g, " ").replace(/\s+/g, " ").trim();
+  const acceptsOffer = /\b(?:sim|quero|pode|coloca|coloque|adiciona|adicione|manda)\b/.test(normalized);
+  if (!acceptsOffer || isBeverageDecline(text)) return false;
+
+  const { data: products } = await supabaseAdmin
+    .from("products")
+    .select("name,category")
+    .eq("active", true);
+  const drinks = (products ?? []).filter(productLooksLikeBeverage);
+  // Uma resposta sem o nome ("pode colocar 1") só é inequívoca quando a loja
+  // ofereceu exatamente uma bebida ativa. Com várias opções, a IA deve perguntar qual.
+  if (drinks.length !== 1) return false;
+
+  const productName = String(drinks[0].name ?? "").trim();
+  if (!productName) return false;
+  const quantity = parseExplicitQuantityFromText(text) ?? 1;
+  const nextItems = normalizeDraftItems(draft.items ?? []);
+  const existingIndex = nextItems.findIndex(
+    (item) => normalizeStreet(item.product_name) === normalizeStreet(productName),
+  );
+  if (existingIndex >= 0) {
+    nextItems[existingIndex] = { ...nextItems[existingIndex], quantity };
+  } else {
+    nextItems.push({ product_name: productName, quantity });
+  }
+
+  draft.items = nextItems;
+  draft.awaiting_final_confirmation = false;
+  const { error } = await supabaseAdmin
+    .from("order_drafts")
+    .update({ items: nextItems, awaiting_final_confirmation: false, updated_at: new Date().toISOString() })
+    .eq("conversation_id", conversationId);
+  if (error) throw new Error(`Falha ao registrar bebida oferecida: ${error.message}`);
+  return true;
 }
 
 type SpecialNeighborhoodDecision = "allow" | "redirect" | "ask" | null;
@@ -6904,6 +6951,14 @@ async function handleIncomingMessageUnlocked(
         return Response.json({ ok: true, action: addonStatus || "post_addon_flow_continued" });
       }
     }
+  }
+
+  // Resposta positiva à oferta de bebida. Quando existe uma única bebida ativa,
+  // frases como "pode colocar 1" são ligadas diretamente ao produto oferecido.
+  try {
+    await captureSoleOfferedBeverageReply(supabaseAdmin, conversation.id, text, draft);
+  } catch (err) {
+    console.warn("[ORDER_MEMORY] Falha ao registrar resposta da oferta de bebida:", err);
   }
 
   // Resposta positiva à oferta de bebida: o produto já foi capturado acima.
