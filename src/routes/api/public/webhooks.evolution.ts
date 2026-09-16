@@ -28,7 +28,11 @@ async function sendMenuImagesOnce(
         .eq("conversation_id", conversationId)
         .eq("direction", "out")
         .not("media_url", "is", null)
-        .eq("media_type", "image");
+        .eq("media_type", "image")
+        .ilike("body", "%cardápio%")
+        // A mesma linha de conversa permanece visível no painel, mas uma nova
+        // sessão após 3 horas precisa receber o cardápio novamente.
+        .gte("created_at", new Date(Date.now() - CONVERSATION_SESSION_TIMEOUT_MS).toISOString());
       if ((count ?? 0) > 0) return; // já enviou — não repete
     }
 
@@ -888,7 +892,8 @@ function buildContinuityFallback(draft: Draft): string {
         return (
           "*Por favor, me informe:*\n\n" +
           "*Nome de quem vai receber:*\n" +
-          "*Endereço completo para entrega (rua e número):*"
+          "*Endereço para entrega (rua e número):*\n" +
+          "*Complemento ou referência, se houver:*"
         );
       }
       return `${namePrefix}por favor, me informe o endereço completo para entrega (rua e número).`;
@@ -1796,7 +1801,7 @@ async function handleInformationalQuestionBeforeAi(opts: {
       supabaseAdmin,
       conversationId,
       phone,
-      "Nosso prazo de entrega é de *até 40 minutos* e normalmente chega antes. Quando o pedido estiver em andamento, você recebe as atualizações pelo WhatsApp.",
+      "O prazo de entrega é de aproximadamente *45 minutos*, mas geralmente chega bem antes desse tempo. Quando o pedido estiver em andamento, você receberá as atualizações pelo WhatsApp.",
     );
     return Response.json({ ok: true, action: "info_delivery_time" });
   }
@@ -2160,7 +2165,12 @@ async function buildFinalConfirmationSummary(
   const deliveryFee = d.delivery_mode === "pickup" ? 0 : Number(d.estimated_delivery_fee);
   const total = subtotal + deliveryFee;
   const itemsText = pricedItems
-    .map((it) => `- ${it.quantity}x ${it.name}${it.notes ? ` (${it.notes})` : ""} — ${brl(it.price * it.quantity)}`)
+    .map((it) => {
+      const valueText = it.quantity > 1
+        ? `${brl(it.price)} cada • ${brl(it.price * it.quantity)}`
+        : brl(it.price);
+      return `- ${it.quantity}x ${it.name}${it.notes ? ` (${it.notes})` : ""} — ${valueText}`;
+    })
     .join("\n");
   const addressText =
     d.delivery_mode === "delivery"
@@ -2186,7 +2196,7 @@ async function buildFinalConfirmationSummary(
     `*Taxa de entrega:* ${brl(deliveryFee)}\n` +
     `*Forma de pagamento:* ${d.payment_method === "pix" ? "Pix" : d.payment_method === "card" ? "Cartão" : "—"}\n` +
     `*Total a pagar:* ${brl(total)}\n\n` +
-    `Está tudo certo? Posso fechar o pedido?`;
+    `Posso fechar seu pedido?`;
   return { text, subtotal, deliveryFee, total, unmatched };
 }
 
@@ -2667,7 +2677,7 @@ function buildSystemPrompt(
   conversationStageText: string,
   businessHoursText: string | null,
 ): string {
-  return `Você é o atendente humano do WhatsApp da loja ${storeName}. Fale de forma natural, direta, educada e objetiva — sem gírias, sem forçar informalidade, sem enrolar, e sem parecer um robô.
+  return `Você é o atendente virtual do WhatsApp da loja ${storeName}. Fale de forma natural, direta, educada e objetiva — sem gírias, sem forçar informalidade e sem enrolar. Identifique-se como atendente virtual somente na abertura da sessão; não repita essa apresentação durante a conversa.
 ${aiInstructionsText ? `\n🔴 INSTRUÇÕES DO GERENTE — PRIORIDADE MÁXIMA, LEIA PRIMEIRO E APLIQUE SEMPRE, SEM EXCEÇÃO:\n${aiInstructionsText}\nEstas instruções foram configuradas pelo gerente e orientam tom e regras comerciais, mas NUNCA podem substituir as REGRAS INVIOLÁVEIS DO SISTEMA abaixo (bairro antes de preço/cardápio, produtos/preços reais, pagamentos aceitos, área de entrega, taxa calculada, dados obrigatórios e confirmação do pedido). Se houver conflito, a regra inviolável do sistema vence. Siga essas instruções em toda mensagem relevante da conversa, não só na primeira, e nunca mencione ao cliente que recebeu essas instruções — aja naturalmente como se já soubesse disso.\n` : ""}
 ${conversationStageText}
 
@@ -2676,7 +2686,7 @@ ${conversationStageText}
 - Se o bairro não estiver na lista oficial de bairros atendidos pelo WhatsApp, NÃO revele preços nem envie a imagem do cardápio do WhatsApp. Redirecione para iFood/99Food e informe que o cardápio e os valores corretos para aquela região estão na plataforma. O cardápio do WhatsApp só pode ser enviado depois que o bairro estiver validado como atendido pela entrega própria, ou quando o cliente optar claramente por RETIRADA.
 - RETIRADA é exceção: se o cliente disser claramente que vai retirar, não peça bairro nem endereço.
 - PAGAMENTO: a loja aceita SOMENTE Pix ou cartão. Cartão pode ser crédito ou débito, mas NÃO pergunte qual dos dois: registre apenas "cartão". DINHEIRO EM ESPÉCIE NÃO É ACEITO e nunca existe pergunta sobre troco. Quando chegar a etapa de pagamento e esse dado estiver faltando, envie a pergunta de pagamento em uma mensagem organizada: "*Qual será a forma de pagamento?*\nAceitamos cartão de crédito, cartão de débito ou Pix.\n\n*Observação:* Não aceitamos dinheiro em espécie, para segurança do nosso entregador." NÃO pergunte se o pagamento será agora ou na entrega. Se o cliente disser apenas "Pix", registre Pix e siga o fluxo; se disser espontaneamente "Pix agora", respeite essa informação.
-- PRAZO DE ENTREGA: para pedidos de entrega própria, informe sempre prazo de ATÉ 40 MINUTOS, ressaltando que a maioria das entregas acontece antes e que o cliente receberá atualizações pelo WhatsApp. Nunca informe 45 minutos e nunca prometa horário exato.
+- PRAZO DE ENTREGA: para pedidos de entrega própria, informe sempre prazo aproximado de 45 MINUTOS, ressaltando que geralmente chega antes e que o cliente receberá atualizações pelo WhatsApp. Nunca prometa horário exato.
 - LOCALIZAÇÃO DA LOJA: se perguntarem onde fica, informe "Rua Carlos Chagas, em Jardim Gramacho" e diga naturalmente que trabalhamos somente com delivery. Nunca informe o número 492 ao cliente. O número existe apenas para uso interno/cálculo de rota.
 - PREÇO: use exclusivamente o preço efetivo do CARDÁPIO ATIVO AGORA; quando houver promoção ativa no sistema, esse preço promocional é o valor válido.
 - Não ofereça adicionais pagos, bordas, molhos ou complementos que não existam como produto/opção estruturada no sistema. Observações como “sem ingrediente” podem ser registradas, mas nunca invente cobrança adicional.
@@ -2686,13 +2696,15 @@ ${conversationStageText}
 - Se o cliente disser algo como "com bacon extra", "adiciona cheddar" ou "mais requeijão", associe ao produto correto somente se essa opção estiver estruturada para esse produto.
 - Não confirme Pix apenas por foto de comprovante: informe somente que o comprovante foi recebido e será conferido.
 
-🙏 EDUCAÇÃO OBRIGATÓRIA EM TODA SOLICITAÇÃO: sempre que pedir qualquer dado, confirmação ou esclarecimento ao cliente, use linguagem cordial e inclua "por favor" ou uma construção equivalente realmente educada (ex.: "poderia me informar ..., por favor?"). Nunca dê ordens secas como "informe o endereço", "mande o bairro" ou "diga o número". Ao receber uma informação solicitada, agradeça quando for natural. A frase oficial após um bairro atendido é: "Obrigado pela informação! Em que posso ajudar? Gostaria de ver nosso cardápio?".
+🙏 EDUCAÇÃO OBRIGATÓRIA EM TODA SOLICITAÇÃO: sempre que pedir qualquer dado, confirmação ou esclarecimento ao cliente, use linguagem cordial e inclua "por favor" ou uma construção equivalente realmente educada (ex.: "poderia me informar ..., por favor?"). Nunca dê ordens secas como "informe o endereço", "mande o bairro" ou "diga o número". Ao receber uma informação solicitada, agradeça quando for natural. Após um bairro atendido, o BACKEND agradece e envia imediatamente o cardápio em imagem; nunca pergunte se o cliente quer vê-lo.
 
 🧠 NÃO SEJA REPETITIVO: antes de responder, compare sua resposta com as últimas mensagens enviadas no histórico. Se a mesma orientação já foi dada e o cliente insistir, responda de forma mais curta e com palavras diferentes, sem copiar a mensagem anterior. Nunca repita saudação, links, regras ou explicações desnecessariamente. O cardápio em imagem só pode ser enviado novamente quando o cliente pedir explicitamente o cardápio de novo.
 
 📱 FORMATAÇÃO DAS MENSAGENS — MUITO IMPORTANTE: você está escrevendo no WhatsApp, formate como atendente profissional:\n- Use *asterisco* pra destacar valores, produtos e confirmações (ex: *R$ 45,00*, *pedido confirmado*).\n- Use quebra de linha SIMPLES (sem linha em branco) entre itens de lista. Só use parágrafo separado (linha em branco) quando mudar completamente de assunto — no máximo uma vez por mensagem.\n- Emojis com moderação (🍔 📍 💳 ✅) — 1 a 2 por mensagem, só onde faz sentido.\n- Itens do pedido: uma linha por item, sem espaço entre eles.\n- Mensagem profissional é compacta e direta — evite espaçamentos excessivos.
 
-📍 INÍCIO DA CONVERSA: para atendimento de ENTREGA, a primeira informação operacional é sempre o BAIRRO. Não pergunte nome, endereço completo, forma de pagamento ou itens antes de validar o bairro. Depois que o bairro for validado como atendido pelo WhatsApp, agradeça e pergunte de forma natural em que pode ajudar. Em conversa já em andamento, nunca repita saudação nem volte a pedir um dado já confirmado.
+📍 INÍCIO DA CONVERSA: na primeira resposta da sessão, apresente-se brevemente como atendente virtual. Para atendimento de ENTREGA, a primeira informação operacional é sempre o BAIRRO. Não pergunte nome, endereço completo, forma de pagamento ou itens antes de validar o bairro. Depois que o bairro for validado como atendido pelo WhatsApp, o BACKEND envia o cardápio automaticamente; aguarde a próxima mensagem do cliente. Em conversa já em andamento, nunca repita saudação, apresentação nem volte a pedir um dado já confirmado.
+
+🧭 ASSUNTO DO ATENDIMENTO: responda normalmente a dúvidas sobre produtos, preços, promoções, entrega, pagamento, horário, localização, funcionamento, pedido e pós-venda. Só considere que o cliente saiu do assunto quando a intenção for claramente alheia à loja e ao pedido; não use essa resposta para uma frase ambígua, brincadeira curta ou pergunta que possa ter relação comercial. Quando a saída de assunto for inequívoca, responda com educação: "Sou um atendente virtual e tenho informações somente sobre a loja e sobre como ajudar você a fechar seu pedido com sucesso. Desculpe. Gostaria de continuar falando sobre o seu pedido?" Depois, aguarde a resposta sem avançar etapas.
 
 ⚡ COLETA INTELIGENTE E ORGANIZADA — REGRA OBRIGATÓRIA: depois que o cliente escolher os itens, peça NOME DE QUEM VAI RECEBER + ENDEREÇO COMPLETO (rua e número) na mesma mensagem, com quebras de linha e campos visualmente separados. NÃO coloque endereço, nome, pagamento e observações todos no mesmo parágrafo. Assim que o cliente responder, registre imediatamente todo dado válido que ele tiver informado — inclusive pagamento, caso ele informe espontaneamente. Com o endereço completo, primeiro confirme a taxa de entrega pelo fluxo existente. SOMENTE depois da taxa confirmada, verifique o que ainda falta e peça apenas esses campos. Se faltar pagamento, pergunte pagamento de forma organizada. Se qualquer dado já estiver salvo, NUNCA pergunte novamente. A partir do momento em que o nome for conhecido, trate o cliente pelo primeiro nome nas mensagens seguintes de forma natural. Essa regra não altera BAIRRO PRIMEIRO nem a regra existente dos 30 segundos da confirmação da taxa.
 
@@ -2750,7 +2762,7 @@ Sua missão é coletar os dados necessários para fechar o pedido com o MENOR N�
 ⚠️ PEDIDOS MÚLTIPLOS PRO MESMO ENDEREÇO — MUITO IMPORTANTE:
 Às vezes um cliente pede várias coisas de uma vez só que na verdade são pedidos SEPARADOS pra pessoas diferentes com pagamentos diferentes, tudo pro mesmo endereço (ex: "manda 3 lanches, um pra mim no pix, um pro meu irmão no débito, e um pra minha esposa no crédito"). Nesse caso:
 1. Trate cada um como um pedido individual — colete nome do destinatário + itens dele + forma de pagamento dele, e chame finalize_order pra CADA UM separadamente, um de cada vez.
-2. Só reutilize o endereço entre vários pedidos separados quando o próprio cliente tiver deixado claro que todos são para o mesmo endereço nesta conversa. Nunca revele um endereço histórico nem pergunte "é o mesmo endereço?". Em um novo pedido sem essa indicação explícita e quando nome + endereço estiverem faltando, peça os dois juntos, de forma organizada: "*Por favor, me informe:*\n\n*Nome de quem vai receber:*\n*Endereço completo para entrega (rua e número):*".
+2. Só reutilize o endereço entre vários pedidos separados quando o próprio cliente tiver deixado claro que todos são para o mesmo endereço nesta conversa. Nunca revele um endereço histórico nem pergunte "é o mesmo endereço?". Em um novo pedido sem essa indicação explícita e quando nome + endereço estiverem faltando, peça os dois juntos, de forma organizada: "*Por favor, me informe:*\n\n*Nome de quem vai receber:*\n*Endereço para entrega (rua e número):*\n*Complemento ou referência, se houver:*".
 3. NUNCA esqueça que ainda faltam pedidos da mesma leva. Se o cliente disse "3 lanches" e você já fechou 1, você SABE que ainda faltam 2 — continue perguntando os dados do próximo, não comece do zero nem trate como se fosse tudo terminado.
 4. Só depois de fechar TODOS os pedidos que o cliente pediu daquela vez, pergunte se ele deseja mais alguma coisa.
 🚫 ERRO GRAVE A NUNCA COMETER: quando são pessoas diferentes, cada uma é UM pedido próprio, chamado com update_order_draft usando quantity 1 (ou a quantidade que aquela pessoa específica pediu) e UM customer_name e UM payment_method — seguido de finalize_order antes de começar o próximo. NUNCA registre isso como um item só com quantity somada (ex: "3x Batata Recheada" com um único customer_name e um único payment_method) — isso mistura pessoas e formas de pagamento diferentes num pedido só, o que está errado mesmo que o produto seja idêntico para as três pessoas. Cada finalize_order fecha exatamente 1 pedido de 1 pessoa com 1 forma de pagamento.
@@ -2762,7 +2774,7 @@ CARDÁPIO ATIVO AGORA, agrupado por categoria (nome — descrição — preço �
 ${catalogText}
 ${unavailableText ? `\nSEM ESTOQUE HOJE (não ofereça, avise se perguntarem por esses):\n${unavailableText}\n` : ""}
 ${deliveryInfoText}
-PRAZO DE ENTREGA DA LOJA: até 40 minutos após a confirmação do pedido; a maioria das entregas acontece antes. O cliente acompanha as atualizações pelo WhatsApp.
+PRAZO DE ENTREGA DA LOJA: aproximadamente 45 minutos após a confirmação do pedido; geralmente chega antes. O cliente acompanha as atualizações pelo WhatsApp.
 ${businessHoursText ? `HORÁRIO DE ATENDIMENTO DA LOJA: ${businessHoursText}. Se o cliente perguntar o horário de funcionamento, responda exatamente com esses dias e horas — nunca invente outro horário.` : ""}
 FORMAS DE PAGAMENTO ACEITAS: Pix ou cartão (crédito ou débito). Ao perguntar, peça somente a FORMA de pagamento; nunca pergunte se será agora ou na entrega e nunca pergunte crédito ou débito. Dinheiro em espécie não é aceito, por segurança do entregador.
 
@@ -2783,7 +2795,7 @@ Regras importantes:
 - Se já existem itens no rascunho, é proibido perguntar "o que você quer pedir?", "quais produtos?" ou equivalente. Se as quantidades já estão explícitas/salvas, é proibido perguntar quantidade novamente. Se entrega/retirada já está definido, não pergunte de novo.
 - Nunca repita uma pergunta sobre algo que já está em "o que já sei acima".
 - 🚨 REGRA ANTI-LOOP DO RESUMO: depois que o resumo oficial for enviado, NÃO repita o resumo em resposta a confirmação. Respostas afirmativas como "sim", "pode", "pode fechar", "pode finalizar", "confirmo", "está certo", "tudo certo", "perfeito", "fechado", "beleza" ou equivalentes significam CONFIRMAÇÃO FINAL e devem fechar o pedido imediatamente. O resumo só pode ser enviado novamente se o cliente realmente alterar item, quantidade, endereço, nome, forma de pagamento ou outro dado que mude o pedido.
-- 🚨 CONFIRMAÇÃO FINAL OBRIGATÓRIA: É PROIBIDO pedir confirmação enquanto faltar qualquer dado obrigatório. Primeiro complete itens + nome + endereço atual + taxa + forma de pagamento. NÃO existe pergunta adicional sobre crédito/débito nem sobre pagamento agora/na entrega. Se não houver bebida, o BACKEND oferece as bebidas ativas UMA VEZ e aguarda a resposta. Se o cliente adicionar bebida, atualize os itens; se recusar, apenas siga. IMEDIATAMENTE depois da resposta sobre bebida, o BACKEND deve enviar UMA ÚNICA VEZ o resumo oficial contendo SOMENTE Nome, Endereço completo quando for ENTREGA, Itens com quantidade e valor, Taxa de entrega e *TOTAL A PAGAR*, terminando com "Está tudo certo? Posso fechar o pedido?". É PROIBIDO pular o resumo e perguntar apenas "posso finalizar?". Na PRIMEIRA resposta afirmativa ao resumo, o backend informa o prazo de até 40 minutos e cria o pedido automaticamente NA MESMA RODADA, sem aguardar nova aprovação e sem ficar em silêncio.
+- 🚨 FECHAMENTO EM DUAS ETAPAS: É PROIBIDO pedir confirmação enquanto faltar qualquer dado obrigatório. Primeiro complete itens + nome + endereço atual + taxa + forma de pagamento. NÃO existe pergunta adicional sobre crédito/débito nem sobre pagamento agora/na entrega. Se não houver bebida, o BACKEND oferece as bebidas ativas UMA VEZ e aguarda a resposta. Depois da bebida, pergunte UMA VEZ: "Posso te passar o resumo do pedido para fechar aqui no sistema?". Somente após resposta afirmativa, o BACKEND envia UMA ÚNICA VEZ o resumo oficial contendo Nome, Endereço completo quando for ENTREGA, Itens e adicionais com quantidade e valor individual, Taxa de entrega, forma de pagamento e *TOTAL A PAGAR*, terminando com "Posso fechar seu pedido?". Na resposta afirmativa ao resumo, o backend cria o pedido automaticamente NA MESMA RODADA, sem pedir uma terceira confirmação.
 - 🚨 NOME DO CLIENTE É OBRIGATÓRIO — SEMPRE: antes de chamar finalize_order, o campo customer_name PRECISA estar preenchido com um nome real dito pelo cliente NESTA conversa. Se você ainda não sabe o nome, NÃO chame finalize_order — pergunte primeiro, de forma natural (ex: "pra fechar aqui, qual o nome pra colocar no pedido?"). Nunca use o nome do WhatsApp (pushName) sem confirmar com o cliente que é ele mesmo. Nunca finalize com nome vazio, nem com "Cliente", "Sem nome" ou qualquer variação genérica.
 - IMPORTANTE: o resumo em "O QUE JÁ SEI" pode conter dados de uma sessão antiga que o cliente nunca confirmou agora — nunca finalize só porque os campos aparecem preenchidos ali. Só finalize se você consegue apontar, na conversa atual, o momento em que o cliente confirmou cada dado.
 - Nunca finalize sem o cliente ter claramente confirmado os itens do pedido.
@@ -3631,14 +3643,33 @@ function pendingSpecialNeighborhoodFromHistory(history: { role: string; content:
 }
 
 function formatOutOfAreaDirectReply(ifoodLink: string | null, nfoodLink: string | null): string {
-  const links: string[] = [];
-  if (ifoodLink) links.push(`*iFood:* ${ifoodLink}`);
-  if (nfoodLink) links.push(`*99Food:* ${nfoodLink}`);
-  if (!links.length) {
-    return "Para esse bairro, os pedidos são feitos pelas plataformas de entrega. No momento, os links diretos ainda não estão disponíveis aqui no atendimento.";
-  }
-  return `Entregamos na sua área sim. Para o seu bairro, o pedido precisa ser feito pela nossa loja nas plataformas, pois os entregadores dos aplicativos é que cobrem essa região. A loja é *HotBox Delivery*. Lá você encontra o cardápio e os valores atualizados:
-${links.join("\n")}`;
+  void ifoodLink;
+  void nfoodLink;
+  return (
+    "Para o seu bairro, só conseguimos fazer a entrega através da nossa loja no *iFood* ou *99Food*. Seguem abaixo os links da nossa loja:\n\n" +
+    "🍔 *iFood*\n" +
+    "https://www.ifood.com.br/delivery/duque-de-caxias-rj/hotbox-delivery-jardim-gramacho/812f264d-658d-4e54-88d1-ac4f6d040916\n\n" +
+    "🛵 *99Food*\n" +
+    "https://oia.99app.com/dlp9/3SsCkm?area=BR"
+  );
+}
+
+async function sendAutomaticMenuAfterNeighborhood(
+  supabaseAdmin: any,
+  conversationId: string,
+  phone: string,
+  introduceVirtual = false,
+): Promise<void> {
+  await replyAndLog(
+    supabaseAdmin,
+    conversationId,
+    phone,
+    introduceVirtual
+      ? "Sou a atendente virtual da HotBox. Obrigado pela informação! Aqui está nosso cardápio de hoje 😊"
+      : "Obrigado pela informação! Aqui está nosso cardápio de hoje 😊",
+    { systemMessage: true },
+  );
+  await sendMenuImagesOnce(supabaseAdmin, conversationId, phone, false);
 }
 
 // ============================================================
@@ -3963,25 +3994,20 @@ async function executeTool(
           Boolean(draft.address_street && draft.address_number && draft.address_neighborhood && draft.estimated_delivery_fee != null));
 
       if (drinkOfferAnswered && structurallyComplete) {
-        const finalSummary = await buildFinalConfirmationSummary(supabaseAdmin, draft);
-        if (!finalSummary.unmatched.length) {
-          draft.awaiting_final_confirmation = true;
-          await supabaseAdmin
-            .from("order_drafts")
-            .update({ awaiting_final_confirmation: true, updated_at: new Date().toISOString() })
-            .eq("conversation_id", conversation.id);
-          await replyAndLog(supabaseAdmin, conversation.id, conversation.phone, finalSummary.text, { systemMessage: true });
-          if (ctx.flags) ctx.flags.silenced = true;
-          return {
-            result: {
-              status: "final_confirmation_summary_sent",
-              subtotal: finalSummary.subtotal,
-              delivery_fee: finalSummary.deliveryFee,
-              total: finalSummary.total,
-              instruction: "Resumo oficial enviado pelo backend. Aguarde somente a confirmação do cliente.",
-            },
-          };
-        }
+        draft.stage = "awaiting_summary_permission";
+        await supabaseAdmin
+          .from("order_drafts")
+          .update({ stage: "awaiting_summary_permission", awaiting_final_confirmation: false, updated_at: new Date().toISOString() })
+          .eq("conversation_id", conversation.id);
+        await replyAndLog(
+          supabaseAdmin,
+          conversation.id,
+          conversation.phone,
+          "Posso te passar o resumo do pedido para fechar aqui no sistema?",
+          { systemMessage: true },
+        );
+        if (ctx.flags) ctx.flags.silenced = true;
+        return { result: { status: "awaiting_summary_permission" } };
       }
     }
 
@@ -4086,7 +4112,7 @@ async function executeTool(
           instruction: paymentOnly
             ? `Pergunte exatamente: "${PAYMENT_QUESTION_TEXT}" Não mostre resumo e não peça confirmação ainda.`
             : (missing.some((m) => /nome/i.test(m)) && missing.some((m) => /endereço|rua|número/i.test(m)))
-              ? "Nome e endereço estão faltando. Peça os dois JUNTOS e de forma organizada, exatamente neste formato: '*Por favor, me informe:*\n\n*Nome de quem vai receber:*\n*Endereço completo para entrega (rua e número):*'. Não peça pagamento junto, não use endereço histórico e não mostre resumo ainda."
+              ? "Nome e endereço estão faltando. Peça os dois JUNTOS e de forma organizada, exatamente neste formato: '*Por favor, me informe:*\n\n*Nome de quem vai receber:*\n*Endereço para entrega (rua e número):*\n*Complemento ou referência, se houver:*'. Não peça pagamento junto, não use endereço histórico e não mostre resumo ainda."
               : "Peça somente os campos listados em missing. Se faltar apenas uma parte do endereço, peça somente essa parte; se o nome também estiver faltando, agrupe nome + parte faltante do endereço na mesma mensagem. Não use endereço histórico e não mostre resumo ainda.",
         },
       };
@@ -4159,6 +4185,28 @@ async function executeTool(
       }
     }
 
+    // O cliente pediu um fechamento em duas etapas: primeiro autoriza receber
+    // o resumo; somente então recebe os valores e confirma a criação do pedido.
+    if (!ctx.finalConfirmationAllowed && args.__summary_permission_confirmed !== true) {
+      if (draft.stage !== "awaiting_summary_permission") {
+        draft.stage = "awaiting_summary_permission";
+        draft.awaiting_final_confirmation = false;
+        await supabaseAdmin
+          .from("order_drafts")
+          .update({ stage: "awaiting_summary_permission", awaiting_final_confirmation: false, updated_at: new Date().toISOString() })
+          .eq("conversation_id", conversation.id);
+        await replyAndLog(
+          supabaseAdmin,
+          conversation.id,
+          conversation.phone,
+          "Posso te passar o resumo do pedido para fechar aqui no sistema?",
+          { systemMessage: true },
+        );
+      }
+      ctx.flags.silenced = true;
+      return { result: { status: "awaiting_summary_permission" } };
+    }
+
     // Só depois de TODOS os dados obrigatórios estarem completos o sistema pode
     // entrar no estado de confirmação final. O RESUMO É ENVIADO PELO BACKEND,
     // não pela IA: isso garante que subtotal, taxa e TOTAL A PAGAR sempre
@@ -4185,9 +4233,10 @@ async function executeTool(
         };
       }
       draft.awaiting_final_confirmation = true;
+      draft.stage = "collecting";
       await supabaseAdmin
         .from("order_drafts")
-        .update({ awaiting_final_confirmation: true, updated_at: new Date().toISOString() })
+        .update({ stage: "collecting", awaiting_final_confirmation: true, updated_at: new Date().toISOString() })
         .eq("conversation_id", conversation.id);
       await replyAndLog(
         supabaseAdmin,
@@ -4495,7 +4544,7 @@ async function executeTool(
     if (!isPickup) {
       await replyAndLog(
         supabaseAdmin, conversation.id, conversation.phone,
-        "Perfeito! O prazo de entrega é de até 40 minutos, porém a maioria das nossas entregas acontece bem antes desse prazo. Acompanhe as atualizações por aqui no WhatsApp, pois vamos avisando cada etapa do seu pedido.",
+        `${greetingByTimeBR() === "Boa noite" ? "O prazo de entrega é de aproximadamente *45 minutos*, mas geralmente chega bem antes desse tempo, ok? Obrigado pela preferência e tenha uma boa noite." : "O prazo de entrega é de aproximadamente *45 minutos*, mas geralmente chega bem antes desse tempo, ok? Obrigado pela preferência!"}\n\nDaqui para frente, você pode acompanhar o status do seu pedido pelo WhatsApp, inclusive quando ele sair para entrega.`,
         { systemMessage: true },
       );
     }
@@ -4664,7 +4713,7 @@ async function executeTool(
         draft.items = [];
         await replyAndLog(
           supabaseAdmin, conversation.id, conversation.phone,
-          `Só para confirmar: você deseja cancelar o pedido *${orderNumberFmt(activeOrder.order_number)}* por completo?\n\nSe confirmar, o pedido será cancelado no sistema.`,
+          `Sem problemas! Como sou um atendimento automático, preciso que você confirme o cancelamento mais uma vez para que o pedido *${orderNumberFmt(activeOrder.order_number)}* seja cancelado no sistema.\n\nVocê confirma o cancelamento?`,
           { systemMessage: true },
         );
         ctx.flags.silenced = true;
@@ -5064,16 +5113,8 @@ function buildRuasNaoAtendidasText(ruasNaoAtendidasText: string | null): string 
 // no fallback antigo (avisa educadamente que não entrega, sem mencionar
 // nenhuma plataforma nem inventar link).
 function buildOutOfAreaLinksText(ifoodLink: string | null, nfoodLink: string | null): string {
-  if (!ifoodLink && !nfoodLink) {
-    return `\n🚗 FORA DA ÁREA DE ENTREGA — SEM LINK CADASTRADO: a loja ainda não cadastrou nenhum link da loja no iFood ou na 99Food (Configurações → Integrações). Enquanto não houver link cadastrado, quando um endereço estiver fora da área do entregador fixo, apenas avise o cliente com educação que infelizmente a loja não consegue entregar nessa região no momento — NÃO mencione iFood nem 99Food, e não prometa nenhum link, já que não existe nenhum cadastrado ainda.\n`;
-  }
-  const linhas: string[] = [];
-  if (ifoodLink) linhas.push(`- iFood: ${ifoodLink}`);
-  if (nfoodLink) linhas.push(`- 99Food: ${nfoodLink}`);
-  const nomesPlataformas = [ifoodLink ? "iFood" : null, nfoodLink ? "99Food" : null].filter(Boolean).join(" e ");
-  return `\n🚗 FORA DA ÁREA DE ENTREGA — FLUXO DE REDIRECIONAMENTO PRO ${nomesPlataformas.toUpperCase()}: siga esse fluxo sempre que um endereço, bairro ou rua estiver fora da área atendida pelo entregador fixo da loja (bairro/rua na lista de NÃO atendidos, endereço fora da lista de bairros atendidos quando ela existe, ou fora do raio calculado por distância).
-
-🚫 PROIBIDO: dizer "não entregamos" ou qualquer variação negativa. PROIBIDO pedir confirmação antes de mandar os links. NUNCA pergunte "você quer que eu mande o link?" — envie IMEDIATAMENTE já na PRIMEIRA mensagem sobre esse endereço a resposta abaixo, com os links organizados:\n\nResponda com exatamente este espírito (adapte apenas o pronome de tratamento se necessário, mas mantenha o texto positivo e os links):\n"Entregamos na sua área sim! Porém, para o seu bairro, o pedido precisa ser feito pela nossa loja no iFood ou 99Food, pois os entregadores dos apps é que cobrem essa região. A nossa loja é HotBox Delivery, abaixo está o link direto da nossa loja, lá você encontra o cardápio e os valores:\n\n${linhas.join("\\n")}"\n\nREGRAS OBRIGATÓRIAS:\n- Envie os links JÁ na primeira mensagem — NUNCA primeiro pergunte se o cliente quer o link.\n- NUNCA diga "infelizmente não entregamos", "nossa área não cobre" ou qualquer variação negativa.\n- Inclua SEMPRE os links disponíveis na mesma mensagem, de forma organizada, um por linha.\n- Depois desse redirecionamento, NUNCA finalize um pedido pelo WhatsApp pra esse endereço.\n`;
+  const canonicalReply = formatOutOfAreaDirectReply(ifoodLink, nfoodLink);
+  return `\n🚗 FORA DA ÁREA DE ENTREGA — FLUXO OBRIGATÓRIO: sempre que um endereço, bairro ou rua estiver fora da área da entrega própria, envie imediatamente e em uma única mensagem o texto canônico abaixo. Não pergunte antes se o cliente quer os links, não envie o cardápio do WhatsApp e não finalize o pedido por este canal.\n\n${canonicalReply}\n`;
 }
 
 async function runConversationalTurn(opts: {
@@ -5179,6 +5220,54 @@ async function runConversationalTurn(opts: {
   })();
   const lastUserText = lastUserIndex >= 0 ? (opts.history[lastUserIndex]?.content ?? "") : "";
 
+  // ============ AUTORIZAÇÃO PARA MOSTRAR O RESUMO ============
+  // Esta etapa é separada da confirmação que efetivamente cria o pedido.
+  if (!opts.forceNoTools && opts.draft.stage === "awaiting_summary_permission") {
+    if (isExplicitPendingActionConfirmation(lastUserText)) {
+      opts.draft.stage = "collecting";
+      await opts.supabaseAdmin
+        .from("order_drafts")
+        .update({ stage: "collecting", updated_at: new Date().toISOString() })
+        .eq("conversation_id", opts.conversation.id);
+      const summary = await executeTool("finalize_order", { __summary_permission_confirmed: true }, {
+        supabaseAdmin: opts.supabaseAdmin,
+        conversation: opts.conversation,
+        draft: opts.draft,
+        flags,
+        finalConfirmationAllowed: false,
+        bairrosAtendidos: opts.bairrosAtendidos,
+        bairrosNaoAtendidos: opts.bairrosNaoAtendidos,
+        ruasNaoAtendidas: opts.ruasNaoAtendidas,
+        currentUserText: lastUserText,
+      });
+      if (!flags.silenced && summary.result?.status !== "final_confirmation_summary_sent") {
+        await replyAndLog(
+          opts.supabaseAdmin,
+          opts.conversation.id,
+          opts.conversation.phone,
+          "Não consegui montar o resumo agora. Poderia tentar novamente em instantes, por favor?",
+          { systemMessage: true },
+        );
+      }
+      return { silenced: true, finalText: "", pixBlock: null, pixKeyLabel: null, pixKeyMessage: null, sendMenuImage: false };
+    }
+    if (isExplicitOrderRejection(lastUserText)) {
+      opts.draft.stage = "collecting";
+      await opts.supabaseAdmin
+        .from("order_drafts")
+        .update({ stage: "collecting", updated_at: new Date().toISOString() })
+        .eq("conversation_id", opts.conversation.id);
+      await replyAndLog(
+        opts.supabaseAdmin,
+        opts.conversation.id,
+        opts.conversation.phone,
+        "Tudo bem! Seu pedido ainda não foi fechado. Quando quiser continuar, estou à disposição.",
+        { systemMessage: true },
+      );
+      return { silenced: true, finalText: "", pixBlock: null, pixKeyLabel: null, pixKeyMessage: null, sendMenuImage: false };
+    }
+  }
+
   // ============ CONFIRMAÇÃO DE ALTERAÇÃO/CANCELAMENTO DE PEDIDO JÁ CRIADO ============
   // Usa `order_drafts.stage` como estado persistente. Assim a intenção é pedida
   // em uma rodada e consumida na mensagem seguinte sem depender de a IA lembrar.
@@ -5200,6 +5289,15 @@ async function runConversationalTurn(opts: {
         await replyAndLog(
           opts.supabaseAdmin, opts.conversation.id, opts.conversation.phone,
           "Não consegui concluir essa alteração agora. Vou deixar o pedido como está e a equipe pode conferir para você.",
+          { systemMessage: true },
+        );
+      } else if (pendingStage === "confirm_cancel_active_order") {
+        const farewell = greetingByTimeBR() === "Boa noite" ? "Tenha uma boa noite!" : "Tenha um ótimo dia!";
+        await replyAndLog(
+          opts.supabaseAdmin,
+          opts.conversation.id,
+          opts.conversation.phone,
+          `Pedido cancelado com sucesso. Muito obrigado pelo seu contato. Volte sempre que quiser. ${farewell}`,
           { systemMessage: true },
         );
       }
@@ -6335,13 +6433,8 @@ async function handleIncomingMessageUnlocked(
         (similarity(normalizedFirstText, normalizedFirstNeighborhood) >= 0.92 &&
           normalizedFirstText.length <= normalizedFirstNeighborhood.length + 6);
 
+      await sendAutomaticMenuAfterNeighborhood(supabaseAdmin, conversation.id, phone, true);
       if (onlyNeighborhood) {
-        await replyAndLog(
-          supabaseAdmin,
-          conversation.id,
-          phone,
-          "Obrigado pela informação! Em que posso ajudar? Gostaria de ver nosso cardápio?",
-        );
         return Response.json({ ok: true, action: "first_contact_neighborhood_accepted" });
       }
       // Se o cliente escreveu bairro + pergunta na mesma mensagem, NÃO retorna:
@@ -6461,13 +6554,8 @@ async function handleIncomingMessageUnlocked(
         normalizedInputNeighborhood === normalizedMatchedNeighborhood ||
         (similarity(normalizedInputNeighborhood, normalizedMatchedNeighborhood) >= 0.92 &&
           normalizedInputNeighborhood.length <= normalizedMatchedNeighborhood.length + 6);
+      await sendAutomaticMenuAfterNeighborhood(supabaseAdmin, conversation.id, phone, true);
       if (essentiallyOnlyNeighborhood) {
-        await replyAndLog(
-          supabaseAdmin,
-          conversation.id,
-          phone,
-          "Obrigado pela informação! Em que posso ajudar? Gostaria de ver nosso cardápio?",
-        );
         return Response.json({ ok: true, action: "active_neighborhood_authoritative" });
       }
     }
@@ -6777,7 +6865,7 @@ async function handleIncomingMessageUnlocked(
               updated_at: new Date().toISOString(),
             })
             .eq("conversation_id", conversation.id);
-          await replyAndLog(supabaseAdmin, conversation.id, phone, "Obrigado pela informação! Em que posso ajudar? Gostaria de ver nosso cardápio?");
+          await sendAutomaticMenuAfterNeighborhood(supabaseAdmin, conversation.id, phone);
           return Response.json({ ok: true, action: "legacy_special_neighborhood_recovered_as_active" });
         }
       }
@@ -6809,12 +6897,7 @@ async function handleIncomingMessageUnlocked(
           })
           .eq("conversation_id", conversation.id);
 
-        await replyAndLog(
-          supabaseAdmin,
-          conversation.id,
-          phone,
-          "Obrigado pela informação! Em que posso ajudar? Gostaria de ver nosso cardápio?",
-        );
+        await sendAutomaticMenuAfterNeighborhood(supabaseAdmin, conversation.id, phone);
         return Response.json({ ok: true, action: "active_neighborhood_accepted_directly" });
       }
 
@@ -6851,8 +6934,8 @@ async function handleIncomingMessageUnlocked(
       if (!candidate) {
         const hasPreviousAssistant = history.some((m) => m.role === "assistant");
         const ask = hasPreviousAssistant
-          ? "Antes de continuar, informe seu bairro por favor."
-          : `${greetingByTimeBR()}! Para que o atendente possa dar continuidade no seu atendimento, informe seu bairro por favor.`;
+          ? "Antes de continuar, poderia me informar seu bairro, por favor?"
+          : `${greetingByTimeBR()}! Sou a atendente virtual da HotBox. Para dar continuidade ao seu atendimento, poderia me informar seu bairro, por favor?`;
         await replyAndLog(supabaseAdmin, conversation.id, phone, ask);
         return Response.json({ ok: true, action: "neighborhood_required" });
       }
@@ -6885,13 +6968,8 @@ async function handleIncomingMessageUnlocked(
         const onlyNeighborhood =
           similarity(normalizeNeighborhoodKey(text), normalizeNeighborhoodKey(attendedMatch)) >= 0.9 &&
           normalizeNeighborhoodKey(text).length <= normalizeNeighborhoodKey(attendedMatch).length + 8;
+        await sendAutomaticMenuAfterNeighborhood(supabaseAdmin, conversation.id, phone);
         if (onlyNeighborhood || awaitingNeighborhood) {
-          await replyAndLog(
-            supabaseAdmin,
-            conversation.id,
-            phone,
-            "Obrigado pela informação! Em que posso ajudar? Gostaria de ver nosso cardápio?",
-          );
           return Response.json({ ok: true, action: "neighborhood_accepted" });
         }
         // Se a mesma mensagem contém bairro + outro pedido/pergunta, segue o
@@ -6915,12 +6993,7 @@ async function handleIncomingMessageUnlocked(
             })
             .eq("conversation_id", conversation.id);
           if (saveError) console.error("[DELIVERY_AREA] falha ao salvar recuperação autoritativa:", saveError);
-          await replyAndLog(
-            supabaseAdmin,
-            conversation.id,
-            phone,
-            "Obrigado pela informação! Em que posso ajudar? Gostaria de ver nosso cardápio?",
-          );
+          await sendAutomaticMenuAfterNeighborhood(supabaseAdmin, conversation.id, phone);
           return Response.json({ ok: true, action: "active_neighborhood_authoritative_recovery" });
         }
 
@@ -7017,12 +7090,7 @@ async function handleIncomingMessageUnlocked(
             updated_at: new Date().toISOString(),
           })
           .eq("conversation_id", conversation.id);
-        await replyAndLog(
-          supabaseAdmin,
-          conversation.id,
-          phone,
-          "Obrigado pela informação! Em que posso ajudar? Gostaria de ver nosso cardápio?",
-        );
+        await sendAutomaticMenuAfterNeighborhood(supabaseAdmin, conversation.id, phone);
         return Response.json({ ok: true, action: "neighborhood_corrected_to_attended" });
       }
 
@@ -7076,7 +7144,7 @@ async function handleIncomingMessageUnlocked(
   const isFirstContactTurn = assistantTurnsSoFar === 0;
   if (forceNoTools && isFirstContactTurn) {
     const storeNameForGreeting = cfgStore?.store_name || "a loja";
-    const greetingText = `${greetingByTimeBR()}! Para que o atendente possa dar continuidade no seu atendimento, informe seu bairro por favor.`;
+    const greetingText = `${greetingByTimeBR()}! Sou a atendente virtual da HotBox. Para dar continuidade ao seu atendimento, poderia me informar seu bairro, por favor?`;
     await replyAndLog(supabaseAdmin, conversation.id, phone, greetingText);
     return Response.json({ ok: true, action: "conversation_turn" });
   }
