@@ -1276,7 +1276,7 @@ function significantProductTokens(name: string): string[] {
 
 function hasPaidAddonIntent(text: string): boolean {
   const t = normalizeStreet(text);
-  return /\\b(?:adicional|adiciona|adicionar|acrescenta|acrescentar|coloca|colocar|bota|botar|extra|com)\\b/.test(t);
+  return /\b(?:adicional|adiciona|adicionar|acrescenta|acrescentar|coloca|colocar|bota|botar|extra|com)\b/.test(t);
 }
 
 async function persistPaidAddonMemoryFromTurn(
@@ -1284,8 +1284,8 @@ async function persistPaidAddonMemoryFromTurn(
   conversationId: string,
   userText: string,
   draft: Draft,
-): Promise<void> {
-  if (!draft.items?.length || !hasPaidAddonIntent(userText)) return;
+): Promise<boolean> {
+  if (!draft.items?.length || !hasPaidAddonIntent(userText)) return false;
 
   const normalizedText = normalizeStreet(userText);
   const { findProductMatch } = await import("@/lib/product-match.server");
@@ -1295,14 +1295,14 @@ async function persistPaidAddonMemoryFromTurn(
     .select("id,name,active")
     .eq("active", true);
   const productList = products ?? [];
-  if (!productList.length) return;
+  if (!productList.length) return false;
 
   const draftMatches = draft.items
     .map((item, index) => ({ index, item, product: findProductMatch(productList, item.product_name) }))
     .filter((row) => row.product?.id);
 
   const productIds = draftMatches.map((row) => row.product.id);
-  if (!productIds.length) return;
+  if (!productIds.length) return false;
 
   const [{ data: links }, { data: groups }, { data: options }] = await Promise.all([
     supabaseAdmin.from("product_addon_groups").select("product_id,group_id").in("product_id", productIds),
@@ -1329,7 +1329,7 @@ async function persistPaidAddonMemoryFromTurn(
     optionsByProduct.set(String(link.product_id), list);
   }
 
-  const targetAll = /\\b(?:em todas|em todos|nas duas|nos dois|em cada|para todas|pra todas)\\b/.test(normalizedText);
+  const targetAll = /\b(?:em todas|em todos|nas duas|nos dois|em cada|para todas|pra todas)\b/.test(normalizedText);
   let changed = false;
   const nextItems = normalizeDraftItems(draft.items);
 
@@ -1370,7 +1370,7 @@ async function persistPaidAddonMemoryFromTurn(
     }
   }
 
-  if (!changed) return;
+  if (!changed) return false;
 
   draft.items = nextItems;
   draft.awaiting_final_confirmation = false;
@@ -1383,6 +1383,7 @@ async function persistPaidAddonMemoryFromTurn(
     })
     .eq("conversation_id", conversationId);
   if (error) throw new Error(`Falha ao persistir adicionais pagos: ${error.message}`);
+  return true;
 }
 
 async function persistObviousProductMemoryFromTurn(
@@ -2197,7 +2198,7 @@ async function priceDraftItemsWithStructuredAddons(
       addonLabels.length ? `Adicionais: ${addonLabels.join(", ")}` : "",
     ].filter(Boolean);
 
-    return {
+    const pricedItem: any = {
       product_id: product?.id ?? null,
       product_name: product?.name ?? draft.product_name,
       quantity: Math.max(1, Math.round(Number(draft.quantity) || 1)),
@@ -2209,6 +2210,35 @@ async function priceDraftItemsWithStructuredAddons(
       is_promotion_price: Boolean(effective.isPromotion),
       notes: noteParts.length ? noteParts.join(" • ") : null,
     };
+    // Metadado não enumerável: o resumo consegue mostrar cada adicional em
+    // sua própria linha, mas o payload persistido em order_items continua com
+    // exatamente as colunas existentes no banco.
+    Object.defineProperty(pricedItem, "addonDetails", {
+      enumerable: false,
+      value: chargeableAddons.map((requested) => {
+        const requestedKey = normalizeStreet(requested.name);
+        const option =
+          availableOptions.find((candidate: any) =>
+            normalizeStreet(String(candidate.display_name || candidate.name)) === requestedKey) ||
+          availableOptions.find((candidate: any) => {
+            const optionKey = normalizeStreet(String(candidate.display_name || candidate.name));
+            return optionKey.includes(requestedKey) || requestedKey.includes(optionKey);
+          });
+        if (!option) return null;
+        const linkedProduct = option.linked_product_id
+          ? linkedProductById.get(String(option.linked_product_id))
+          : null;
+        const unitPrice = option.use_linked_product_price === true && linkedProduct
+          ? Number(getEffectivePrice(linkedProduct).price || 0)
+          : Number(option.price || 0);
+        return {
+          name: String(option.display_name || option.name),
+          quantity: Math.max(1, Math.round(Number(requested.quantity) || 1)),
+          unitPrice,
+        };
+      }).filter(Boolean),
+    });
+    return pricedItem;
   });
 
   return { priced, unmatchedProducts, unmatchedAddons };
@@ -2236,6 +2266,7 @@ async function buildFinalConfirmationSummary(
     quantity: it.quantity,
     price: it.unit_price,
     notes: it.notes,
+    addons: ((it as any).addonDetails ?? []) as Array<{ name: string; quantity: number; unitPrice: number }>,
   }));
   const subtotal = pricedItems.reduce((sum, it) => sum + it.price * it.quantity, 0);
   // O resumo oficial tem um contrato visual/comercial fixo. Ele mostra SOMENTE
@@ -2244,11 +2275,22 @@ async function buildFinalConfirmationSummary(
   const deliveryFee = d.delivery_mode === "pickup" ? 0 : Number(d.estimated_delivery_fee);
   const total = subtotal + deliveryFee;
   const itemsText = pricedItems
-    .map((it) => {
-      const valueText = it.quantity > 1
-        ? `${brl(it.price)} cada • ${brl(it.price * it.quantity)}`
-        : brl(it.price);
-      return `- ${it.quantity}x ${it.name}${it.notes ? ` (${it.notes})` : ""} — ${valueText}`;
+    .flatMap((it) => {
+      const addonPerUnit = it.addons.reduce((sum, addon) => sum + addon.unitPrice * addon.quantity, 0);
+      const baseUnitPrice = Math.max(0, it.price - addonPerUnit);
+      const mainValueText = it.quantity > 1
+        ? `${brl(baseUnitPrice)} cada • ${brl(baseUnitPrice * it.quantity)}`
+        : brl(baseUnitPrice);
+      const plainNotes = String(it.notes ?? "")
+        .split(" • ")
+        .filter((part) => !part.startsWith("Adicionais:"))
+        .join(" • ");
+      const lines = [`- ${it.quantity}x ${it.name}${plainNotes ? ` (${plainNotes})` : ""} — ${mainValueText}`];
+      for (const addon of it.addons) {
+        const totalQty = addon.quantity * it.quantity;
+        lines.push(`- ${totalQty}x Adicional de ${addon.name} — ${brl(addon.unitPrice * totalQty)}`);
+      }
+      return lines;
     })
     .join("\n");
   const addressText =
@@ -3676,12 +3718,32 @@ function isExplicitNegative(text: string): boolean {
 
 function isBeverageDecline(text: string): boolean {
   const t = normalizeStreet(text).replace(/[.!?]/g, "").trim();
-  return /^(nao|não|nao obrigado|não obrigado|nao obrigada|não obrigada|sem bebida|sem refrigerante|so isso|só isso|pode fechar|pode seguir)$/.test(t);
+  return /^(nao|não|nao obrigado|não obrigado|nao obrigada|não obrigada|nao quero(?: bebida| refrigerante)?|não quero(?: bebida| refrigerante)?|sem bebida|sem refrigerante|so isso|só isso|pode fechar|pode seguir)$/.test(t);
 }
 
 function isBeverageOfferMessage(text: string): boolean {
   const t = normalizeStreet(text);
   return /(algo pra beber|algo para beber|alguma bebida|gostaria de acrescentar algo para beber|quer.*bebida|quer.*refrigerante)/.test(t);
+}
+
+function productLooksLikeBeverage(product: { name?: string | null; category?: string | null }): boolean {
+  const hay = normalizeStreet(`${product.category ?? ""} ${product.name ?? ""}`);
+  return /\b(bebida|bebidas|refrigerante|refrigerantes|guarana|coca(?:-cola)?|agua|suco|fanta|sprite|pepsi|h2o)\b/.test(hay);
+}
+
+async function draftHasActiveBeverage(supabaseAdmin: any, draft: Draft): Promise<boolean> {
+  const { data: products } = await supabaseAdmin
+    .from("products")
+    .select("name,category")
+    .eq("active", true);
+  const drinks = (products ?? []).filter(productLooksLikeBeverage);
+  return (draft.items ?? []).some((item) => {
+    const itemName = normalizeStreet(item.product_name);
+    return drinks.some((drink: any) => {
+      const drinkName = normalizeStreet(String(drink.name ?? ""));
+      return itemName === drinkName || itemName.includes(drinkName) || drinkName.includes(itemName);
+    });
+  });
 }
 
 type SpecialNeighborhoodDecision = "allow" | "redirect" | "ask" | null;
@@ -4195,10 +4257,7 @@ async function executeTool(
         .select("id,name,category,sale_price,promotion_active,promotion_price,promotion_type,promotion_start_at,promotion_end_at,promotion_days_of_week,promotion_time_start,promotion_time_end,promotion_label")
         .eq("active", true)
         .order("name");
-      const drinks = (beverageProducts ?? []).filter((p: any) => {
-        const hay = normalizeStreet(`${p.category ?? ""} ${p.name ?? ""}`);
-        return /\b(bebida|bebidas|refrigerante|refrigerantes|guarana|coca|agua|suco)\b/.test(hay);
-      });
+      const drinks = (beverageProducts ?? []).filter(productLooksLikeBeverage);
       const draftHasDrink = (draft.items ?? []).some((item) => {
         const itemName = normalizeStreet(item.product_name);
         return drinks.some((drink: any) => {
@@ -4240,6 +4299,11 @@ async function executeTool(
             `${draft.customer_name ? `${String(draft.customer_name).trim().split(/\s+/)[0]}, ` : ""}antes de fechar, gostaria de acrescentar algo para beber?\n${options}`,
             { systemMessage: true },
           );
+          draft.stage = "awaiting_beverage_response";
+          await supabaseAdmin
+            .from("order_drafts")
+            .update({ stage: "awaiting_beverage_response", awaiting_final_confirmation: false, updated_at: new Date().toISOString() })
+            .eq("conversation_id", conversation.id);
           if (ctx.flags) ctx.flags.silenced = true;
           return {
             result: {
@@ -5316,7 +5380,16 @@ async function runConversationalTurn(opts: {
   const previousAssistantText = lastUserIndex > 0
     ? [...opts.history.slice(0, lastUserIndex)].reverse().find((m) => m.role === "assistant")?.content ?? ""
     : "";
-  if (!opts.forceNoTools && isBeverageOfferMessage(previousAssistantText) && isBeverageDecline(lastUserText)) {
+  if (
+    !opts.forceNoTools &&
+    (opts.draft.stage === "awaiting_beverage_response" || isBeverageOfferMessage(previousAssistantText)) &&
+    isBeverageDecline(lastUserText)
+  ) {
+    opts.draft.stage = "collecting";
+    await opts.supabaseAdmin
+      .from("order_drafts")
+      .update({ stage: "collecting", updated_at: new Date().toISOString() })
+      .eq("conversation_id", opts.conversation.id);
     const directSummary = await executeTool("finalize_order", {}, {
       supabaseAdmin: opts.supabaseAdmin,
       conversation: opts.conversation,
@@ -6590,8 +6663,9 @@ async function handleIncomingMessageUnlocked(
   } catch (err) {
     console.warn("[ORDER_MEMORY] Falha ao persistir item/quantidade:", err);
   }
+  let paidAddonChanged = false;
   try {
-    await persistPaidAddonMemoryFromTurn(supabaseAdmin, conversation.id, text, draft);
+    paidAddonChanged = await persistPaidAddonMemoryFromTurn(supabaseAdmin, conversation.id, text, draft);
   } catch (err) {
     console.warn("[ORDER_MEMORY] Falha ao persistir adicional pago:", err);
   }
@@ -6762,6 +6836,66 @@ async function handleIncomingMessageUnlocked(
       if (deterministicFlags.silenced || ["beverage_offer_sent", "final_confirmation_summary_sent", "awaiting_final_confirmation"].includes(nextStatus)) {
         return Response.json({ ok: true, action: nextStatus || "post_payment_flow_continued" });
       }
+    }
+  }
+
+  // Alterações feitas depois de um resumo (por exemplo: "coloca adicional de
+  // bacon") invalidam o resumo anterior. Se o pedido já estava completo, o
+  // backend retoma o fechamento imediatamente: primeiro oferece bebida, caso
+  // ainda falte, e só depois emite um novo resumo com o adicional e o total
+  // recalculado. A IA não pode apenas prometer que vai preparar outro resumo.
+  if (paidAddonChanged) {
+    const readyAfterAddon =
+      Boolean(draft.customer_name && draft.delivery_mode && (draft.items ?? []).length && draft.payment_method) &&
+      (draft.delivery_mode === "pickup" ||
+        Boolean(draft.address_street && draft.address_number && draft.address_neighborhood && draft.estimated_delivery_fee != null));
+
+    if (readyAfterAddon) {
+      const addonFlowFlags: { silenced?: boolean; sendMenuImage?: boolean } = {};
+      const addonFlow = await executeTool("finalize_order", {}, {
+        supabaseAdmin,
+        conversation,
+        draft,
+        flags: addonFlowFlags,
+        finalConfirmationAllowed: false,
+        bairrosAtendidos,
+        bairrosNaoAtendidos,
+        ruasNaoAtendidas,
+        currentUserText: text,
+      });
+      const addonStatus = String(addonFlow.result?.status ?? "");
+      if (addonFlowFlags.silenced || ["beverage_offer_sent", "final_confirmation_summary_sent", "awaiting_final_confirmation"].includes(addonStatus)) {
+        return Response.json({ ok: true, action: addonStatus || "post_addon_flow_continued" });
+      }
+    }
+  }
+
+  // Resposta positiva à oferta de bebida: o produto já foi capturado acima.
+  // O estado persistente impede que a oferta seja esquecida se houver outras
+  // mensagens no histórico. Assim que a bebida estiver no rascunho, o backend
+  // gera o resumo completo sem depender de uma nova decisão da IA.
+  if (draft.stage === "awaiting_beverage_response" && await draftHasActiveBeverage(supabaseAdmin, draft)) {
+    draft.stage = "collecting";
+    await supabaseAdmin
+      .from("order_drafts")
+      .update({ stage: "collecting", updated_at: new Date().toISOString() })
+      .eq("conversation_id", conversation.id);
+
+    const beverageFlowFlags: { silenced?: boolean; sendMenuImage?: boolean } = {};
+    const beverageFlow = await executeTool("finalize_order", {}, {
+      supabaseAdmin,
+      conversation,
+      draft,
+      flags: beverageFlowFlags,
+      finalConfirmationAllowed: false,
+      bairrosAtendidos,
+      bairrosNaoAtendidos,
+      ruasNaoAtendidas,
+      currentUserText: text,
+    });
+    const beverageStatus = String(beverageFlow.result?.status ?? "");
+    if (beverageFlowFlags.silenced || ["final_confirmation_summary_sent", "awaiting_final_confirmation"].includes(beverageStatus)) {
+      return Response.json({ ok: true, action: beverageStatus || "post_beverage_summary" });
     }
   }
 
