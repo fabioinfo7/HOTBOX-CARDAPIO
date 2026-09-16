@@ -152,14 +152,14 @@ export const sendMarketingEvolutionBatch = createServerFn({ method: "POST" })
     if (!text && !data.imageUrl) return { ok: false, error: "Informe um texto ou uma imagem." };
     const phones = [...new Set((data.phones ?? []).map(normalizePhone).filter((p) => p.length >= 12))].slice(0, 100);
     if (!phones.length) return { ok: false, error: "Selecione pelo menos um contato válido." };
-    const results: { phone: string; status: "sent" | "failed" }[] = [];
+    const results: { phone: string; status: "sent" | "failed"; error?: string }[] = [];
     for (let i = 0; i < phones.length; i++) {
       const phone = phones[i];
       const result = data.imageUrl
         ? await sendEvolutionMarketingMedia(supabaseAdmin, phone, data.imageUrl, text || undefined)
         : await sendEvolutionMarketingText(supabaseAdmin, phone, text);
       if (!result.ok) {
-        results.push({ phone, status: "failed" });
+        results.push({ phone, status: "failed", error: result.error });
         continue;
       }
       const preview = text || "[imagem]";
@@ -185,7 +185,24 @@ export const sendMarketingEvolutionBatch = createServerFn({ method: "POST" })
       results.push({ phone, status: "sent" });
       if (i < phones.length - 1) await new Promise((resolve) => setTimeout(resolve, 5000 + Math.floor(Math.random() * 20001)));
     }
-    return { ok: true, sent: results.filter((r) => r.status === "sent").length, failed: results.filter((r) => r.status === "failed").map((r) => r.phone), limited: (data.phones?.length ?? 0) > 100 };
+    const sent = results.filter((r) => r.status === "sent").length;
+    const failures = results.filter((r) => r.status === "failed");
+    if (sent === 0 && failures.length > 0) {
+      return {
+        ok: false,
+        sent,
+        failed: failures.map((r) => r.phone),
+        error: failures[0]?.error || "A Evolution recusou o envio.",
+        limited: (data.phones?.length ?? 0) > 100,
+      };
+    }
+    return {
+      ok: true,
+      sent,
+      failed: failures.map((r) => r.phone),
+      failureDetail: failures[0]?.error,
+      limited: (data.phones?.length ?? 0) > 100,
+    };
   });
 
 /** Apaga uma mensagem ENVIADA para todos.
