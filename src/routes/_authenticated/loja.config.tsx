@@ -2095,9 +2095,12 @@ function AiInstructionsCard() {
   async function add() {
     if (!newText.trim()) return;
     setAdding(true);
+    // Padroniza somente o tipo de quebra de linha entre Windows/macOS/Linux.
+    // Espaços, parágrafos, listas e a diagramação interna permanecem intactos.
+    const formattedContent = newText.replace(/\r\n?/g, "\n");
     const { error } = await supabase.from("ai_instructions").insert({
       type: newType,
-      content: newText.trim(),
+      content: formattedContent,
       active: true,
       valid_date: newType === "daily" ? todayBR : null,
     });
@@ -2158,7 +2161,7 @@ function AiInstructionsCard() {
           </Button>
         </div>
         <Textarea
-          rows={2}
+          rows={18}
           placeholder={
             newType === "daily"
               ? `Ex: Hoje estamos sem batata frita. Se pedirem, avise com educação e ofereça o onion rings como alternativa.`
@@ -2166,8 +2169,14 @@ function AiInstructionsCard() {
           }
           value={newText}
           onChange={(e) => setNewText(e.target.value)}
-          className="resize-none rounded-xl text-sm"
+          className="min-h-[420px] resize-y whitespace-pre-wrap break-words rounded-xl bg-background font-mono text-sm leading-relaxed"
+          spellCheck
+          wrap="soft"
         />
+        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
+          <span>Quebras de linha, parágrafos, listas e espaçamentos serão preservados ao salvar.</span>
+          <span>{newText.length.toLocaleString("pt-BR")} caracteres</span>
+        </div>
         <Button size="sm" onClick={add} disabled={adding || !newText.trim()}>
           {adding ? "Adicionando..." : `Adicionar instrução ${newType === "daily" ? "do dia" : "global"}`}
         </Button>
@@ -2194,7 +2203,7 @@ function AiInstructionsCard() {
                       onCheckedChange={() => toggle(i.id, i.active)}
                       className="mt-0.5 shrink-0"
                     />
-                    <p className="flex-1 text-sm leading-snug">{i.content}</p>
+                    <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm leading-relaxed">{i.content}</p>
                     <Button
                       size="icon"
                       variant="ghost"
@@ -2226,7 +2235,7 @@ function AiInstructionsCard() {
                       onCheckedChange={() => toggle(i.id, i.active)}
                       className="mt-0.5 shrink-0"
                     />
-                    <p className="flex-1 text-sm leading-snug">{i.content}</p>
+                    <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm leading-relaxed">{i.content}</p>
                     <Button
                       size="icon"
                       variant="ghost"
@@ -2251,7 +2260,7 @@ function AiInstructionsCard() {
                 {past.map((i) => (
                   <div key={i.id} className="flex items-start gap-2 rounded-xl border p-2.5 opacity-40">
                     <span className="mt-0.5 text-xs text-muted-foreground">{i.valid_date}</span>
-                    <p className="flex-1 text-sm leading-snug line-through">{i.content}</p>
+                    <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm leading-relaxed line-through">{i.content}</p>
                     <Button
                       size="icon"
                       variant="ghost"
