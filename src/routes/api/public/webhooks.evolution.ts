@@ -1330,6 +1330,8 @@ async function persistPaidAddonMemoryFromTurn(
   }
 
   const targetAll = /\b(?:em todas|em todos|nas duas|nos dois|em cada|para todas|pra todas)\b/.test(normalizedText);
+  const targetPositionMatch = normalizedText.match(/\b(?:na|no|item)\s*(\d{1,2})\b/);
+  const targetItemIndex = targetPositionMatch ? Number(targetPositionMatch[1]) - 1 : null;
   let changed = false;
   const nextItems = normalizeDraftItems(draft.items);
 
@@ -1338,10 +1340,11 @@ async function persistPaidAddonMemoryFromTurn(
     const mentionsThisProduct = productTokens.some(
       (token) => token.length >= 5 && new RegExp(`\\b${token}\\b`).test(normalizedText),
     );
+    const targetsThisPosition = targetItemIndex != null && row.index === targetItemIndex;
 
     // Se há um único item, "coloca bacon" se refere a ele.
     // Se há vários, exige mencionar o produto ou indicar que vale para todos.
-    if (draftMatches.length > 1 && !targetAll && !mentionsThisProduct) continue;
+    if (draftMatches.length > 1 && !targetAll && !mentionsThisProduct && !targetsThisPosition) continue;
 
     const available = optionsByProduct.get(String(row.product.id)) ?? [];
     for (const option of available) {
@@ -1393,6 +1396,14 @@ async function persistObviousProductMemoryFromTurn(
   history: Array<{ role: string; content: string }>,
   draft: Draft,
 ): Promise<void> {
+  // Uma fala como "coloca cheddar na 2" altera o segundo item existente; o
+  // número é a posição do item, não uma quantidade, e "cheddar" é o adicional,
+  // não um novo produto do cardápio.
+  const normalizedTurn = normalizeStreet(userText);
+  const explicitlyEditingAddon = /\b(?:adicional|adiciona|adicionar|acrescenta|acrescentar|extra)\b/.test(normalizedTurn);
+  const targetsExistingPosition = /\b(?:na|no|item)\s*\d{1,2}\b/.test(normalizedTurn);
+  if ((draft.items ?? []).length > 0 && (explicitlyEditingAddon || targetsExistingPosition)) return;
+
   const qty = parseExplicitQuantityFromText(userText);
   const previousAssistant = [...history].reverse().find((m) => m.role === "assistant")?.content ?? "";
   const previousAskedQuantity = /quantidade|quantas|quantos/.test(normalizeStreet(previousAssistant));
@@ -4276,28 +4287,26 @@ async function executeTool(
         });
       });
 
-      if (!draftHasDrink && drinks.length) {
-        const { data: recentForDrinkOffer } = await supabaseAdmin
-          .from("whatsapp_messages")
-          .select("direction,body,created_at")
-          .eq("conversation_id", conversation.id)
-          .not("body", "is", null)
-          .order("created_at", { ascending: false })
-          .limit(24);
-        const chronological = (recentForDrinkOffer ?? []).reverse();
-        let lastOfferIndex = -1;
-        for (let i = 0; i < chronological.length; i++) {
-          const m: any = chronological[i];
-          if (m.direction !== "out") continue;
-          const body = normalizeStreet(m.body ?? "");
-          if (/(algo pra beber|algo para beber|alguma bebida|gostaria de.*bebida|quer.*bebida|quer.*refrigerante)/.test(body)) {
-            lastOfferIndex = i;
-          }
-        }
-        const customerAnsweredOffer =
-          lastOfferIndex >= 0 && chronological.slice(lastOfferIndex + 1).some((m: any) => m.direction === "in");
+      if (draftHasDrink && draft.stage === "awaiting_beverage_response") {
+        draft.stage = "beverage_decided";
+        await supabaseAdmin
+          .from("order_drafts")
+          .update({ stage: "beverage_decided", updated_at: new Date().toISOString() })
+          .eq("conversation_id", conversation.id);
+      }
 
-        if (!customerAnsweredOffer) {
+      if (!draftHasDrink && drinks.length) {
+        if (draft.stage === "awaiting_beverage_response") {
+          if (ctx.flags) ctx.flags.silenced = true;
+          return {
+            result: {
+              status: "awaiting_beverage_response",
+              instruction: "A oferta de bebida já foi enviada. Aguarde a resposta do cliente; não envie resumo nem outra pergunta.",
+            },
+          };
+        }
+
+        if (draft.stage !== "beverage_decided") {
           const options = drinks
             .slice(0, 8)
             .map((p: any) => `${p.name} — ${brl(getEffectivePrice(p).price)}`)
@@ -4351,10 +4360,10 @@ async function executeTool(
         };
       }
       draft.awaiting_final_confirmation = true;
-      draft.stage = "collecting";
+      draft.stage = "beverage_decided";
       await supabaseAdmin
         .from("order_drafts")
-        .update({ stage: "collecting", awaiting_final_confirmation: true, updated_at: new Date().toISOString() })
+        .update({ stage: "beverage_decided", awaiting_final_confirmation: true, updated_at: new Date().toISOString() })
         .eq("conversation_id", conversation.id);
       await replyAndLog(
         supabaseAdmin,
@@ -5395,10 +5404,10 @@ async function runConversationalTurn(opts: {
     (opts.draft.stage === "awaiting_beverage_response" || isBeverageOfferMessage(previousAssistantText)) &&
     isBeverageDecline(lastUserText)
   ) {
-    opts.draft.stage = "collecting";
+    opts.draft.stage = "beverage_decided";
     await opts.supabaseAdmin
       .from("order_drafts")
-      .update({ stage: "collecting", updated_at: new Date().toISOString() })
+      .update({ stage: "beverage_decided", updated_at: new Date().toISOString() })
       .eq("conversation_id", opts.conversation.id);
     const directSummary = await executeTool("finalize_order", {}, {
       supabaseAdmin: opts.supabaseAdmin,
@@ -6679,19 +6688,22 @@ async function handleIncomingMessageUnlocked(
     await resetCurrentOrderKeepingValidatedNeighborhood(supabaseAdmin, conversation.id, draft, bairrosAtendidos);
   }
 
-  // ============ MEMÓRIA DETERMINÍSTICA DE ITENS/QUANTIDADE ============
-  // Reforça o order_drafts antes de chamar a IA. Ex.: "uma batata de brócolis"
-  // ou "apenas 1" após uma pergunta de quantidade não podem ser esquecidos.
-  try {
-    await persistObviousProductMemoryFromTurn(supabaseAdmin, conversation.id, text, history, draft);
-  } catch (err) {
-    console.warn("[ORDER_MEMORY] Falha ao persistir item/quantidade:", err);
-  }
+  // ============ MEMÓRIA DETERMINÍSTICA DE ITENS/QUANTIDADE/ADICIONAIS ============
+  // Primeiro trata adicionais direcionados (ex.: "cheddar na 2"). Só tenta
+  // reconhecer um produto-base se a mensagem não tiver alterado um adicional;
+  // assim "2" não vira quantidade e "cheddar" não substitui o pedido inteiro.
   let paidAddonChanged = false;
   try {
     paidAddonChanged = await persistPaidAddonMemoryFromTurn(supabaseAdmin, conversation.id, text, draft);
   } catch (err) {
     console.warn("[ORDER_MEMORY] Falha ao persistir adicional pago:", err);
+  }
+  if (!paidAddonChanged) {
+    try {
+      await persistObviousProductMemoryFromTurn(supabaseAdmin, conversation.id, text, history, draft);
+    } catch (err) {
+      console.warn("[ORDER_MEMORY] Falha ao persistir item/quantidade:", err);
+    }
   }
 
   // ============ PRÉ-CAPTURA DA COLETA AGRUPADA ============
@@ -6899,10 +6911,10 @@ async function handleIncomingMessageUnlocked(
   // mensagens no histórico. Assim que a bebida estiver no rascunho, o backend
   // gera o resumo completo sem depender de uma nova decisão da IA.
   if (draft.stage === "awaiting_beverage_response" && await draftHasActiveBeverage(supabaseAdmin, draft)) {
-    draft.stage = "collecting";
+    draft.stage = "beverage_decided";
     await supabaseAdmin
       .from("order_drafts")
-      .update({ stage: "collecting", updated_at: new Date().toISOString() })
+      .update({ stage: "beverage_decided", updated_at: new Date().toISOString() })
       .eq("conversation_id", conversation.id);
 
     const beverageFlowFlags: { silenced?: boolean; sendMenuImage?: boolean } = {};
