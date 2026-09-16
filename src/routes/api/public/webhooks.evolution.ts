@@ -3210,7 +3210,7 @@ function extractPlausibleCustomerName(text: string): string | null {
       .trim();
     if (!cleaned || cleaned.length < 2 || cleaned.length > 80 || /\d/.test(cleaned)) return null;
     const normalized = normalizeStreet(cleaned);
-    if (/\b(?:sim|nao|pix|cartao|credito|debito|dinheiro|entrega|retirada|endereco|rua|avenida|travessa|estrada|rodovia|alameda|praca|bairro|casa|apto|apartamento|bloco|lote|quadra|complemento|batata|costela|strogonoff|frango|pedido)\b/.test(normalized)) return null;
+    if (/\b(?:sim|nao|pix|cartao|credito|debito|dinheiro|entrega|retirada|endereco|rua|avenida|travessa|estrada|rodovia|alameda|praca|bairro|casa|apto|apartamento|bloco|lote|quadra|complemento|batata|costela|strogonoff|frango|pedido|adicional|adiciona|adicionar|acrescenta|acrescentar|coloca|colocar|bacon|cheddar|requeijao|mussarela|palha)\b/.test(normalized)) return null;
     const words = cleaned.split(/\s+/).filter(Boolean);
     if (!words.length || words.length > 6) return null;
     if (!words.every((w) => /^[A-Za-zÀ-ÖØ-öø-ÿ'’-]{2,}$/.test(w))) return null;
@@ -3256,6 +3256,10 @@ async function persistDeterministicCustomerNameFromTurn(
   draft: Draft,
 ): Promise<void> {
   if (draft.customer_name || !previousAssistantAskedCustomerName(history)) return;
+  // O cliente pode corrigir/complementar o pedido antes de responder nome e
+  // endereço. Verbos como "adiciona" e nomes de adicionais jamais são nome de
+  // pessoa, mesmo que a pergunta anterior tenha solicitado o destinatário.
+  if (hasPaidAddonIntent(text)) return;
   const customerName = extractPlausibleCustomerName(text);
   if (!customerName) return;
   const { error } = await supabaseAdmin
@@ -3703,6 +3707,12 @@ function extractNeighborhoodCandidate(
     if (best && best.score >= 0.86) return { value: best.value, source: "known" };
   }
   return null;
+}
+
+function explicitlyDeclaresNeighborhood(text: string): boolean {
+  const t = normalizeStreet(String(text ?? ""));
+  return /\b(?:bairro|meu bairro|moro|sou de|fica|estou)\b/.test(t) &&
+    !/\b(?:rua|avenida|av|travessa|estrada|rodovia|alameda|praca)\b/.test(t);
 }
 
 function pendingNeighborhoodConfirmationFromHistory(history: { role: string; content: string }[]): string | null {
@@ -6540,6 +6550,9 @@ async function handleIncomingMessageUnlocked(
   // ao pedido atual e não pode desaparecer só porque o cliente depois informou
   // apenas rua + número. Também não permitimos que um out_of_delivery_area antigo
   // contradiga um bairro que está ATIVO no painel.
+  const neighborhoodKnownAtTurnStart = Boolean(
+    draft.address_neighborhood && findConfiguredBairroMatch(draft.address_neighborhood, bairrosAtendidos),
+  );
   let canonicalServedNeighborhood = draft.address_neighborhood
     ? findConfiguredBairroMatch(draft.address_neighborhood, bairrosAtendidos)
     : null;
@@ -6589,7 +6602,14 @@ async function handleIncomingMessageUnlocked(
   // a tabela real `bairros_atendidos`. Se houver match ativo, a decisão termina
   // aqui: atendimento pelo WhatsApp. Nenhum histórico antigo, lista negativa,
   // cálculo por distância ou estado anterior do draft pode sobrescrever isso.
-  if (draft.delivery_mode !== "pickup") {
+  // Quando um bairro já foi validado, um endereço como "Av. Dr. Laureano, 30"
+  // não pode ser reinterpretado como troca para o bairro Dr. Laureano apenas
+  // porque a avenida contém o mesmo nome. Uma troca só é aceita quando o
+  // cliente declarar explicitamente que está corrigindo/informando o bairro.
+  if (
+    draft.delivery_mode !== "pickup" &&
+    (!neighborhoodKnownAtTurnStart || explicitlyDeclaresNeighborhood(text))
+  ) {
     const authoritativeActiveNeighborhood = await findActiveNeighborhoodAuthoritatively(supabaseAdmin, text);
     if (authoritativeActiveNeighborhood) {
       draft.delivery_mode = "delivery";
@@ -6623,7 +6643,11 @@ async function handleIncomingMessageUnlocked(
         normalizedInputNeighborhood === normalizedMatchedNeighborhood ||
         (similarity(normalizedInputNeighborhood, normalizedMatchedNeighborhood) >= 0.92 &&
           normalizedInputNeighborhood.length <= normalizedMatchedNeighborhood.length + 6);
-      await sendAutomaticMenuAfterNeighborhood(supabaseAdmin, conversation.id, phone, true);
+      // O cardápio automático pertence à primeira validação do bairro. Uma
+      // correção posterior não reinicia a apresentação nem reenvia a imagem.
+      if (!neighborhoodKnownAtTurnStart) {
+        await sendAutomaticMenuAfterNeighborhood(supabaseAdmin, conversation.id, phone, true);
+      }
       if (essentiallyOnlyNeighborhood) {
         return Response.json({ ok: true, action: "active_neighborhood_authoritative" });
       }
