@@ -244,6 +244,80 @@ async function getOrCreateConversation(supabaseAdmin: any, phone: string, pushNa
   return created;
 }
 
+
+const CONVERSATION_SESSION_TIMEOUT_MS = 3 * 60 * 60 * 1000;
+
+function freshDraftSessionPatch(now: string) {
+  return {
+    customer_name: null,
+    delivery_mode: null,
+    address_street: null,
+    address_number: null,
+    address_complement: null,
+    address_neighborhood: null,
+    address_city: null,
+    address_reference: null,
+    items: [],
+    payment_method: null,
+    card_type: null,
+    payment_timing: null,
+    change_for: null,
+    notes: null,
+    estimated_delivery_fee: null,
+    estimated_distance_km: null,
+    out_of_delivery_area: false,
+    awaiting_final_confirmation: false,
+    stage: "collecting",
+    updated_at: now,
+  };
+}
+
+async function startFreshSessionIfExpired(supabaseAdmin: any, conversation: any) {
+  const lastMessageAt = conversation?.last_message_at
+    ? new Date(conversation.last_message_at).getTime()
+    : null;
+  const expired =
+    lastMessageAt !== null &&
+    Number.isFinite(lastMessageAt) &&
+    Date.now() - lastMessageAt >= CONVERSATION_SESSION_TIMEOUT_MS;
+
+  if (!expired) return conversation;
+
+  const now = new Date().toISOString();
+  const { error: draftError } = await supabaseAdmin
+    .from("order_drafts")
+    .update(freshDraftSessionPatch(now))
+    .eq("conversation_id", conversation.id);
+  if (draftError) throw new Error(`Falha ao reiniciar rascunho da nova sessão: ${draftError.message}`);
+
+  const { error: conversationError } = await supabaseAdmin
+    .from("whatsapp_conversations")
+    .update({ bot_paused: false })
+    .eq("id", conversation.id);
+  if (conversationError) throw new Error(`Falha ao reiniciar atendimento automático: ${conversationError.message}`);
+
+  return {
+    ...conversation,
+    bot_paused: false,
+    last_message_at: now,
+    _started_new_session: true,
+  };
+}
+
+function messagesFromCurrentSession<T extends { created_at?: string | null }>(messages: T[]): T[] {
+  if (messages.length < 2) return messages;
+
+  let sessionStart = messages.length - 1;
+  for (let i = messages.length - 1; i > 0; i -= 1) {
+    const currentAt = messages[i]?.created_at ? new Date(messages[i].created_at as string).getTime() : NaN;
+    const previousAt = messages[i - 1]?.created_at ? new Date(messages[i - 1].created_at as string).getTime() : NaN;
+    if (!Number.isFinite(currentAt) || !Number.isFinite(previousAt)) continue;
+    if (currentAt - previousAt >= CONVERSATION_SESSION_TIMEOUT_MS) break;
+    sessionStart = i - 1;
+  }
+  return messages.slice(sessionStart);
+}
+
 async function logMessage(
   supabaseAdmin: any,
   conversationId: string,
@@ -725,14 +799,10 @@ type Draft = {
 // pedido abandonado), ele NÃO deve ser tratado como "já confirmado" numa
 // conversa nova — isso é o que causava a IA fechar pedido sozinha em cima de
 // dados velhos assim que o cliente mandava um simples "bom dia". Qualquer
-// rascunho com conteúdo e sem atividade há mais de 20min é limpo
-// automaticamente antes de uma nova sessão. Em delivery o cliente pode ficar
-// 30, 60 ou 90 minutos sem responder e continuar a mesma compra. A janela antiga
-// de 20 minutos apagava bairro, itens e outros dados no meio de uma venda real.
-// Mantemos a memória apenas durante uma janela operacional razoável de 90 minutos.
-// Depois disso, uma nova mensagem inicia uma coleta limpa. Fechamento/cancelamento
-// continuam limpando o rascunho imediatamente pelos fluxos próprios.
-const DRAFT_STALE_MS = 90 * 60 * 1000;
+// rascunho e contexto comercial ficam válidos somente dentro da mesma sessão.
+// Após 3 horas sem mensagem, o próximo contato começa limpo e não reutiliza
+// bairro, itens, endereço, pagamento, confirmação ou etapa do atendimento anterior.
+const DRAFT_STALE_MS = CONVERSATION_SESSION_TIMEOUT_MS;
 
 async function loadOrCreateDraft(supabaseAdmin: any, conversationId: string): Promise<Draft> {
   const { data, error: selectErr } = await supabaseAdmin
@@ -747,7 +817,7 @@ async function loadOrCreateDraft(supabaseAdmin: any, conversationId: string): Pr
       data.customer_name || data.address_street || data.payment_method || (data.items ?? []).length,
     );
     const ageMs = data.updated_at ? Date.now() - new Date(data.updated_at).getTime() : Infinity;
-    if (hasContent && ageMs > DRAFT_STALE_MS) {
+    if (ageMs >= DRAFT_STALE_MS) {
       const cleared = {
         customer_name: null,
         delivery_mode: null,
@@ -5758,7 +5828,8 @@ async function handleIncomingMessageUnlocked(
 
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-  const conversation = opts?.preloggedConversation ?? await getOrCreateConversation(supabaseAdmin, phone, pushName);
+  const storedConversation = opts?.preloggedConversation ?? await getOrCreateConversation(supabaseAdmin, phone, pushName);
+  const conversation = await startFreshSessionIfExpired(supabaseAdmin, storedConversation);
 
   // Interruptor global do atendimento automático (Configurações → WhatsApp).
   // Desligado, a IA não responde NENHUMA conversa — igual a "pausado" pra
@@ -6026,8 +6097,12 @@ async function handleIncomingMessageUnlocked(
   );
   const { catalogText, unavailableText, categoriesText } = await loadCatalogText(supabaseAdmin);
   const draft = await loadOrCreateDraft(supabaseAdmin, conversation.id);
-  const lastOrderText = await loadLastOrderText(supabaseAdmin, phone);
-  const lastAddressText = await loadLastAddressText(supabaseAdmin, phone);
+  const lastOrderText = conversation._started_new_session
+    ? null
+    : await loadLastOrderText(supabaseAdmin, phone);
+  const lastAddressText = conversation._started_new_session
+    ? null
+    : await loadLastAddressText(supabaseAdmin, phone);
 
   // carrega instruções ativas da IA — globais + as do dia de hoje (fuso Brasília)
   // resiliente: se a tabela ainda não existir no banco, ignora e continua
@@ -6188,10 +6263,13 @@ async function handleIncomingMessageUnlocked(
     })
     .reverse();
 
-  // Histórico completo serve apenas para saber se este telefone já teve contato
-  // e para suporte. O histórico comercial do PEDIDO ATUAL começa depois do
-  // último pedido WhatsApp realmente criado para este telefone.
-  const allHistory = filteredConversationMessages
+  // A IA só recebe as mensagens da sessão atual. Uma pausa de 3 horas separa
+  // definitivamente os atendimentos, embora o histórico visual permaneça salvo.
+  const sessionConversationMessages = messagesFromCurrentSession(filteredConversationMessages);
+
+  // O histórico comercial do PEDIDO ATUAL começa dentro da sessão vigente e
+  // depois do último pedido WhatsApp realmente criado para este telefone.
+  const allHistory = sessionConversationMessages
     .slice(-60)
     .map((m: any) => ({
       role: m.direction === "in" ? "user" : "assistant",
@@ -6211,12 +6289,12 @@ async function handleIncomingMessageUnlocked(
     .maybeSingle();
 
   const currentOrderMessages = lastWhatsappOrder?.created_at
-    ? filteredConversationMessages.filter(
+    ? sessionConversationMessages.filter(
         (m: any) =>
           !m.created_at ||
           new Date(m.created_at).getTime() > new Date(lastWhatsappOrder.created_at).getTime(),
       )
-    : filteredConversationMessages;
+    : sessionConversationMessages;
 
   const history = currentOrderMessages
     .slice(-40)
@@ -7146,7 +7224,7 @@ export async function handleIncomingMessage(
 
   if (isPlainText) {
     const pushName: string = data?.pushName ?? "";
-    const conversation = await getOrCreateConversation(supabaseAdmin, phone, pushName);
+    let conversation = await getOrCreateConversation(supabaseAdmin, phone, pushName);
     const externalId = data?.key?.id ?? null;
 
     // Deduplicação do webhook: se o provedor reenviar a mesma mensagem, ela não
@@ -7160,6 +7238,8 @@ export async function handleIncomingMessage(
         .maybeSingle();
       if (existing) return Response.json({ ok: true, action: "duplicate_message_ignored" });
     }
+
+    conversation = await startFreshSessionIfExpired(supabaseAdmin, conversation);
 
     await logMessage(supabaseAdmin, conversation.id, {
       direction: "in",
