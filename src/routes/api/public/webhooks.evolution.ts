@@ -1012,6 +1012,20 @@ async function resetCurrentOrderKeepingValidatedNeighborhood(
 
 function parseExplicitQuantityFromText(text: string): number | null {
   const t = normalizeStreet(text);
+  // "2 e 5", "itens 2 e 5" e "número 1" são referências ao
+  // CARDÁPIO, não quantidades. A quantidade só pode ser extraída de um
+  // número ligado ao produto ("2 pizzas", "3x costela") ou de uma palavra
+  // de quantidade. Sem isso, a regra segura é 1 unidade por item.
+  if (
+    /\b(?:numero|n[ºo]?|item|opcao)\s*\d{1,2}\b/.test(t) ||
+    /^(?:quero|queria|gostaria|vou pedir|me ve|manda)?\s*(?:os?\s*)?\d{1,2}\s*(?:,|e|\/|mais)\s*\d{1,2}(?:\s*(?:,|e|\/|mais)\s*\d{1,2})*\s*$/.test(t)
+  ) return null;
+
+  const boundToProduct = t.match(/\b(\d{1,2})\s*(?:x\b|unidades?\b|batatas?\b|pizzas?\b|costelas?\b|strogonoff\b|frango\b|produto\b|sabor\b)/);
+  if (boundToProduct) {
+    const n = Number(boundToProduct[1]);
+    if (n >= 1 && n <= 30) return n;
+  }
   const numeric = t.match(/(?:^|\s)(\d{1,2})(?:\s|$)/);
   if (numeric) {
     const n = Number(numeric[1]);
@@ -1432,11 +1446,41 @@ async function persistObviousProductMemoryFromTurn(
 
   const { data: products } = await supabaseAdmin
     .from("products")
-    .select("name,category")
+    .select("name,category,sort_order")
     .eq("active", true)
-    .order("category")
+    .order("sort_order")
     .order("name");
   if (!products?.length) return;
+
+  // Seleção direta da imagem do cardápio: "quero 2 e 5" = item 2 e item 5,
+  // uma unidade de cada. Não deixa a IA converter 2x e 5x por engano.
+  const menuOnlyText = normalizedTurn
+    .replace(/\b(?:quero|queria|gostaria|vou|pedir|os|as|itens?|numeros?|do|da|cardapio|menu|e|mais)\b/g, " ")
+    .replace(/[0-9,\s/+&-]/g, "")
+    .trim();
+  const menuNumbers = Array.from(normalizedTurn.matchAll(/\b\d{1,2}\b/g)).map((m) => Number(m[0]));
+  if (!menuOnlyText && menuNumbers.length >= 1 && menuNumbers.length <= 8) {
+    const selected = Array.from(new Set(menuNumbers))
+      .map((number) => products[number - 1])
+      .filter(Boolean);
+    if (selected.length === menuNumbers.length) {
+      const existing = Array.isArray(draft.items) ? [...draft.items] : [];
+      for (const product of selected) {
+        const canonicalName = String((product as any).name);
+        const index = existing.findIndex((item) => normalizeStreet(item.product_name) === normalizeStreet(canonicalName));
+        if (index >= 0) existing[index] = { ...existing[index], quantity: 1 };
+        else existing.push({ product_name: canonicalName, quantity: 1 });
+      }
+      draft.items = existing;
+      draft.awaiting_final_confirmation = false;
+      const { error } = await supabaseAdmin
+        .from("order_drafts")
+        .update({ items: existing, awaiting_final_confirmation: false, updated_at: new Date().toISOString() })
+        .eq("conversation_id", conversationId);
+      if (error) throw new Error(`Falha ao persistir itens do cardápio: ${error.message}`);
+      return;
+    }
+  }
 
   const candidatesFrom = (source: string) => {
     const menuNumber = normalizeStreet(source).match(/\b(?:numero|n[ºo]?|item|opcao|opcao do cardapio)\s*([0-9]{1,2})\b/);
@@ -6909,6 +6953,17 @@ async function handleIncomingMessageUnlocked(
 
       // Se ainda faltou algum dado, pede SOMENTE o que falta. O fallback conhece
       // tudo que já está persistido e jamais repete endereço/nome/pagamento já recebidos.
+      // A taxa é calculada após os itens terem sido gravados em turnos
+      // anteriores. Recarrega o rascunho antes de decidir a próxima pergunta:
+      // isso impede que uma cópia antiga em memória faça o atendimento voltar
+      // para "o que você quer pedir?" depois de já informar a taxa.
+      const { data: latestDraft } = await supabaseAdmin
+        .from("order_drafts")
+        .select("items,customer_name,delivery_mode,address_street,address_number,address_neighborhood,payment_method,estimated_delivery_fee,awaiting_final_confirmation")
+        .eq("conversation_id", conversation.id)
+        .maybeSingle();
+      if (latestDraft) Object.assign(draft, latestDraft);
+
       const nextStep = buildContinuityFallback(draft);
       if (!/taxa de entrega|s[oó] um instante/i.test(nextStep)) {
         await replyAndLog(
