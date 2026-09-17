@@ -1056,6 +1056,7 @@ function ConfigPage() {
           <b>cardápio digital</b>. Quando desativado, a página mostra um aviso pedindo pra chamar no WhatsApp.
         </p>
         <div className="space-y-4">
+          <div className="rounded-2xl border bg-muted/30 p-4"><div className="flex items-start justify-between gap-4"><div><p className="text-sm font-black">Localização aproximada para Analytics</p><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Exibe no cardápio um convite opcional para o visitante compartilhar a localização. O painel registra apenas o bairro estimado, nunca as coordenadas. Não altera taxa, área atendida ou o fluxo do pedido.</p></div><Switch checked={c.visitor_location_prompt_enabled === true} onCheckedChange={(v) => setC({ ...c, visitor_location_prompt_enabled: v })} /></div><p className="mt-2 text-[11px] font-semibold text-muted-foreground">{c.visitor_location_prompt_enabled === true ? "Ativo: o visitante pode permitir ou recusar." : "Desativado: nenhum pedido de localização será mostrado."}</p></div>
           <div>
             <Label>Pagamento online</Label>
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
