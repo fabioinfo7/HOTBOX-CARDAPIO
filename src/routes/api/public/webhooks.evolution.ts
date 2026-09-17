@@ -949,6 +949,63 @@ function buildContinuityFallback(draft: Draft): string {
 }
 
 /**
+ * Última rede de segurança para o fluxo após a taxa. A confirmação de itens
+ * pode ter sido enviada pela IA antes de uma chamada de ferramenta falhar ou
+ * chegar incompleta. Nesse caso não voltamos a perguntar o pedido ao cliente:
+ * recuperamos apenas itens que a própria atendente já confirmou no histórico
+ * (sempre no formato "1x Nome do produto").
+ */
+async function recoverConfirmedItemsFromConversation(
+  supabaseAdmin: any,
+  conversationId: string,
+  draft: Draft,
+): Promise<boolean> {
+  if (normalizeDraftItems(draft.items).length) return false;
+
+  const [{ data: messages }, { data: products }] = await Promise.all([
+    supabaseAdmin
+      .from("whatsapp_messages")
+      .select("direction,body,created_at")
+      .eq("conversation_id", conversationId)
+      .eq("direction", "out")
+      .not("body", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(30),
+    supabaseAdmin
+      .from("products")
+      .select("name")
+      .eq("active", true),
+  ]);
+
+  const recovered: DraftItem[] = [];
+  for (const message of messages ?? []) {
+    const body = normalizeStreet(String((message as any).body ?? ""));
+    if (!body || !/\b\d{1,2}\s*x\b/.test(body)) continue;
+    for (const product of products ?? []) {
+      const name = String((product as any).name ?? "").trim();
+      const normalizedName = normalizeStreet(name);
+      if (!normalizedName) continue;
+      const escapedName = normalizedName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const match = body.match(new RegExp(`\\b(\\d{1,2})\\s*x\\s*${escapedName}\\b`));
+      if (!match) continue;
+      if (!recovered.some((item) => normalizeStreet(item.product_name) === normalizedName)) {
+        recovered.push({ product_name: name, quantity: Math.max(1, Number(match[1]) || 1) });
+      }
+    }
+  }
+  if (!recovered.length) return false;
+
+  draft.items = recovered;
+  draft.awaiting_final_confirmation = false;
+  const { error } = await supabaseAdmin
+    .from("order_drafts")
+    .update({ items: recovered, awaiting_final_confirmation: false, updated_at: new Date().toISOString() })
+    .eq("conversation_id", conversationId);
+  if (error) throw new Error(`Falha ao recuperar itens já confirmados: ${error.message}`);
+  return true;
+}
+
+/**
  * O resumo só pode ser montado com estes dados. Centralizar a regra evita que
  * caminhos diferentes do webhook tratem um pedido completo como se ainda não
  * tivesse itens e voltem a perguntar produto/quantidade.
@@ -1455,7 +1512,7 @@ async function persistObviousProductMemoryFromTurn(
   // Seleção direta da imagem do cardápio: "quero 2 e 5" = item 2 e item 5,
   // uma unidade de cada. Não deixa a IA converter 2x e 5x por engano.
   const menuOnlyText = normalizedTurn
-    .replace(/\b(?:quero|queria|gostaria|vou|pedir|os|as|itens?|numeros?|do|da|cardapio|menu|e|mais)\b/g, " ")
+    .replace(/\b(?:quero|queria|gostaria|vou|pedir|o|a|os|as|itens?|numeros?|do|da|de|cardapio|menu|e|mais)\b/g, " ")
     .replace(/[0-9,\s/+&-]/g, "")
     .trim();
   const menuNumbers = Array.from(normalizedTurn.matchAll(/\b\d{1,2}\b/g)).map((m) => Number(m[0]));
@@ -6963,6 +7020,18 @@ async function handleIncomingMessageUnlocked(
         .eq("conversation_id", conversation.id)
         .maybeSingle();
       if (latestDraft) Object.assign(draft, latestDraft);
+
+      // Nunca volte para a pergunta de produtos depois de anunciar a taxa.
+      // Se uma confirmação anterior foi escrita no chat mas não chegou ao
+      // rascunho por uma chamada incompleta da IA, recuperamos esses itens e
+      // seguimos pedindo somente os dados que ainda faltam.
+      if (!normalizeDraftItems(draft.items).length) {
+        try {
+          await recoverConfirmedItemsFromConversation(supabaseAdmin, conversation.id, draft);
+        } catch (err) {
+          console.warn("[ORDER_MEMORY] Falha ao recuperar itens confirmados após frete:", err);
+        }
+      }
 
       const nextStep = buildContinuityFallback(draft);
       if (!/taxa de entrega|s[oó] um instante/i.test(nextStep)) {
