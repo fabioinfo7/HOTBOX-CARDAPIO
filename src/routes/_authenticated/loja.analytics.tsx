@@ -395,6 +395,7 @@ function AnalyticsPage() {
   const [journeyOriginFilter, setJourneyOriginFilter] = useState("all");
   const [journeyCampaignFilter, setJourneyCampaignFilter] = useState("all");
   const [journeySituationFilter, setJourneySituationFilter] = useState("all");
+  const [journeyNeighborhoodFilter, setJourneyNeighborhoodFilter] = useState("all");
 
   async function loadLive() {
     const cutoff = new Date(Date.now() - 45 * 1000).toISOString();
@@ -474,7 +475,7 @@ function AnalyticsPage() {
 
   useEffect(() => {
     setJourneyPage(1);
-  }, [search, days, journeyOriginFilter, journeyCampaignFilter, journeySituationFilter]);
+  }, [search, days, journeyOriginFilter, journeyCampaignFilter, journeySituationFilter, journeyNeighborhoodFilter]);
 
   const eventSet = useMemo(() => {
     const by = new Map<string, Set<string>>();
@@ -937,16 +938,18 @@ function AnalyticsPage() {
 
   const originOptions = useMemo(() => Array.from(new Set(sessions.map((s) => trafficChannel(s)))).sort(), [sessions]);
   const campaignOptions = useMemo(() => Array.from(new Set(sessions.map((s) => String(s.campaign || "").trim()).filter(Boolean))).sort(), [sessions]);
+  const neighborhoodOptions = useMemo(() => Array.from(new Set(sessions.map((s) => String(s.visitor_neighborhood || "").trim()).filter(Boolean))).sort(), [sessions]);
 
   const filteredJourney = sessions.filter((s) => {
     const q = search.trim().toLowerCase();
     const matchesSearch = !q || [
-      s.customer_name, s.customer_phone, s.source, s.medium, s.campaign, s.order_id, s.checkout_id, s.visitor_id,
+      s.customer_name, s.customer_phone, s.source, s.medium, s.campaign, s.order_id, s.checkout_id, s.visitor_id, s.visitor_neighborhood,
     ].some((v) => String(v || "").toLowerCase().includes(q));
     const matchesOrigin = journeyOriginFilter === "all" || trafficChannel(s) === journeyOriginFilter;
     const matchesCampaign = journeyCampaignFilter === "all" || String(s.campaign || "") === journeyCampaignFilter;
     const matchesSituation = journeySituationFilter === "all" || journeyStage(s) === journeySituationFilter;
-    return matchesSearch && matchesOrigin && matchesCampaign && matchesSituation;
+    const matchesNeighborhood = journeyNeighborhoodFilter === "all" || String(s.visitor_neighborhood || "") === journeyNeighborhoodFilter;
+    return matchesSearch && matchesOrigin && matchesCampaign && matchesSituation && matchesNeighborhood;
   });
 
   const journeyTotalPages = Math.max(
@@ -1639,8 +1642,8 @@ function AnalyticsPage() {
           {activeTab === "journey" && (
             <div className="space-y-4">
               <Card className="hotbox-admin-card p-5">
-                <div className="flex flex-wrap items-start gap-3"><div><h2 className="text-lg font-black">Histórico de visitantes</h2><p className="mt-1 text-sm text-muted-foreground">Cada sessão mostra a jornada real: entrada no cardápio, produto, sacola, verificação de entrega, área fora, plataforma parceira, checkout, pagamento e compra.</p></div><div className="ml-auto w-full max-w-sm"><Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar nome, telefone, campanha ou pedido..." /></div></div>
-                <div className="mt-4 flex flex-wrap gap-2"><select className="h-9 rounded-lg border bg-white px-3 text-sm" value={journeyOriginFilter} onChange={(e) => setJourneyOriginFilter(e.target.value)}><option value="all">Todas as origens</option>{originOptions.map((o) => <option key={o} value={o}>{o}</option>)}</select><select className="h-9 rounded-lg border bg-white px-3 text-sm" value={journeyCampaignFilter} onChange={(e) => setJourneyCampaignFilter(e.target.value)}><option value="all">Todas as campanhas</option>{campaignOptions.map((c) => <option key={c} value={c}>{niceCampaign(c)}</option>)}</select><select className="h-9 rounded-lg border bg-white px-3 text-sm" value={journeySituationFilter} onChange={(e) => setJourneySituationFilter(e.target.value)}><option value="all">Todas as situações</option><option>Entrou no cardápio</option><option>Viu produto</option><option>Adicionou à sacola</option><option>Verificando entrega</option><option>Abandonou na verificação da entrega</option><option>Entrega confirmada</option><option>Fora da área própria</option><option>Foi para plataforma parceira</option><option>Iniciou checkout</option><option>Abandonou checkout</option><option>Cartão não aprovado</option><option>Comprou</option></select></div>
+                <div className="flex flex-wrap items-start gap-3"><div><h2 className="text-lg font-black">Histórico de visitantes</h2><p className="mt-1 text-sm text-muted-foreground">Cada sessão mostra a jornada real: entrada no cardápio, produto, sacola, verificação de entrega, área fora, plataforma parceira, checkout, pagamento e compra.</p></div><div className="ml-auto w-full max-w-sm"><Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar nome, telefone, bairro, campanha ou pedido..." /></div></div>
+                <div className="mt-4 flex flex-wrap gap-2"><select className="h-9 rounded-lg border bg-white px-3 text-sm" value={journeyOriginFilter} onChange={(e) => setJourneyOriginFilter(e.target.value)}><option value="all">Todas as origens</option>{originOptions.map((o) => <option key={o} value={o}>{o}</option>)}</select><select className="h-9 rounded-lg border bg-white px-3 text-sm" value={journeyCampaignFilter} onChange={(e) => setJourneyCampaignFilter(e.target.value)}><option value="all">Todas as campanhas</option>{campaignOptions.map((c) => <option key={c} value={c}>{niceCampaign(c)}</option>)}</select><select className="h-9 rounded-lg border bg-white px-3 text-sm" value={journeyNeighborhoodFilter} onChange={(e) => setJourneyNeighborhoodFilter(e.target.value)}><option value="all">Todos os bairros</option>{neighborhoodOptions.map((n) => <option key={n} value={n}>{n}</option>)}</select><select className="h-9 rounded-lg border bg-white px-3 text-sm" value={journeySituationFilter} onChange={(e) => setJourneySituationFilter(e.target.value)}><option value="all">Todas as situações</option><option>Entrou no cardápio</option><option>Viu produto</option><option>Adicionou à sacola</option><option>Verificando entrega</option><option>Abandonou na verificação da entrega</option><option>Entrega confirmada</option><option>Fora da área própria</option><option>Foi para plataforma parceira</option><option>Iniciou checkout</option><option>Abandonou checkout</option><option>Cartão não aprovado</option><option>Comprou</option></select></div>
                 <div className="mt-4 overflow-x-auto rounded-2xl border">
                   <table className="w-full text-sm">
                     <thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500">
@@ -1649,6 +1652,7 @@ function AnalyticsPage() {
                         <th className="p-3">Visitante</th>
                         <th className="p-3">Telefone</th>
                         <th className="p-3">Origem</th>
+                        <th className="p-3">Bairro estimado</th>
                         <th className="p-3">Campanha</th>
                         <th className="p-3">Situação</th>
                         <th className="p-3 text-right">Recuperação</th>
@@ -1676,6 +1680,7 @@ function AnalyticsPage() {
                               <div className="font-bold">{trafficChannel(s)}</div>
                               <div className="text-xs text-zinc-500">{niceMedium(s.medium)}</div>
                             </td>
+                            <td className="p-3">{s.visitor_neighborhood ? <><div className="font-semibold">{s.visitor_neighborhood}</div><div className="text-xs text-zinc-500">Com permissão</div></> : <span className="text-zinc-400">Não informado</span>}</td>
                             <td className="p-3">{s.campaign ? niceCampaign(s.campaign) : "—"}</td>
                             <td className="p-3">
                               {journeyStage(s) === "Comprou" ? <Badge className="bg-emerald-600">Comprou</Badge> :
@@ -1702,7 +1707,7 @@ function AnalyticsPage() {
                           </tr>
                         );
                       }) : (
-                        <tr><td colSpan={7} className="p-8 text-center text-zinc-500">Nenhum visitante encontrado.</td></tr>
+                        <tr><td colSpan={8} className="p-8 text-center text-zinc-500">Nenhum visitante encontrado.</td></tr>
                       )}
                     </tbody>
                   </table>

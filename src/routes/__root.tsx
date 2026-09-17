@@ -11,6 +11,7 @@ import {
 import { useEffect, type ReactNode } from "react";
 import { Toaster } from "sonner";
 import { AnalyticsTracker } from "@/components/analytics-tracker";
+import { VisitorLocationPrompt } from "@/components/visitor-location-prompt";
 import appCss from "../styles.css?url";
 
 function reportAppError(error: unknown, context: Record<string, unknown> = {}) {
@@ -133,6 +134,7 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       <AnalyticsTracker />
+      <VisitorLocationPrompt />
       <Outlet />
       <Toaster position="top-right" richColors closeButton />
     </QueryClientProvider>
