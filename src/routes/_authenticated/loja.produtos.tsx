@@ -445,6 +445,8 @@ function ProductForm({ value, onClose }: { value: any; onClose: () => void }) {
       name: f.name,
       description: f.description,
       customer_ingredients: (f.customer_ingredients || "").trim() || null,
+      menu_number: f.menu_number === "" || f.menu_number == null ? null : Number(f.menu_number),
+      ai_information: (f.ai_information || "").trim() || null,
       category: f.category,
       kind: f.kind,
       sale_price: Number(f.sale_price),
@@ -464,6 +466,8 @@ function ProductForm({ value, onClose }: { value: any; onClose: () => void }) {
       promotion_label: f.promotion_active ? f.promotion_label || null : null,
     };
     if (!payload.name) return toast.error("Informe o nome do produto");
+    if (payload.menu_number != null && (!Number.isInteger(payload.menu_number) || payload.menu_number < 1))
+      return toast.error("O número do item deve ser um número inteiro maior que zero");
     if (payload.promotion_active && (!payload.promotion_price || payload.promotion_price <= 0))
       return toast.error("Informe o preço promocional");
     if (payload.promotion_active && Number(payload.promotion_price ?? 0) >= Number(payload.sale_price))
@@ -527,6 +531,39 @@ function ProductForm({ value, onClose }: { value: any; onClose: () => void }) {
           <div>
             <Label>Nome</Label>
             <Input value={f.name || ""} onChange={(e) => setF({ ...f, name: e.target.value })} />
+          </div>
+          <div className="rounded-xl border border-sky-200 bg-sky-50/70 p-4">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <Label className="text-base font-bold text-sky-900">Informações internas para a atendente IA</Label>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Não aparece no cardápio público. Use o número para pedidos como “quero o 5” e acrescente detalhes úteis para a IA responder dúvidas.
+                </p>
+              </div>
+              <span className="rounded-full bg-sky-700 px-2.5 py-1 text-[10px] font-bold text-white">SOMENTE IA</span>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-[130px_1fr]">
+              <div>
+                <Label>Número do item</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={f.menu_number ?? ""}
+                  onChange={(e) => setF({ ...f, menu_number: e.target.value })}
+                  placeholder="Ex.: 5"
+                />
+              </div>
+              <div>
+                <Label>Informações para a IA</Label>
+                <Textarea
+                  rows={3}
+                  value={f.ai_information || ""}
+                  onChange={(e) => setF({ ...f, ai_information: e.target.value })}
+                  placeholder="Ex.: Pode ser chamada de batata de pizza. Ingredientes, observações e respostas úteis para atendimento."
+                />
+              </div>
+            </div>
           </div>
           <div className="rounded-xl border-2 border-primary/60 bg-primary/5 p-4 shadow-sm">
             <div className="mb-3 flex items-start justify-between gap-3">

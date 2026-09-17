@@ -603,12 +603,29 @@ async function handleReceiptImage(
 async function loadCatalogText(
   supabaseAdmin: any,
 ): Promise<{ catalogText: string; unavailableText: string; categoriesText: string }> {
-  const { data: products } = await supabaseAdmin
+  const selectWithAiFields = "id,name,description,customer_ingredients,menu_number,ai_information,category,sale_price,promotion_active,promotion_price,promotion_type,promotion_start_at,promotion_end_at,promotion_days_of_week,promotion_time_start,promotion_time_end,promotion_label";
+  const selectWithoutAiFields = "id,name,description,customer_ingredients,category,sale_price,promotion_active,promotion_price,promotion_type,promotion_start_at,promotion_end_at,promotion_days_of_week,promotion_time_start,promotion_time_end,promotion_label";
+  let { data: products, error: catalogError } = await supabaseAdmin
     .from("products")
-    .select("id,name,description,customer_ingredients,category,sale_price,promotion_active,promotion_price,promotion_type,promotion_start_at,promotion_end_at,promotion_days_of_week,promotion_time_start,promotion_time_end,promotion_label")
+    .select(selectWithAiFields)
     .eq("active", true)
     .order("category")
     .order("name");
+
+  // A aplicação continua atendendo normalmente enquanto a migration estiver
+  // aguardando execução no banco. Assim que as colunas internas existirem,
+  // a consulta acima passa a trazer número e informações da IA automaticamente.
+  if (catalogError && /menu_number|ai_information/i.test(String(catalogError.message ?? ""))) {
+    const fallback = await supabaseAdmin
+      .from("products")
+      .select(selectWithoutAiFields)
+      .eq("active", true)
+      .order("category")
+      .order("name");
+    products = fallback.data;
+    catalogError = fallback.error;
+  }
+  if (catalogError) throw new Error(`Falha ao carregar cardápio para atendimento: ${catalogError.message}`);
 
   const { data: outIngredients } = await supabaseAdmin
     .from("ingredients")
@@ -751,7 +768,12 @@ async function loadCatalogText(
                   .map((addon) => `${addon.name} (+R$ ${addon.price.toFixed(2).replace(".", ",")})`)
                   .join(", ")}`
               : "";
-            return `- ${p.name}${p.description ? " — " + p.description : ""} — R$ ${effective.price.toFixed(2).replace(".", ",")}${promo}${composition}${addonText}`;
+            const menuNumber = Number.isInteger(Number(p.menu_number)) && Number(p.menu_number) > 0
+              ? `Nº ${Number(p.menu_number)} — `
+              : "";
+            const aiInformation = String(p.ai_information || "").trim();
+            const aiText = aiInformation ? ` | Informações internas para atendimento: ${aiInformation}` : "";
+            return `- ${menuNumber}${p.name}${p.description ? " — " + p.description : ""} — R$ ${effective.price.toFixed(2).replace(".", ",")}${promo}${composition}${addonText}${aiText}`;
           })
           .join("\n");
         return `[${cat}]\n${items}`;
@@ -1501,26 +1523,43 @@ async function persistObviousProductMemoryFromTurn(
   const previousAssistant = [...history].reverse().find((m) => m.role === "assistant")?.content ?? "";
   const previousAskedQuantity = /quantidade|quantas|quantos/.test(normalizeStreet(previousAssistant));
 
-  const { data: products } = await supabaseAdmin
+  let { data: products, error: productsError } = await supabaseAdmin
     .from("products")
-    .select("name,category,sort_order")
+    .select("name,category,sort_order,menu_number")
     .eq("active", true)
     .order("sort_order")
     .order("name");
+  // Compatibilidade durante a aplicação da migration: não interrompe a
+  // captura normal de produtos caso a coluna interna ainda não exista.
+  if (productsError && /menu_number/i.test(String(productsError.message ?? ""))) {
+    const fallback = await supabaseAdmin
+      .from("products")
+      .select("name,category,sort_order")
+      .eq("active", true)
+      .order("sort_order")
+      .order("name");
+    products = fallback.data;
+    productsError = fallback.error;
+  }
+  if (productsError) throw new Error(`Falha ao consultar produtos ativos: ${productsError.message}`);
   if (!products?.length) return;
 
-  // Seleção direta da imagem do cardápio: "quero 2 e 5" = item 2 e item 5,
-  // uma unidade de cada. Não deixa a IA converter 2x e 5x por engano.
+  // Seleção direta da imagem do cardápio: "quero 2 e 5" = os produtos
+  // cadastrados como números 2 e 5, uma unidade de cada. Nunca use a posição
+  // da lista para isso: o número é um dado interno, definido no cadastro.
+  const findByMenuNumber = (number: number) =>
+    products.find((product: any) => Number(product.menu_number) === number);
   const menuOnlyText = normalizedTurn
-    .replace(/\b(?:quero|queria|gostaria|vou|pedir|o|a|os|as|itens?|numeros?|do|da|de|cardapio|menu|e|mais)\b/g, " ")
+    .replace(/\b(?:eu|quero|queria|gostaria|vou|pedir|manda|me ve|o|a|os|as|itens?|numeros?|do|da|de|cardapio|menu|e|mais)\b/g, " ")
     .replace(/[0-9,\s/+&-]/g, "")
     .trim();
   const menuNumbers = Array.from(normalizedTurn.matchAll(/\b\d{1,2}\b/g)).map((m) => Number(m[0]));
   if (!menuOnlyText && menuNumbers.length >= 1 && menuNumbers.length <= 8) {
-    const selected = Array.from(new Set(menuNumbers))
-      .map((number) => products[number - 1])
+    const uniqueNumbers = Array.from(new Set(menuNumbers));
+    const selected = uniqueNumbers
+      .map(findByMenuNumber)
       .filter(Boolean);
-    if (selected.length === menuNumbers.length) {
+    if (selected.length === uniqueNumbers.length) {
       const existing = Array.isArray(draft.items) ? [...draft.items] : [];
       for (const product of selected) {
         const canonicalName = String((product as any).name);
@@ -1542,8 +1581,8 @@ async function persistObviousProductMemoryFromTurn(
   const candidatesFrom = (source: string) => {
     const menuNumber = normalizeStreet(source).match(/\b(?:numero|n[ºo]?|item|opcao|opcao do cardapio)\s*([0-9]{1,2})\b/);
     if (menuNumber) {
-      const index = Number(menuNumber[1]) - 1;
-      if (index >= 0 && index < products.length) return [products[index]];
+      const selected = findByMenuNumber(Number(menuNumber[1]));
+      if (selected) return [selected];
     }
     const userTokens = new Set(normalizeStreet(source).split(/\s+/).filter((x) => x.length >= 3));
     return (products ?? []).filter((p: any) => {
