@@ -948,6 +948,24 @@ function buildContinuityFallback(draft: Draft): string {
   return `${namePrefix}perfeito. Vou preparar o resumo do pedido para sua confirmação.`;
 }
 
+/**
+ * O resumo só pode ser montado com estes dados. Centralizar a regra evita que
+ * caminhos diferentes do webhook tratem um pedido completo como se ainda não
+ * tivesse itens e voltem a perguntar produto/quantidade.
+ */
+function isDraftReadyForClosingFlow(draft: Draft): boolean {
+  const hasItemsWithQuantity = (draft.items ?? []).length > 0 &&
+    (draft.items ?? []).every((item: any) => Number(item?.quantity || 0) >= 1);
+  if (!hasItemsWithQuantity || !draft.customer_name || !draft.delivery_mode || !draft.payment_method) return false;
+  if (draft.delivery_mode === "pickup") return true;
+  return Boolean(
+    draft.address_street &&
+    draft.address_number &&
+    draft.address_neighborhood &&
+    draft.estimated_delivery_fee != null,
+  );
+}
+
 /** Última barreira contra loops: dado já persistido não pode ser perguntado de novo. */
 function enforceNoRepeatedKnownQuestion(text: string, draft: Draft): string {
   if (!text) return text;
@@ -5645,6 +5663,40 @@ async function runConversationalTurn(opts: {
       role: "system",
       content: `[tentativa direta de finalizar após confirmação] ${JSON.stringify(direct.result)}`,
     });
+  }
+
+  // PORTÃO FINAL DE CONTINUIDADE: com carrinho, endereço/taxa (quando entrega),
+  // nome e pagamento já salvos, a IA não pode decidir perguntar novamente o que
+  // o cliente quer pedir ou a quantidade. O backend conduz obrigatoriamente a
+  // próxima etapa: oferta de bebida pendente ou resumo oficial.
+  if (
+    !opts.forceNoTools &&
+    isDraftReadyForClosingFlow(opts.draft) &&
+    !opts.draft.awaiting_final_confirmation &&
+    opts.draft.stage !== "awaiting_beverage_response"
+  ) {
+    const closingFlow = await executeTool("finalize_order", {}, {
+      supabaseAdmin: opts.supabaseAdmin,
+      conversation: opts.conversation,
+      draft: opts.draft,
+      flags,
+      finalConfirmationAllowed: false,
+      bairrosAtendidos: opts.bairrosAtendidos,
+      bairrosNaoAtendidos: opts.bairrosNaoAtendidos,
+      ruasNaoAtendidas: opts.ruasNaoAtendidas,
+      currentUserText: lastUserText,
+    });
+    const closingStatus = String(closingFlow.result?.status ?? "");
+    if (flags.silenced || ["beverage_offer_sent", "final_confirmation_summary_sent", "awaiting_final_confirmation"].includes(closingStatus)) {
+      return {
+        silenced: true,
+        finalText: "",
+        pixBlock: closingFlow.pixBlock ?? null,
+        pixKeyLabel: closingFlow.pixKeyLabel ?? null,
+        pixKeyMessage: closingFlow.pixKeyMessage ?? null,
+        sendMenuImage: flags.sendMenuImage ?? false,
+      };
+    }
   }
 
   for (let round = 0; round < 6; round++) {
