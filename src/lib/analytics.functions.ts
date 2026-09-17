@@ -39,6 +39,101 @@ function trim(v: unknown, max = 500) {
   return String(v ?? "").trim().slice(0, max) || null;
 }
 
+export const getVisitorLocationPromptSettings = createServerFn({ method: "GET" })
+  .handler(async () => {
+    try {
+      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+      const { data } = await (supabaseAdmin as any)
+        .from("store_config")
+        .select("visitor_location_prompt_enabled")
+        .eq("id", 1)
+        .maybeSingle();
+
+      return { ok: true, enabled: data?.visitor_location_prompt_enabled === true } as const;
+    } catch {
+      // A falha de Analytics nunca pode interferir na navegação do visitante.
+      return { ok: false, enabled: false } as const;
+    }
+  });
+
+export const captureVisitorNeighborhood = createServerFn({ method: "POST" })
+  .inputValidator((data: {
+    session_id: string;
+    visitor_id: string;
+    latitude: number;
+    longitude: number;
+    accuracy_m?: number | null;
+  }) => data)
+  .handler(async ({ data }) => {
+    try {
+      const sessionId = trim(data.session_id, 100);
+      const visitorId = trim(data.visitor_id, 100);
+      const latitude = finiteNumber(data.latitude);
+      const longitude = finiteNumber(data.longitude);
+      const accuracy = finiteNumber(data.accuracy_m);
+      if (!sessionId || !visitorId || latitude == null || longitude == null || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+        return { ok: false, error: "Localização inválida." } as const;
+      }
+
+      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+      const { data: config } = await (supabaseAdmin as any)
+        .from("store_config")
+        .select("visitor_location_prompt_enabled,google_maps_api_key")
+        .eq("id", 1)
+        .maybeSingle();
+
+      if (config?.visitor_location_prompt_enabled !== true) {
+        return { ok: false, disabled: true } as const;
+      }
+
+      const key = String(config?.google_maps_api_key || "").trim();
+      if (!key) return { ok: false, error: "Geocodificação não configurada." } as const;
+
+      // Nunca persistimos latitude/longitude: somente o bairro aproximado,
+      // obtido após consentimento explícito do visitante.
+      const { reverseGeocodeBairroGoogle } = await import("@/lib/delivery-distance.server");
+      const neighborhood = await reverseGeocodeBairroGoogle(latitude, longitude, key);
+      if (!neighborhood) return { ok: false, error: "Bairro não identificado." } as const;
+
+      const now = new Date().toISOString();
+      const { data: session } = await (supabaseAdmin as any)
+        .from("analytics_sessions")
+        .select("id")
+        .eq("id", sessionId)
+        .eq("visitor_id", visitorId)
+        .maybeSingle();
+      if (!session) return { ok: false, error: "Sessão não encontrada." } as const;
+
+      const { error: updateError } = await (supabaseAdmin as any)
+        .from("analytics_sessions")
+        .update({
+          visitor_neighborhood: trim(neighborhood, 160),
+          visitor_location_source: "device",
+          visitor_location_accuracy_m: accuracy == null ? null : Math.round(Math.max(0, accuracy)),
+          visitor_location_captured_at: now,
+        })
+        .eq("id", sessionId)
+        .eq("visitor_id", visitorId);
+      if (updateError) return { ok: false, error: updateError.message } as const;
+
+      await (supabaseAdmin as any).from("analytics_events").insert({
+        session_id: sessionId,
+        visitor_id: visitorId,
+        event_name: "visitor_location_captured",
+        event_category: "location",
+        properties: {
+          neighborhood: trim(neighborhood, 160),
+          source: "device",
+          accuracy_m: accuracy == null ? null : Math.round(Math.max(0, accuracy)),
+        },
+      });
+
+      return { ok: true, neighborhood: trim(neighborhood, 160) } as const;
+    } catch (error: any) {
+      return { ok: false, error: error?.message || "Não foi possível identificar o bairro." } as const;
+    }
+  });
+
 
 function finiteNumber(value: unknown): number | null {
   const n = Number(value);
