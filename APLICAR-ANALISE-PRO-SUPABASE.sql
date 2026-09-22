@@ -215,7 +215,7 @@ end;
 $$;
 
 revoke all on function public.analytics_pro_collect(text,text,text,text,text,text,text,jsonb,jsonb,jsonb,timestamptz) from public;
-grant execute on function public.analytics_pro_collect(text,text,text,text,text,text,text,jsonb,jsonb,jsonb,timestamptz) to anon, authenticated, service_role;
+grant execute on function public.analytics_pro_collect(text,text,text,text,text,text,text,jsonb,jsonb,jsonb,timestamptz) to authenticated, service_role;
 
 comment on table public.analytics_pro_sites is 'Análise Pro: páginas de vendas monitoradas.';
 comment on table public.analytics_pro_sessions is 'Análise Pro: sessões agregadas por visitante/página.';
