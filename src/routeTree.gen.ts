@@ -337,14 +337,7 @@ const PoliticaDePrivacidadeRoute = PoliticaDePrivacidadeRouteImport.update({
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-      '/_authenticated/analise': {
-      id: '/_authenticated/analise'
-      path: '/analise'
-      fullPath: '/analise'
-      preLoaderRoute: typeof AuthenticatedAnaliseRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
-  '/_authenticated/entregador': {
+    '/_authenticated/entregador': {
       id: '/_authenticated/entregador'
       path: '/entregador'
       fullPath: '/entregador'
@@ -517,13 +510,6 @@ declare module '@tanstack/react-router' {
       path: '/admin/login'
       fullPath: '/admin/login'
       preLoaderRoute: typeof AdminLoginRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/public/analise/collect': {
-      id: '/api/public/analise/collect'
-      path: '/api/public/analise/collect'
-      fullPath: '/api/public/analise/collect'
-      preLoaderRoute: typeof ApiPublicAnaliseCollectRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/public/hooks/satisfaction-auto': {
@@ -751,7 +737,6 @@ const AuthenticatedLojaRouteChildren = {
 const AuthenticatedLojaRouteWithChildren = AuthenticatedLojaRoute._addFileChildren(AuthenticatedLojaRouteChildren)
 
 const AuthenticatedRouteRouteChildren = {
-  AuthenticatedAnaliseRoute: AuthenticatedAnaliseRoute,
   AuthenticatedEntregadorRoute: AuthenticatedEntregadorRoute,
   AuthenticatedLojaRoute: AuthenticatedLojaRouteWithChildren,
 }
