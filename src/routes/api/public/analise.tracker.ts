@@ -31,7 +31,7 @@ function send(name,data){
  var payload={site_key:S,session_id:Q,visitor_id:V,event_name:name,page_url:location.href,page_path:location.pathname,page_title:d.title,event_data:data,utm:qs(),device:device()};
  var body=JSON.stringify(payload);
  try{
-  if(navigator.sendBeacon){navigator.sendBeacon(E,new Blob([body],{type:"application/json"}));return;}
+  if(navigator.sendBeacon&&navigator.sendBeacon(E,new Blob([body],{type:"application/json"})))return;
  }catch(_){}
  fetch(E,{method:"POST",headers:{"content-type":"application/json"},body:body,keepalive:true}).catch(function(){});
 }
