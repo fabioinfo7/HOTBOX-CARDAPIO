@@ -39,10 +39,11 @@ export const Route = createFileRoute("/api/public/analise/collect")({
         const headers = corsHeaders(origin);
 
         try {
-          const length = Number(request.headers.get("content-length") || 0);
-          if (length > MAX_BODY_BYTES) return Response.json({ ok: false, error: "payload_too_large" }, { status: 413, headers });
-
-          const body = await request.json();
+          const declaredLength = Number(request.headers.get("content-length") || 0);
+          if (declaredLength > MAX_BODY_BYTES) return Response.json({ ok: false, error: "payload_too_large" }, { status: 413, headers });
+          const raw = await request.text();
+          if (raw.length > MAX_BODY_BYTES) return Response.json({ ok: false, error: "payload_too_large" }, { status: 413, headers });
+          const body = JSON.parse(raw);
           const siteKey = safeString(body?.site_key, 160);
           const sessionId = safeString(body?.session_id, 160);
           const visitorId = safeString(body?.visitor_id, 160);
