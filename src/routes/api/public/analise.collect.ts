@@ -1,14 +1,15 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-const ALLOWED_ORIGINS = ["*"];
 const MAX_BODY_BYTES = 48_000;
+const MAX_EVENT_NAME = 80;
+const ALLOWED_EVENTS = new Set(["page_view","scroll_depth","click","outbound_click","form_start","heartbeat","page_exit","purchase","conversion","lead"]);
 
 function corsHeaders(origin: string | null) {
-  const allowOrigin = ALLOWED_ORIGINS.includes("*") ? "*" : origin || "*";
+  const allowOrigin = origin || "*";
   return {
     "Access-Control-Allow-Origin": allowOrigin,
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "content-type, x-analise-site-key",
+    "Access-Control-Allow-Headers": "content-type",
     "Access-Control-Max-Age": "86400",
     Vary: "Origin",
   };
@@ -45,7 +46,8 @@ export const Route = createFileRoute("/api/public/analise/collect")({
           const siteKey = safeString(body?.site_key, 160);
           const sessionId = safeString(body?.session_id, 160);
           const visitorId = safeString(body?.visitor_id, 160);
-          const eventName = safeString(body?.event_name, 80) || "unknown";
+          const eventName = safeString(body?.event_name, MAX_EVENT_NAME) || "unknown";
+          if (!ALLOWED_EVENTS.has(eventName)) return Response.json({ ok: false, error: "event_not_allowed" }, { status: 422, headers });
           const pageUrl = safeString(body?.page_url, 4000);
           const pagePath = safeString(body?.page_path, 2000);
           const pageTitle = safeString(body?.page_title, 500);
@@ -58,6 +60,15 @@ export const Route = createFileRoute("/api/public/analise/collect")({
           }
 
           const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+          const { data: site, error: siteError } = await supabaseAdmin.from("analytics_pro_sites").select("id,domain,active").eq("site_key", siteKey).maybeSingle();
+          if (siteError || !site?.active) return Response.json({ ok: false, error: "invalid_site" }, { status: 404, headers });
+          if (site.domain && origin) {
+            const configured = site.domain.replace(/^https?:\\/\\//i, "").split("/")[0].replace(/\\/$/, "").toLowerCase();
+            let requestHost = "";
+            try { requestHost = new URL(origin).host.toLowerCase(); } catch { return Response.json({ ok: false, error: "invalid_origin" }, { status: 403, headers }); }
+            if (configured && configured !== requestHost && !configured.startsWith("*.") ) return Response.json({ ok: false, error: "origin_not_allowed" }, { status: 403, headers });
+            if (configured.startsWith("*.") && !requestHost.endsWith(configured.slice(1))) return Response.json({ ok: false, error: "origin_not_allowed" }, { status: 403, headers });
+          }
           const { data, error } = await supabaseAdmin.rpc("analytics_pro_collect", {
             p_site_key: siteKey,
             p_session_id: sessionId,
