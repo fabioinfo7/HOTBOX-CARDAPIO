@@ -7,7 +7,7 @@ function corsHeaders(origin: string | null) {
   const allowOrigin = ALLOWED_ORIGINS.includes("*") ? "*" : origin || "*";
   return {
     "Access-Control-Allow-Origin": allowOrigin,
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "content-type, x-analise-site-key",
     "Access-Control-Max-Age": "86400",
     Vary: "Origin",
@@ -29,9 +29,41 @@ function safeObject(value: unknown) {
   }
 }
 
+function trackerScript(siteKey: string) {
+  const key = JSON.stringify(siteKey);
+  return `(()=>{
+  const SITE_KEY=${key};
+  const ENDPOINT=${JSON.stringify("/api/public/analise/collect")};
+  const STORE_PREFIX="analise_pro_"+SITE_KEY+"_";
+  const id=(name)=>{try{let v=localStorage.getItem(STORE_PREFIX+name);if(!v){v=(crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2));localStorage.setItem(STORE_PREFIX+name,v)}return v}catch(_){return Date.now().toString(36)+Math.random().toString(36).slice(2)}};
+  const visitorId=id("visitor");
+  const sessionKey="session";
+  let sessionId;
+  try{sessionId=sessionStorage.getItem(STORE_PREFIX+sessionKey);if(!sessionId){sessionId=(crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2));sessionStorage.setItem(STORE_PREFIX+sessionKey,sessionId)}}catch(_){sessionId=visitorId+"_"+Date.now()}
+  const qs=new URLSearchParams(location.search);
+  const utm={source:qs.get("utm_source")||"",medium:qs.get("utm_medium")||"",campaign:qs.get("utm_campaign")||"",term:qs.get("utm_term")||"",content:qs.get("utm_content")||""};
+  const device={type:/Mobi|Android/i.test(navigator.userAgent)?"mobile":"desktop",language:navigator.language||"",screen_width:screen.width||0,screen_height:screen.height||0};
+  const send=(eventName,data={})=>{const body={site_key:SITE_KEY,session_id:sessionId,visitor_id:visitorId,event_name:eventName,page_url:location.href,page_path:location.pathname,page_title:document.title,event_data:data,utm,device};fetch(ENDPOINT,{method:"POST",headers:{"content-type":"application/json","x-analise-site-key":SITE_KEY},body:JSON.stringify(body),keepalive:true,credentials:"omit"}).catch(()=>{})};
+  window.AnalisePro=window.AnalisePro||{track:(name,data)=>send(String(name||"custom"),data||{})};
+  if(!window.__ANALISE_PRO_PAGE_VIEW_SENT__){window.__ANALISE_PRO_PAGE_VIEW_SENT__=true;send("page_view",{referrer:document.referrer||""})}
+  document.addEventListener("click",e=>{const el=e.target&&e.target.closest?e.target.closest("a,button,[data-analise-event]"):null;if(!el)return;const name=el.getAttribute("data-analise-event")||"click";send(name,{text:(el.innerText||el.getAttribute("aria-label")||"").slice(0,300),href:el.href||""})},{passive:true});
+})();`;
+}
+
 export const Route = createFileRoute("/api/public/analise/collect")({
   server: {
     handlers: {
+      GET: async ({ request }) => {
+        const url = new URL(request.url);
+        const siteKey = safeString(url.searchParams.get("site_key"), 160);
+        if (url.searchParams.get("format") !== "js" || !siteKey) {
+          return Response.json({ ok: false, error: "invalid_tracker_request" }, { status: 400, headers: corsHeaders(request.headers.get("origin")) });
+        }
+        return new Response(trackerScript(siteKey), {
+          status: 200,
+          headers: { ...corsHeaders(request.headers.get("origin")), "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-store" },
+        });
+      },
       OPTIONS: async ({ request }) => new Response(null, { status: 204, headers: corsHeaders(request.headers.get("origin")) }),
       POST: async ({ request }) => {
         const origin = request.headers.get("origin");
