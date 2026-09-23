@@ -750,6 +750,7 @@ const AuthenticatedRouteRouteChildren = {
 const AuthenticatedRouteRouteWithChildren = AuthenticatedRouteRoute._addFileChildren(AuthenticatedRouteRouteChildren)
 
 const rootRouteChildren = {
+  ApiPublicAnaliseCollectRoute: ApiPublicAnaliseCollectRoute,
   AdminLoginRoute: AdminLoginRoute,
   ApiPublicHooksSatisfactionAutoRoute: ApiPublicHooksSatisfactionAutoRoute,
   ApiPublicHooksSystemAlertsRoute: ApiPublicHooksSystemAlertsRoute,
