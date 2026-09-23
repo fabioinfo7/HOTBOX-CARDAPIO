@@ -1,4 +1,5 @@
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as AuthenticatedAnaliseRouteImport } from './routes/_authenticated/analise'
 import { Route as AuthenticatedEntregadorRouteImport } from './routes/_authenticated/entregador'
 import { Route as AuthenticatedLojaAnalyticsRouteImport } from './routes/_authenticated/loja.analytics'
 import { Route as AuthenticatedLojaAvaliacoesRouteImport } from './routes/_authenticated/loja.avaliacoes'
@@ -24,6 +25,7 @@ import { Route as AuthenticatedLojaRouteImport } from './routes/_authenticated/l
 import { Route as AuthenticatedLojaZonasEntregaRouteImport } from './routes/_authenticated/loja.zonas-entrega'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as AdminLoginRouteImport } from './routes/admin.login'
+import { Route as ApiPublicAnaliseCollectRouteImport } from './routes/api/public/analise.collect'
 import { Route as ApiPublicHooksSatisfactionAutoRouteImport } from './routes/api/public/hooks/satisfaction-auto'
 import { Route as ApiPublicHooksSystemAlertsRouteImport } from './routes/api/public/hooks/system-alerts'
 import { Route as ApiPublicAppmaxValidationRouteImport } from './routes/api/public/appmax.validation'
@@ -325,6 +327,14 @@ const PoliticaDePrivacidadeRoute = PoliticaDePrivacidadeRouteImport.update({
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/_authenticated/analise': {
+      id: '/_authenticated/analise'
+      path: '/analise'
+      fullPath: '/analise'
+      preLoaderRoute: typeof AuthenticatedAnaliseRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+
     '/_authenticated/entregador': {
       id: '/_authenticated/entregador'
       path: '/entregador'
@@ -500,6 +510,14 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminLoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/analise/collect': {
+      id: '/api/public/analise/collect'
+      path: '/api/public/analise/collect'
+      fullPath: '/api/public/analise/collect'
+      preLoaderRoute: typeof ApiPublicAnaliseCollectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+
     '/api/public/hooks/satisfaction-auto': {
       id: '/api/public/hooks/satisfaction-auto'
       path: '/api/public/hooks/satisfaction-auto'
@@ -725,6 +743,7 @@ const AuthenticatedLojaRouteChildren = {
 const AuthenticatedLojaRouteWithChildren = AuthenticatedLojaRoute._addFileChildren(AuthenticatedLojaRouteChildren)
 
 const AuthenticatedRouteRouteChildren = {
+  AuthenticatedAnaliseRoute: AuthenticatedAnaliseRoute,
   AuthenticatedEntregadorRoute: AuthenticatedEntregadorRoute,
   AuthenticatedLojaRoute: AuthenticatedLojaRouteWithChildren,
 }
