@@ -29,11 +29,12 @@ function safeObject(value: unknown) {
   }
 }
 
-function trackerScript(siteKey: string) {
+function trackerScript(siteKey: string, collectorEndpoint: string) {
   const key = JSON.stringify(siteKey);
+  const endpoint = JSON.stringify(collectorEndpoint);
   return `(()=>{
   const SITE_KEY=${key};
-  const ENDPOINT=${JSON.stringify("/api/public/analise/collect")};
+  const ENDPOINT=${endpoint};
   const STORE_PREFIX="analise_pro_"+SITE_KEY+"_";
   const id=(name)=>{try{let v=localStorage.getItem(STORE_PREFIX+name);if(!v){v=(crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2));localStorage.setItem(STORE_PREFIX+name,v)}return v}catch(_){return Date.now().toString(36)+Math.random().toString(36).slice(2)}};
   const visitorId=id("visitor");
@@ -43,7 +44,7 @@ function trackerScript(siteKey: string) {
   const qs=new URLSearchParams(location.search);
   const utm={source:qs.get("utm_source")||"",medium:qs.get("utm_medium")||"",campaign:qs.get("utm_campaign")||"",term:qs.get("utm_term")||"",content:qs.get("utm_content")||""};
   const device={type:/Mobi|Android/i.test(navigator.userAgent)?"mobile":"desktop",language:navigator.language||"",screen_width:screen.width||0,screen_height:screen.height||0};
-  const send=(eventName,data={})=>{const body={site_key:SITE_KEY,session_id:sessionId,visitor_id:visitorId,event_name:eventName,page_url:location.href,page_path:location.pathname,page_title:document.title,event_data:data,utm,device};fetch(ENDPOINT,{method:"POST",headers:{"content-type":"application/json","x-analise-site-key":SITE_KEY},body:JSON.stringify(body),keepalive:true,credentials:"omit"}).catch(()=>{})};
+  const send=(eventName,data={})=>{const body={site_key:SITE_KEY,session_id:sessionId,visitor_id:visitorId,event_name:eventName,page_url:location.href,page_path:location.pathname,page_title:document.title,event_data:data,utm,device};fetch(ENDPOINT,{method:"POST",headers:{"content-type":"application/json","x-analise-site-key":SITE_KEY},body:JSON.stringify(body),keepalive:true,credentials:"omit").then(r=>{if(!r.ok)throw new Error("collector_http_"+r.status)}).catch(()=>{})};
   window.AnalisePro=window.AnalisePro||{track:(name,data)=>send(String(name||"custom"),data||{})};
   if(!window.__ANALISE_PRO_PAGE_VIEW_SENT__){window.__ANALISE_PRO_PAGE_VIEW_SENT__=true;send("page_view",{referrer:document.referrer||""})}
   document.addEventListener("click",e=>{const el=e.target&&e.target.closest?e.target.closest("a,button,[data-analise-event]"):null;if(!el)return;const name=el.getAttribute("data-analise-event")||"click";send(name,{text:(el.innerText||el.getAttribute("aria-label")||"").slice(0,300),href:el.href||""})},{passive:true});
@@ -59,7 +60,8 @@ export const Route = createFileRoute("/api/public/analise/collect")({
         if (url.searchParams.get("format") !== "js" || !siteKey) {
           return Response.json({ ok: false, error: "invalid_tracker_request" }, { status: 400, headers: corsHeaders(request.headers.get("origin")) });
         }
-        return new Response(trackerScript(siteKey), {
+        const collectorEndpoint = new URL("/api/public/analise/collect", url.origin).toString();
+        return new Response(trackerScript(siteKey, collectorEndpoint), {
           status: 200,
           headers: { ...corsHeaders(request.headers.get("origin")), "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-store" },
         });
@@ -68,11 +70,9 @@ export const Route = createFileRoute("/api/public/analise/collect")({
       POST: async ({ request }) => {
         const origin = request.headers.get("origin");
         const headers = corsHeaders(origin);
-
         try {
           const length = Number(request.headers.get("content-length") || 0);
           if (length > MAX_BODY_BYTES) return Response.json({ ok: false, error: "payload_too_large" }, { status: 413, headers });
-
           const body = await request.json();
           const siteKey = safeString(body?.site_key, 160);
           const sessionId = safeString(body?.session_id, 160);
@@ -84,11 +84,7 @@ export const Route = createFileRoute("/api/public/analise/collect")({
           const eventData = safeObject(body?.event_data);
           const utm = safeObject(body?.utm);
           const device = safeObject(body?.device);
-
-          if (!siteKey || !sessionId || !visitorId) {
-            return Response.json({ ok: false, error: "missing_identity" }, { status: 400, headers });
-          }
-
+          if (!siteKey || !sessionId || !visitorId) return Response.json({ ok: false, error: "missing_identity" }, { status: 400, headers });
           const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
           const { data, error } = await supabaseAdmin.rpc("analytics_pro_collect", {
             p_site_key: siteKey,
@@ -103,12 +99,10 @@ export const Route = createFileRoute("/api/public/analise/collect")({
             p_device: device,
             p_at: new Date().toISOString(),
           });
-
           if (error) {
             console.error("[analise-pro] collector", error.message);
             return Response.json({ ok: false, error: "collector_failed" }, { status: 500, headers });
           }
-
           return Response.json(data || { ok: true }, { status: 200, headers });
         } catch (error) {
           console.error("[analise-pro] invalid request", error);
