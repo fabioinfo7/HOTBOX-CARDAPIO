@@ -571,6 +571,7 @@ function AdminLayout() {
     { to: "/loja/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { to: "/loja", label: "Pedidos", icon: ClipboardList, exact: true },
     { to: "/loja/chat", label: "Chat", icon: MessageCircle },
+    { to: "/analise", label: "Análise Pro", icon: BarChart3 },
   ];
 
   const nav_groups: { key: string; label: string; icon: typeof Pizza; items: typeof nav_pinned }[] = [
