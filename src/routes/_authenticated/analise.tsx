@@ -139,8 +139,7 @@ function AnalisePro() {
 
   const tracker = useMemo(() => {
     if (!selectedSite) return "";
-    const base = window.location.origin;
-    const src = base + "/api/public/analise/collect?format=js&site_key=" + encodeURIComponent(selectedSite.site_key);
+    const src = "https://hotbox.up.railway.app/api/public/analise/collect?format=js&site_key=" + encodeURIComponent(selectedSite.site_key);
     return '<script async src="' + src + '"></script>';
   }, [selectedSite]);
 
