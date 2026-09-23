@@ -1,142 +1,25 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  Outlet,
-  Link,
-  createRootRouteWithContext,
-  useRouter,
-  HeadContent,
-  Scripts,
-  type ErrorComponentProps,
-} from "@tanstack/react-router";
+import { Outlet, Link, createRootRouteWithContext, useRouter, useLocation, HeadContent, Scripts, type ErrorComponentProps } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
 import { Toaster } from "sonner";
 import { AnalyticsTracker } from "@/components/analytics-tracker";
 import { VisitorLocationPrompt } from "@/components/visitor-location-prompt";
 import appCss from "../styles.css?url";
 
-function reportAppError(error: unknown, context: Record<string, unknown> = {}) {
-  // Log local do erro de renderização — sem dependência de nenhum serviço externo.
-  console.error("[app-error-boundary]", error, context);
-}
-
-function NotFoundComponent() {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="max-w-md text-center">
-        <h1 className="text-7xl font-bold text-foreground">404</h1>
-        <p className="mt-4 text-lg font-semibold">Página não encontrada</p>
-        <Link
-          to="/"
-          className="mt-6 inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
-        >
-          Voltar ao início
-        </Link>
-      </div>
-    </div>
-  );
-}
-
-function ErrorComponent({ error, reset }: ErrorComponentProps) {
-  console.error(error);
-  const router = useRouter();
-  useEffect(() => {
-    reportAppError(error, { boundary: "tanstack_root_error_component" });
-  }, [error]);
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="max-w-md text-center">
-        <h1 className="text-xl font-semibold">Algo deu errado</h1>
-        <p className="mt-2 text-sm text-muted-foreground">Tente novamente ou volte ao início.</p>
-        <div className="mt-6 flex flex-wrap justify-center gap-2">
-          <button
-            onClick={() => {
-              router.invalidate();
-              reset();
-            }}
-            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
-          >
-            Tentar de novo
-          </button>
-          <a
-            href="/"
-            className="rounded-md border border-input bg-background px-4 py-2 text-sm font-medium"
-          >
-            Início
-          </a>
-        </div>
-      </div>
-    </div>
-  );
-}
+function reportAppError(error: unknown, context: Record<string, unknown> = {}) { console.error("[app-error-boundary]", error, context); }
+function NotFoundComponent() { return <div className="flex min-h-screen items-center justify-center bg-background px-4"><div className="max-w-md text-center"><h1 className="text-7xl font-bold text-foreground">404</h1><p className="mt-4 text-lg font-semibold">Página não encontrada</p><Link to="/" className="mt-6 inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">Voltar ao início</Link></div></div>; }
+function ErrorComponent({ error, reset }: ErrorComponentProps) { const router = useRouter(); useEffect(() => { reportAppError(error, { boundary: "tanstack_root_error_component" }); }, [error]); return <div className="flex min-h-screen items-center justify-center bg-background px-4"><div className="max-w-md text-center"><h1 className="text-xl font-semibold">Algo deu errado</h1><p className="mt-2 text-sm text-muted-foreground">Tente novamente ou volte ao início.</p><div className="mt-6 flex flex-wrap justify-center gap-2"><button onClick={() => { router.invalidate(); reset(); }} className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">Tentar de novo</button><a href="/" className="rounded-md border border-input bg-background px-4 py-2 text-sm font-medium">Início</a></div></div></div>; }
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   head: () => ({
     meta: [
-      { charSet: "utf-8" },
-      { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" },
-      { name: "theme-color", content: "#111111" },
-      { name: "mobile-web-app-capable", content: "yes" },
-      { name: "apple-mobile-web-app-capable", content: "yes" },
-      { name: "apple-mobile-web-app-status-bar-style", content: "black-translucent" },
-      { title: "HotBox Delivery — Batata recheada de verdade" },
-      {
-        name: "description",
-        content:
-          "Monte sua batata recheada HotBox, escolha adicionais e pague com Pix ou cartão. Delivery em Duque de Caxias, RJ.",
-      },
-      { property: "og:title", content: "HotBox Delivery — Batata recheada de verdade" },
-      {
-        property: "og:description",
-        content: "Batatas recheadas caprichadas, adicionais e pagamento seguro por Pix ou cartão.",
-      },
-      { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:title", content: "HotBox Delivery — Batata recheada de verdade" },
-      {
-        name: "twitter:description",
-        content: "Batatas recheadas caprichadas, adicionais e pagamento seguro por Pix ou cartão.",
-      },
-      // TODO: substituir pela URL do logo/banner do HotBox hospedado no domínio novo
-      // (a imagem antiga era um preview gerado automaticamente pelo Lovable).
+      { charSet: "utf-8" }, { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" }, { name: "theme-color", content: "#111111" }, { name: "mobile-web-app-capable", content: "yes" }, { name: "apple-mobile-web-app-capable", content: "yes" }, { name: "apple-mobile-web-app-status-bar-style", content: "black-translucent" }, { title: "HotBox Delivery — Batata recheada de verdade" }, { name: "description", content: "Monte sua batata recheada HotBox, escolha adicionais e pague com Pix ou cartão. Delivery em Duque de Caxias, RJ." }, { property: "og:title", content: "HotBox Delivery — Batata recheada de verdade" }, { property: "og:description", content: "Batatas recheadas caprichadas, adicionais e pagamento seguro por Pix ou cartão." }, { property: "og:type", content: "website" }, { name: "twitter:card", content: "summary_large_image" }, { name: "twitter:title", content: "HotBox Delivery — Batata recheada de verdade" }, { name: "twitter:description", content: "Batatas recheadas caprichadas, adicionais e pagamento seguro por Pix ou cartão." },
     ],
     links: [
-      { rel: "stylesheet", href: appCss },
-      { rel: "preconnect", href: "https://fonts.googleapis.com" },
-      { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
-      {
-        rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@600;700;800&display=swap",
-      },
+      { rel: "stylesheet", href: appCss }, { rel: "preconnect", href: "https://fonts.googleapis.com" }, { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" }, { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@600;700;800&display=swap" },
     ],
-  }),
-  shellComponent: RootShell,
-  component: RootComponent,
-  notFoundComponent: NotFoundComponent,
-  errorComponent: ErrorComponent,
+  }), shellComponent: RootShell, component: RootComponent, notFoundComponent: NotFoundComponent, errorComponent: ErrorComponent,
 });
-
-function RootShell({ children }: { children: ReactNode }) {
-  return (
-    <html lang="pt-BR">
-      <head>
-        <HeadContent />
-      </head>
-      <body>
-        {children}
-        <Scripts />
-      </body>
-    </html>
-  );
-}
-
-function RootComponent() {
-  const { queryClient } = Route.useRouteContext();
-  return (
-    <QueryClientProvider client={queryClient}>
-      <AnalyticsTracker />
-      <VisitorLocationPrompt />
-      <Outlet />
-      <Toaster position="top-right" richColors closeButton />
-    </QueryClientProvider>
-  );
-}
+function RootShell({ children }: { children: ReactNode }) { return <html lang="pt-BR"><head><HeadContent /></head><body>{children}<Scripts /></body></html>; }
+function AnaliseProShortcut() { const location = useLocation(); const visible = location.pathname === "/loja" || location.pathname.startsWith("/loja/"); if (!visible) return null; return <Link to="/analise" className="fixed bottom-5 left-5 z-[90] inline-flex items-center gap-2 rounded-full border border-cyan-300/30 bg-[#07111f] px-4 py-2.5 text-sm font-extrabold text-white shadow-xl shadow-cyan-950/30 transition hover:-translate-y-0.5 hover:bg-[#0b1c31]" title="Abrir Análise Pro"><span className="grid size-6 place-items-center rounded-full bg-cyan-400 text-[11px] font-black text-slate-950">A</span>Análise Pro</Link>; }
+function RootComponent() { const { queryClient } = Route.useRouteContext(); return <QueryClientProvider client={queryClient}><AnalyticsTracker /><VisitorLocationPrompt /><Outlet /><AnaliseProShortcut /><Toaster position="top-right" richColors closeButton /></QueryClientProvider>; }
