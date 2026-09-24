@@ -62,7 +62,24 @@ export const Route = createFileRoute("/api/public/analise/collect")({
         if (!siteKey) {
           return Response.json({ ok: false, error: "invalid_tracker_request" }, { status: 400, headers: corsHeaders(request.headers.get("origin")) });
         }
-        if (url.searchParams.get("format") !== "js") {\n          const sessionId = safeString(url.searchParams.get("session_id"), 160);\n          const visitorId = safeString(url.searchParams.get("visitor_id"), 160);\n          const eventName = safeString(url.searchParams.get("event_name"), 80) || "page_view";\n          const pageUrl = safeString(url.searchParams.get("page_url"), 4000);\n          const pagePath = safeString(url.searchParams.get("page_path"), 2000);\n          const pageTitle = safeString(url.searchParams.get("page_title"), 500);\n          let eventData = {}; let utm = {}; let device = {};\n          try { eventData = safeObject(JSON.parse(url.searchParams.get("event_data") || "{}")); } catch {}\n          try { utm = safeObject(JSON.parse(url.searchParams.get("utm") || "{}")); } catch {}\n          try { device = safeObject(JSON.parse(url.searchParams.get("device") || "{}")); } catch {}\n          if (!sessionId || !visitorId) return Response.json({ ok: false, error: "missing_identity" }, { status: 400, headers: corsHeaders(request.headers.get("origin")) });\n          const { supabaseAdmin } = await import("@/integrations/supabase/client.server");\n          const { data, error } = await supabaseAdmin.rpc("analytics_pro_collect", { p_site_key: siteKey, p_session_id: sessionId, p_visitor_id: visitorId, p_event_name: eventName, p_page_url: pageUrl || null, p_page_path: pagePath || null, p_page_title: pageTitle || null, p_event_data: eventData, p_utm: utm, p_device: device, p_at: new Date().toISOString() });\n          if (error) { console.error("[analise-pro] pixel collector", error.message); return Response.json({ ok: false, error: "collector_failed" }, { status: 500, headers: corsHeaders(request.headers.get("origin")) }); }\n          return new Response("ok", { status: 200, headers: { "Content-Type": "image/gif", "Cache-Control": "no-store" } });\n        }\n        const collectorEndpoint = new URL("/api/public/analise/collect", url.origin).toString();
+        if (url.searchParams.get("format") !== "js") {
+          const sessionId = safeString(url.searchParams.get("session_id"), 160);
+          const visitorId = safeString(url.searchParams.get("visitor_id"), 160);
+          const eventName = safeString(url.searchParams.get("event_name"), 80) || "page_view";
+          const pageUrl = safeString(url.searchParams.get("page_url"), 4000);
+          const pagePath = safeString(url.searchParams.get("page_path"), 2000);
+          const pageTitle = safeString(url.searchParams.get("page_title"), 500);
+          let eventData = {}; let utm = {}; let device = {};
+          try { eventData = safeObject(JSON.parse(url.searchParams.get("event_data") || "{}")); } catch {}
+          try { utm = safeObject(JSON.parse(url.searchParams.get("utm") || "{}")); } catch {}
+          try { device = safeObject(JSON.parse(url.searchParams.get("device") || "{}")); } catch {}
+          if (!sessionId || !visitorId) return Response.json({ ok: false, error: "missing_identity" }, { status: 400, headers: corsHeaders(request.headers.get("origin")) });
+          const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+          const { data, error } = await supabaseAdmin.rpc("analytics_pro_collect", { p_site_key: siteKey, p_session_id: sessionId, p_visitor_id: visitorId, p_event_name: eventName, p_page_url: pageUrl || null, p_page_path: pagePath || null, p_page_title: pageTitle || null, p_event_data: eventData, p_utm: utm, p_device: device, p_at: new Date().toISOString() });
+          if (error) { console.error("[analise-pro] pixel collector", error.message); return Response.json({ ok: false, error: "collector_failed" }, { status: 500, headers: corsHeaders(request.headers.get("origin")) }); }
+          return new Response("ok", { status: 200, headers: { "Content-Type": "image/gif", "Cache-Control": "no-store" } });
+        }
+        const collectorEndpoint = new URL("/api/public/analise/collect", url.origin).toString();
         return new Response(trackerScript(siteKey, collectorEndpoint), {
           status: 200,
           headers: { ...corsHeaders(request.headers.get("origin")), "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-store" },
