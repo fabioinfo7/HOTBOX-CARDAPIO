@@ -82,7 +82,7 @@ const getUrl=(b)=>{const u=new URL(E);for(const[k,v]of Object.entries(b))u.searc
 const send=(n,d={},urgent=false)=>{
  const b=payload(n,d);
  try{
-  if(urgent&&navigator.sendBeacon){
+  if(navigator.sendBeacon){
    const ok=navigator.sendBeacon(E,new Blob([JSON.stringify(b)],{type:"text/plain;charset=UTF-8"}));
    if(ok)return;
   }
