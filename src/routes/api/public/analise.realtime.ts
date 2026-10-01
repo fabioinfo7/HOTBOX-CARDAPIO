@@ -108,7 +108,6 @@ export const Route = createFileRoute("/api/public/analise/realtime")({
             .from("analytics_pro_sessions")
             .update({
               last_seen_at: now,
-              entry_path: pagePath,
             })
             .eq("id", sessionId)
             .eq("site_id", siteId)
