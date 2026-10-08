@@ -1155,12 +1155,12 @@ function ConfigPage() {
         </div>
         <div className="flex items-center justify-between gap-3 rounded-md border p-3">
           <div>
-            <Label>Atendimento automático (IA) ativo globalmente</Label>
+            <Label>Respostas automáticas da IA no chat</Label>
             <p className="mt-1 text-xs text-muted-foreground">
-              Desligue aqui se por algum motivo o robô parar de funcionar direito, ou se quiser assumir tudo na mão. Com
-              isso desligado, as mensagens continuam chegando normalmente no chat — só que a IA não responde mais
-              nenhuma conversa automaticamente, você quem responde. Pra pausar só um cliente específico sem afetar os
-              outros, use o interruptor dentro da própria conversa em <b>Chat</b>.
+              Controle somente as respostas automáticas da IA às mensagens recebidas. Desligado, o cliente continua
+              chegando normalmente no Chat e o atendente responde manualmente. <b>As funções de IA para analisar
+              conversas e gerar pedidos pelo botão “Gerar pedido com IA” continuam ativas.</b> Para assumir apenas
+              um cliente, use o interruptor dentro da própria conversa em <b>Chat</b>.
             </p>
           </div>
           <Switch
