@@ -1,0 +1,32 @@
+HOTBOX CARDAPIO - ARVORE RESUMIDA
+
+src
+src/assets
+src/assets/wallpapers
+src/components
+src/components/ui
+src/hooks
+src/integrations
+src/integrations/supabase
+src/lib
+src/routes
+src/routes/_authenticated
+src/routes/api
+src/styles
+
+ARQUIVOS CRITICOS:
+OK package.json
+OK preflight.mjs
+OK src/routes/index.tsx
+OK src/routes/_authenticated/loja.tsx
+OK src/routes/_authenticated/loja.config.tsx
+OK src/routes/_authenticated/loja.analytics.tsx
+OK src/routes/_authenticated/loja.fidelidade.tsx
+OK src/lib/analytics.ts
+OK src/lib/site-checkout.functions.ts
+OK src/lib/pagarme.functions.ts
+OK src/lib/efi.functions.ts
+OK src/components/pagarme-payment.tsx
+OK src/components/efi-payment.tsx
+OK src/styles/hotbox-admin.css
+OK src/routeTree.gen.ts
