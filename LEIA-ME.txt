@@ -1,0 +1,18 @@
+HOTBOX — CORREÇÃO DO RETORNO DO LOGIN GOOGLE
+
+PROBLEMA CORRIGIDO
+Depois que o cliente já validava o CEP, entrava no Clube HotBox e fazia login com Google, o OAuth recarregava a página e o estado do CEP voltava para "idle". Por isso a tela pedia CEP novamente.
+
+CORREÇÃO
+- A área de entrega já validada é salva somente na sessão atual da aba (sessionStorage).
+- Ao voltar do Google, o cardápio restaura CEP/bairro/endereço básico/taxa de entrega e entra direto no cardápio já logado.
+- O cliente NÃO precisa informar o CEP novamente após o login.
+- A validação não vira permanente: ao fechar a aba/sessão, uma nova visita pode pedir CEP novamente.
+- Ao usar a opção de trocar/redefinir a região, o estado salvo é apagado.
+- Login, fidelidade, InfinitePay, cupons e redirecionamento para iFood não foram alterados.
+
+ARQUIVO QUE PRECISA SER SUBSTITUÍDO
+src/routes/index.tsx
+
+NÃO PRECISA RODAR SQL.
+O arquivo customer-loyalty-club.tsx foi incluído apenas como referência da versão atual e não precisa ser substituído para esta correção.

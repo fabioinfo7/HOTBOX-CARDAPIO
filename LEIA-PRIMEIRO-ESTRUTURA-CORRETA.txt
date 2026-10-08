@@ -1,0 +1,77 @@
+HOTBOX CARDAPIO — ESTRUTURA FINAL CORRETA
+Data: 2026-09-13
+
+IMPORTANTE
+Este pacote ja esta com as pastas no lugar correto. NAO mova src/lib, src/routes,
+src/components ou src/styles para a raiz do repositorio.
+
+A raiz do GitHub deve mostrar, entre outros:
+- package.json
+- preflight.mjs
+- src/
+- public/
+- supabase/
+
+DENTRO DE src/ devem existir:
+- src/assets/
+- src/components/
+- src/hooks/
+- src/integrations/
+- src/lib/
+- src/routes/
+- src/styles/
+- src/routeTree.gen.ts
+
+NAO deve existir uma pasta lib/ na raiz.
+NAO deve existir uma pasta routes/ na raiz.
+
+ARQUIVOS CRITICOS CONFIRMADOS NESTE PACOTE
+- src/routes/index.tsx
+- src/routes/obrigado.tsx
+- src/routes/_authenticated/loja.tsx
+- src/routes/_authenticated/loja.config.tsx
+- src/routes/_authenticated/loja.analytics.tsx
+- src/routes/_authenticated/loja.fidelidade.tsx
+- src/routes/_authenticated/loja.financeiro-cardapio.tsx
+- src/routes/_authenticated/loja.reengajamento.tsx
+- src/lib/analytics.ts
+- src/lib/site-checkout.functions.ts
+- src/lib/loyalty.functions.ts
+- src/lib/pagarme.functions.ts
+- src/lib/efi.functions.ts
+- src/lib/sales-recovery.functions.ts
+- src/components/pagarme-payment.tsx
+- src/components/efi-payment.tsx
+- src/styles/hotbox-admin.css
+- src/routes/api/public/webhooks.mercadopago.ts
+- src/routes/api/public/webhooks.appmax.ts
+- src/routes/api/public/appmax.validation.ts
+- src/routes/api/public/webhooks.infinitepay.ts
+- src/routes/api/public/webhooks.pagarme.ts
+- src/routes/api/public/webhooks.efi.ts
+- src/routeTree.gen.ts
+
+MIGRATIONS RECENTES INCLUIDAS
+- supabase/migrations/20260913024000_sales_recovery_analytics.sql
+- supabase/migrations/20260913033000_pagarme_gateway_routing.sql
+- supabase/migrations/20260913043000_efi_gateway_routing.sql
+
+VALIDACOES EXECUTADAS NESTE PACOTE
+- node preflight.mjs: OK
+- 183 arquivos TS/TSX/JS/JSX verificados: 0 erros de sintaxe
+- 0 arquivos criticos ausentes
+- src/lib: 52 arquivos
+- src/routes: 55 arquivos
+- src/components: 65 arquivos
+
+OBSERVACAO
+O build Vite completo nao foi executado neste ambiente porque npm install excedeu
+o limite de tempo. O Railway fara o build final de producao.
+
+COMO SUBIR PELO SITE DO GITHUB
+1. Extraia o ZIP no computador.
+2. Abra a pasta HOTBOX-CARDAPIO-FINAL-CORRIGIDO.
+3. No GitHub, envie O CONTEUDO dessa pasta para a raiz do repositorio.
+4. Confirme antes do deploy que existe src/lib e src/routes no GitHub.
+5. Nao envie uma pasta HOTBOX-CARDAPIO-FINAL-CORRIGIDO dentro do repositorio;
+   package.json precisa continuar na raiz do repositorio.
