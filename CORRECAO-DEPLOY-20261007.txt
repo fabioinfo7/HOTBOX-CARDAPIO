@@ -1,0 +1,16 @@
+CORREÇÃO DE DEPLOY — HOTBOX CARDÁPIO
+
+Causa do erro:
+O TanStack Router encontrou duas declarações físicas para a mesma rota:
+  src/routes/api/public/analise/realtime.ts
+  src/routes/api/public/analise.realtime.ts
+
+Ambas declaravam:
+  /api/public/analise/realtime
+
+Correção aplicada:
+A duplicata src/routes/api/public/analise/realtime.ts foi removida.
+A implementação existente src/routes/api/public/analise.realtime.ts foi preservada.
+
+Os avisos sobre createServerFn().inputValidator() são apenas depreciações e não eram a causa do erro.
+O aviso NIXPACKS_PATH também não foi a causa do build failure.

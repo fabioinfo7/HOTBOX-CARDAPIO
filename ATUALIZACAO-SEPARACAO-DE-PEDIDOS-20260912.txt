@@ -1,0 +1,23 @@
+HOTBOX — CORREÇÃO DE SEPARAÇÃO DE PEDIDOS
+
+ALTERADO:
+- src/routes/api/public/webhooks.evolution.ts
+- src/lib/generate-order-from-chat.functions.ts
+
+REGRAS:
+- Pedido finalizado encerra a sessão comercial daquele pedido.
+- Novo pedido começa limpo.
+- Histórico anterior não é reutilizado para montar itens, endereço, valores ou pagamento.
+- Alteração de pedido ativo exige referência explícita ao pedido já criado.
+- Adicionais são consultados no cadastro real e têm preço somado ao item.
+- Taxa de entrega é somada ao total.
+- Resumo final contém dados completos e valores.
+
+VALIDAÇÕES EXECUTADAS:
+- preflight.mjs: OK
+- 169 arquivos TypeScript/TSX verificados sintaticamente: 0 erros
+
+NÃO FOI EXECUTADO:
+- build Vite completo
+- teste real de WhatsApp/Evolution em produção
+- criação real de pedido no banco de produção

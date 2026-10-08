@@ -1,0 +1,64 @@
+HOTBOX — TESTES OBRIGATÓRIOS DO DUPLO GATEWAY
+==============================================
+
+A. ANTES DE PRODUÇÃO
+1. Banco: execute a migration até aparecer sucesso/COMMIT.
+2. Deploy: copie todos os arquivos e espere o Railway ficar saudável.
+3. Abra Configurações > Pagamentos.
+4. Mantenha InfinitePay configurada.
+5. Cadastre Mercado Pago e deixe inicialmente Mercado Pago como ativo.
+
+B. PIX MERCADO PAGO
+1. Faça um pedido pequeno pelo cardápio.
+2. Confirme que Pix/cartão abre dentro da HotBox, sem redirecionar para outro checkout.
+3. Selecione Pix.
+4. Confirme que aparece QR Code e Pix Copia e Cola.
+5. Antes de pagar, confirme no admin que NÃO nasceu pedido operacional.
+6. Pague.
+7. Aguarde confirmação automática.
+8. Confirme que nasce UM ÚNICO pedido.
+9. Confirme WhatsApp de pagamento aprovado.
+10. Confirme em Recebimentos do Cardápio Digital: Pix + Mercado Pago + valor correto.
+11. Confirme que o Financeiro Geral recebeu a entrada normalmente.
+
+C. CARTÃO MERCADO PAGO
+1. Faça outro pedido pequeno.
+2. Selecione cartão e pague.
+3. Confirme que o pedido só aparece depois de aprovado.
+4. Confirme WhatsApp.
+5. Confirme Recebimentos: Cartão + Mercado Pago.
+6. Se o banco pedir 3DS, conclua a tela do banco e confirme que o pedido aparece só depois do status approved.
+
+D. RECUSA / DUPLICIDADE
+1. Em ambiente de teste do Mercado Pago, faça uma tentativa recusada.
+2. Confirme que NÃO é criado pedido.
+3. Tente novamente no mesmo checkout e confirme que o formulário permite nova tentativa.
+4. Dê dois cliques rápidos / repita a tentativa durante demora: deve continuar existindo no máximo uma cobrança por tentativa lógica e um único pedido final.
+
+E. TROCA PARA INFINITEPAY
+1. Com nenhum teste pendente, vá a Configurações > Pagamentos.
+2. Selecione InfinitePay e salve.
+3. Abra uma NOVA aba anônima e crie novo pedido.
+4. Confirme que agora o checkout segue para InfinitePay.
+5. Pague e confirme que o pedido é criado uma única vez.
+6. Em Recebimentos, filtre Provedor = InfinitePay.
+
+F. PAGAMENTO EM ANDAMENTO DURANTE TROCA
+1. Volte Mercado Pago para ativo.
+2. Gere um Pix Mercado Pago e NÃO pague ainda.
+3. Em outra aba administrativa, mude o provedor ativo para InfinitePay.
+4. Volte ao Pix já gerado e pague.
+5. Esse pagamento antigo deve continuar sendo confirmado pelo Mercado Pago e criar o pedido normalmente.
+6. Um NOVO checkout deve usar InfinitePay.
+Este teste comprova que a troca manual não abandona transações já iniciadas.
+
+G. CLUBE HOTBOX
+1. Entre com Google.
+2. Confirme que o login volta direto ao cardápio sem pedir CEP novamente.
+3. Use um cupom/recompensa de fidelidade em pedido de teste.
+4. Confirme desconto correto, entrega cobrada e pedido criado somente após pagamento.
+5. Se cancelar antes de pagar, confirme que a recompensa volta a ficar disponível.
+
+H. RESULTADO ESPERADO
+Somente depois de todos os itens acima estarem corretos, mantenha Mercado Pago ativo para clientes reais.
+InfinitePay fica configurada como contingência e pode ser ativada manualmente em poucos segundos.
