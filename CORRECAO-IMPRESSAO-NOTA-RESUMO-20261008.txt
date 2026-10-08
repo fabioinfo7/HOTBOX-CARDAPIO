@@ -1,0 +1,14 @@
+CORREÇÃO — IMPRESSÃO DA NOTA PELO RESUMO DO PEDIDO
+Data: 08/10/2026
+
+Problema corrigido:
+- O botão amarelo "Imprimir nota" no Resumo do Pedido podia não imprimir novamente quando o mesmo pedido já havia sido enviado para impressão automática.
+
+Correção aplicada:
+- A solicitação feita pelo botão manual agora é marcada como manual/forçada.
+- Impressões manuais não são bloqueadas pelo controle de duplicidade usado apenas para a impressão automática/realtime.
+- O botão amarelo continua usando o mesmo comprovante térmico de 80mm do sistema.
+
+Importante sobre a janela de impressão:
+- Em um navegador comum (Chrome/Edge), JavaScript não tem permissão para imprimir silenciosamente nem escolher automaticamente uma impressora do sistema. window.print() abre a interface/preview de impressão do navegador.
+- Para impressão silenciosa/automática diretamente na impressora térmica, o Chrome da máquina da loja precisa ser executado em modo kiosk/gerenciado ou o sistema precisa de um serviço local de impressão.

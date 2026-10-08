@@ -12,7 +12,10 @@ export const AUTO_PRINT_EVENT = "hb:print-order";
  * gatilhos automáticos por aceite/realtime.
  */
 export function requestAutoPrint(orderId: string) {
-  window.dispatchEvent(new CustomEvent(AUTO_PRINT_EVENT, { detail: { orderId, force: true } }));
+  // Solicitação manual: deve sempre imprimir, mesmo que este pedido já tenha
+  // sido impresso automaticamente antes. O dedupe só vale para gatilhos
+  // automáticos/realtime.
+  window.dispatchEvent(new CustomEvent(AUTO_PRINT_EVENT, { detail: { orderId, force: true, manual: true } }));
 }
 
 const SESSION_NOTICE_KEY = "hb_auto_print_notice_shown";
@@ -23,8 +26,10 @@ export function AutoPrintReceipt() {
   const [businessHoursText, setBusinessHoursText] = useState<string | null>(null);
   const printedIds = useRef<Set<string>>(new Set());
 
-  async function printOrder(orderId: string) {
-    if (printedIds.current.has(orderId)) return;
+  async function printOrder(orderId: string, manual = false) {
+    // Uma impressão manual solicitada pelo botão "Imprimir nota" nunca deve
+    // ser bloqueada pelo controle de duplicidade da impressão automática.
+    if (!manual && printedIds.current.has(orderId)) return;
     const { data: order, error: orderError } = await supabase.from("orders").select("*").eq("id", orderId).maybeSingle();
     if (orderError) {
       toast.error(`Não foi possível carregar o pedido para impressão: ${orderError.message}`);
@@ -71,8 +76,9 @@ export function AutoPrintReceipt() {
       const detail = (e as CustomEvent).detail || {};
       const orderId = detail.orderId as string | undefined;
       const force = detail.force === true;
+      const manual = detail.manual === true;
       if (!orderId || (!enabled && !force)) return;
-      void printOrder(orderId);
+      void printOrder(orderId, manual);
     }
     window.addEventListener(AUTO_PRINT_EVENT, onPrintRequest);
     return () => window.removeEventListener(AUTO_PRINT_EVENT, onPrintRequest);
