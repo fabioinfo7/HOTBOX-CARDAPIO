@@ -5,6 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { formatPhone, formatDateTime, ORDER_STATUS_LABEL, orderDisplayRef } from "@/lib/formatters";
 import { sendChatText, sendChatMedia, broadcastMessage, sendMarketingEvolutionBatch, deleteConversation, deleteMessage, sendWindowBroadcast } from "@/lib/chat.functions";
 import { generateOrderFromConversation } from "@/lib/generate-order-from-chat.functions";
+import { verifyConversationDeliveryFeeFn } from "@/lib/verify-conversation-delivery-fee.functions";
 import { sendSatisfactionRequestFn } from "@/lib/satisfaction.functions";
 import { sendOrderArrivalNoticeFn } from "@/lib/order-notifications.functions";
 import { EmojiPicker } from "@/components/emoji-picker";
@@ -178,6 +179,8 @@ function ChatPage() {
   const [dialogMode, setDialogMode] = useState<DialogMode>(null);
   const [recording, setRecording] = useState(false);
   const [generatingOrder, setGeneratingOrder] = useState(false);
+  const [checkingFreight, setCheckingFreight] = useState(false);
+  const [freightReview, setFreightReview] = useState<any | null>(null);
   const [generateReview, setGenerateReview] = useState<GenerateOrderReview | null>(null);
   const [generateManual, setGenerateManual] = useState<Record<string, string>>({});
   const [showWindowBroadcast, setShowWindowBroadcast] = useState(false);
@@ -663,6 +666,25 @@ function ChatPage() {
     await runGenerateOrder();
   }
 
+  async function handleVerifyDeliveryFee() {
+    if (!selected || checkingFreight) return;
+    setCheckingFreight(true);
+    try {
+      const result: any = await verifyConversationDeliveryFeeFn({
+        data: { conversationId: selected.id },
+      });
+      if (result?.error) {
+        toast.error(result.error);
+        return;
+      }
+      setFreightReview(result);
+    } catch (err: any) {
+      toast.error(String(err?.message ?? err));
+    } finally {
+      setCheckingFreight(false);
+    }
+  }
+
   async function claimOrderAndConversation(order: ActiveOrder, conversationId?: string | null) {
     if (!currentOperator) return;
     try {
@@ -739,8 +761,30 @@ function ChatPage() {
   }, [filtered]);
 
   return (
-    <div className="hotbox-chat-shell flex min-h-0 min-w-0 overflow-hidden md:rounded-[28px] md:border md:border-black/10 md:bg-card md:shadow-xl">
-      {/* ============ SIDEBAR ============ */}
+    <div className="hotbox-chat-shell flex min-h-0 min-w-0 flex-col overflow-hidden md:rounded-[28px] md:border md:border-black/10 md:bg-card md:shadow-xl">
+      <OpenOrdersBar
+        orders={activeOrders}
+        now={timerNow}
+        onOpenChat={openChatFromOrder}
+        onOpenOrder={(id) => navigate({ to: "/loja/pedido/$id", params: { id }, search: { mode: "edit" } })}
+        onCancelOrder={async (id) => {
+          if (!window.confirm("Cancelar este pedido?")) return;
+          const { error } = await supabase.from("orders").update({ status: "cancelled", cancelled_at: new Date().toISOString() }).eq("id", id);
+          if (error) toast.error("Não foi possível cancelar o pedido.");
+          else { toast.success("Pedido cancelado"); loadConversations(); }
+        }}
+        onUpdateStatus={async (id, status) => {
+          const patch: Record<string, string> = { status };
+          const now = new Date().toISOString();
+          if (status === "ready_pickup") patch.ready_at = now;
+          if (status === "out_for_delivery") patch.out_for_delivery_at = now;
+          const { error } = await supabase.from("orders").update(patch).eq("id", id);
+          if (error) toast.error("Não foi possível atualizar o pedido.");
+          else { toast.success(`Status atualizado: ${ORDER_STATUS_LABEL[status] || status}`); loadConversations(); }
+        }}
+      />
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+      {/* ============ SIDEBAR ============ */
       <div
         className={`hotbox-chat-list ${selectedId ? "hidden md:flex" : "flex"} min-w-0 w-full shrink-0 flex-col border-r bg-white md:w-80`}
       >
@@ -1010,6 +1054,17 @@ function ChatPage() {
                 <Button
                   variant="outline"
                   size="sm"
+                  className="gap-1.5 border-emerald-300/40 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/20 hover:text-white"
+                  disabled={checkingFreight}
+                  onClick={handleVerifyDeliveryFee}
+                  title="Analisa o endereço da conversa e verifica a taxa cadastrada para o bairro"
+                >
+                  {checkingFreight ? <Loader2 className="size-3.5 animate-spin" /> : <MapPin className="size-3.5" />}
+                  <span className="hidden xl:inline">Verificar taxa</span><span className="xl:hidden">Taxa</span>
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
                   className="gap-1.5 border-white/30 bg-white/10 text-white hover:bg-white/20 hover:text-white"
                   disabled={generatingOrder}
                   onClick={handleGenerateOrder}
@@ -1266,6 +1321,36 @@ function ChatPage() {
           />
         )}
       </div>
+      </div>
+
+      <Dialog open={!!freightReview} onOpenChange={(open) => !open && setFreightReview(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Verificação da taxa de entrega</DialogTitle>
+          </DialogHeader>
+          {freightReview && (
+            <div className="space-y-3">
+              <div className="rounded-xl border bg-muted/30 p-3 text-sm">
+                <p><span className="font-semibold">Endereço identificado:</span> {freightReview.cleanAddress || "Não identificado"}</p>
+                <p className="mt-1"><span className="font-semibold">Bairro:</span> {freightReview.neighborhood || "Não identificado"}</p>
+                {freightReview.pricingMode && <p className="mt-1 text-xs text-muted-foreground">Cálculo: {freightReview.pricingMode === "neighborhood" ? "taxa cadastrada por bairro" : "faixa de distância cadastrada"}</p>}
+              </div>
+              {freightReview.outOfArea ? (
+                <div className="rounded-xl border border-red-300 bg-red-50 p-4 text-center text-red-800">
+                  <p className="font-black">Fora da área de entrega</p>
+                  <p className="mt-1 text-xs">O bairro/endereço identificado não está liberado no cadastro atual.</p>
+                </div>
+              ) : (
+                <div className="rounded-xl border-2 border-emerald-400 bg-emerald-50 p-4 text-center">
+                  <p className="text-xs font-bold uppercase tracking-wide text-emerald-800">Taxa de entrega</p>
+                  <p className="mt-1 text-3xl font-black text-emerald-900">R$ {Number(freightReview.fee || 0).toFixed(2).replace(".", ",")}</p>
+                  {freightReview.distanceKm != null && <p className="mt-1 text-xs text-emerald-800">Distância calculada: {Number(freightReview.distanceKm).toFixed(1).replace(".", ",")} km</p>}
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!generateReview} onOpenChange={(open) => !open && setGenerateReview(null)}>
         <DialogContent className="max-w-2xl">
@@ -2203,6 +2288,77 @@ type QuickReply = {
   sort_order: number;
   image_url: string | null;
 };
+
+function OpenOrdersBar({
+  orders,
+  now,
+  onOpenChat,
+  onOpenOrder,
+  onCancelOrder,
+  onUpdateStatus,
+}: {
+  orders: ActiveOrder[];
+  now: number;
+  onOpenChat: (order: ActiveOrder) => void;
+  onOpenOrder: (id: string) => void;
+  onCancelOrder: (id: string) => void;
+  onUpdateStatus: (id: string, status: string) => void;
+}) {
+  const timerFor = (createdAt: string) => {
+    const elapsed = Math.max(0, Math.floor((now - new Date(createdAt).getTime()) / 1000));
+    const h = Math.floor(elapsed / 3600);
+    const m = Math.floor((elapsed % 3600) / 60);
+    const sec = elapsed % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  };
+  const statusClasses: Record<string, string> = {
+    pending_review: "border-amber-400 bg-amber-50",
+    pending: "border-sky-400 bg-sky-50",
+    preparing: "border-orange-400 bg-orange-50",
+    ready_pickup: "border-emerald-400 bg-emerald-50",
+    out_for_delivery: "border-blue-400 bg-blue-50",
+  };
+  return (
+    <div className="shrink-0 border-b-2 border-black/10 bg-zinc-950 px-3 py-2.5 sm:px-4">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-white">
+          <Package className="size-4 text-[#ffd400]" />
+          <span className="text-xs font-black uppercase tracking-wide">Pedidos em aberto</span>
+          <span className="rounded-full bg-[#ffd400] px-2 py-0.5 text-[10px] font-black text-black">{orders.length}</span>
+        </div>
+        <span className="text-[10px] font-medium text-white/50">Fica visível mesmo trocando de conversa</span>
+      </div>
+      {orders.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-white/15 bg-white/5 px-3 py-2 text-[11px] text-white/50">Nenhum pedido em aberto no momento.</div>
+      ) : (
+        <div className="grid max-h-[132px] grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2 xl:grid-cols-3">
+          {orders.map((order) => (
+            <div key={order.id} className={`min-h-[82px] rounded-xl border-2 px-3 py-2.5 shadow-sm ${statusClasses[order.status] || "border-white/20 bg-white"}`}>
+              <div className="flex items-start justify-between gap-2">
+                <button type="button" onClick={() => onOpenChat(order)} className="min-w-0 text-left">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-black">{orderDisplayRef(order)}</span>
+                    <span className="truncate text-[11px] font-bold">{order.customer_name || formatPhone(order.customer_phone)}</span>
+                  </div>
+                  <p className="mt-0.5 truncate text-[10px] text-black/60">{[order.address_street, order.address_number, order.address_neighborhood].filter(Boolean).join(", ") || "Retirada / endereço não informado"}</p>
+                </button>
+                <span className="shrink-0 rounded-lg bg-black px-2 py-1 font-mono text-[11px] font-black text-white">{timerFor(order.created_at)}</span>
+              </div>
+              <div className="mt-2 flex items-center gap-1.5">
+                <select value={order.status} onChange={(e) => onUpdateStatus(order.id, e.target.value)} className="h-7 min-w-0 flex-1 rounded-md border border-black/15 bg-white/80 px-2 text-[10px] font-bold outline-none" title="Alterar status">
+                  {Object.entries(ORDER_STATUS_LABEL).filter(([key]) => !["delivered", "cancelled", "failed"].includes(key)).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+                </select>
+                <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-[10px] font-bold" onClick={() => onOpenChat(order)} title="Abrir chat do pedido"><MessageCircle className="size-3.5" /></Button>
+                <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-[10px] font-bold" onClick={() => onOpenOrder(order.id)} title="Abrir pedido para editar"><Pencil className="size-3.5" /></Button>
+                <Button type="button" size="sm" variant="outline" className="h-7 border-red-300 px-2 text-[10px] font-bold text-red-700 hover:bg-red-50" onClick={() => onCancelOrder(order.id)} title="Cancelar pedido"><X className="size-3.5" /></Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ActiveOrdersPanel({ orders, deliveryMinutes, now, onUpdateStatus, onCancelOrder, onOpenOrder, onOpenChat, unreadPhones, conversations, orderItemsByOrder, searchQuery, selectedPhone, currentOperator }: {
   orders: ActiveOrder[]; deliveryMinutes: number; now: number;
