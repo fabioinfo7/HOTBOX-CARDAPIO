@@ -1,3 +1,0 @@
-HOTBOX BUILD 20260905-SITE-CHECKOUT-SERVER-SPLIT
-site-checkout.functions.ts sem whatsapp-send.server
-notificacoes movidas para src/lib/site-checkout-notify.server.ts
