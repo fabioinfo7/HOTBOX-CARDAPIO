@@ -461,38 +461,90 @@ function AdminLayout() {
     return () => window.removeEventListener(WIDE_MODE_EVENT, handler);
   }, []);
 
-  // som alto sempre que chegar mensagem nova de cliente (qualquer tela da loja)
+  // ALERTA GLOBAL DE MENSAGENS: fica ativo em todas as telas do painel,
+  // mesmo quando a tela/conversa do Chat não está aberta. O Realtime escuta
+  // todos os INSERTs (sem filtro no servidor, que podia descartar eventos);
+  // um polling curto serve de contingência caso a conexão Realtime caia.
   useEffect(() => {
+    let disposed = false;
+    let lastPollAt = Date.now();
+    const seenMessageIds = new Set<string>();
+
+    const isIncoming = (row: any) => {
+      const direction = String(row?.direction || "").toLowerCase();
+      const sender = String(row?.sender_type || "").toLowerCase();
+      return direction === "in" || direction === "incoming" || direction === "received" ||
+        sender === "customer";
+    };
+
+    const announceIncoming = (row: any) => {
+      if (disposed || !row || !isIncoming(row)) return;
+      const id = String(row.id || "");
+      if (id && seenMessageIds.has(id)) return;
+      if (id) {
+        seenMessageIds.add(id);
+        // Mantém a deduplicação limitada para não crescer indefinidamente.
+        if (seenMessageIds.size > 500) {
+          const oldest = seenMessageIds.values().next().value;
+          if (oldest) seenMessageIds.delete(oldest);
+        }
+      }
+      playIncomingBeep();
+    };
+
     const ch = supabase
-      .channel("layout-incoming-msg-beep")
+      .channel("layout-incoming-msg-beep-global-v2")
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "whatsapp_messages", filter: "direction=eq.in" },
-        () => playIncomingBeep(),
+        { event: "INSERT", schema: "public", table: "whatsapp_messages" },
+        (payload: any) => announceIncoming(payload?.new),
       )
       .subscribe();
-    // desbloqueia o AudioContext no 1º gesto do usuário (política do navegador)
+
+    // Contingência: consulta mensagens recentes com pequena sobreposição
+    // temporal para tolerar atrasos de propagação; IDs impedem bipes duplicados.
+    const pollIncomingMessages = async () => {
+      if (disposed) return;
+      const since = new Date(Math.max(0, lastPollAt - 5000)).toISOString();
+      const now = Date.now();
+      lastPollAt = now;
+      try {
+        const { data, error } = await (supabase as any)
+          .from("whatsapp_messages")
+          .select("id,direction,sender_type,created_at")
+          .gte("created_at", since)
+          .order("created_at", { ascending: true })
+          .limit(200);
+        if (disposed || error || !data) return;
+        for (const row of data) announceIncoming(row);
+      } catch {
+        // Falha de polling não pode derrubar o painel; o Realtime continua ativo.
+      }
+    };
+
+    const pollTimer = window.setInterval(() => void pollIncomingMessages(), 3000);
+
+    // Áudio só pode ser liberado após gesto do usuário conforme a política
+    // do navegador. Reaproveita o contexto global, sem criar contextos em loop.
     const unlock = () => {
       try {
         const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
         if (Ctx) {
           __audioCtx ||= new Ctx();
-          __audioCtx?.resume().catch(() => {});
+          if (__audioCtx?.state === "suspended") __audioCtx.resume().catch(() => {});
         }
       } catch {
         /* ignore */
       }
-      // Desbloqueia também o AudioContext do alarme sintetizado de pedidos
-      try {
-        const Ctx2 = (window as any).AudioContext || (window as any).webkitAudioContext;
-        if (Ctx2) { const tmp = new Ctx2(); tmp.resume().catch(() => {}); }
-      } catch { /* ignore */ }
       window.removeEventListener("pointerdown", unlock);
       window.removeEventListener("keydown", unlock);
     };
     window.addEventListener("pointerdown", unlock);
     window.addEventListener("keydown", unlock);
+
     return () => {
+      disposed = true;
+      window.clearInterval(pollTimer);
       supabase.removeChannel(ch);
       window.removeEventListener("pointerdown", unlock);
       window.removeEventListener("keydown", unlock);
