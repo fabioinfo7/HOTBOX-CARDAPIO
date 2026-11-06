@@ -34,6 +34,7 @@ import { geocodeStoreAddressFn } from "@/lib/geocode.functions";
 import { wipeDataFn, type WipeCategory } from "@/lib/wipe-data.functions";
 import { runPaymentDiagnosticsFn } from "@/lib/payment-diagnostics.functions";
 import { testAlertFn } from "@/lib/test-alert.functions";
+import { testEvolutionConnectionFn } from "@/lib/evolution-diagnostics.functions";
 import { usePopulateZonas } from "@/lib/use-populate-zonas";
 import wallpaperTeal from "@/assets/wallpapers/wallpaper-teal.jpg";
 import wallpaperBeige from "@/assets/wallpapers/wallpaper-beige.jpg";
@@ -125,6 +126,8 @@ function ConfigPage() {
     null,
   );
   const [testingAlert, setTestingAlert] = useState(false);
+  const [testingEvolution, setTestingEvolution] = useState(false);
+  const [evolutionTestResult, setEvolutionTestResult] = useState<any>(null);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
@@ -156,6 +159,23 @@ function ConfigPage() {
       toast.error(err.message ?? "Falha ao testar alerta");
     } finally {
       setTestingAlert(false);
+    }
+  }
+
+  async function testEvolutionConnection() {
+    setTestingEvolution(true);
+    setEvolutionTestResult(null);
+    try {
+      const result = await testEvolutionConnectionFn();
+      setEvolutionTestResult(result);
+      if (result.ok) toast.success("Evolution API conectada e instância online.");
+      else toast.error(result.error || "A conexão com a Evolution não passou no teste.");
+    } catch (err: any) {
+      const message = err?.message || "Falha ao executar o teste da Evolution.";
+      setEvolutionTestResult({ ok: false, apiOk: false, instanceOk: false, error: message });
+      toast.error(message);
+    } finally {
+      setTestingEvolution(false);
     }
   }
 
@@ -1214,6 +1234,22 @@ function ConfigPage() {
             onChange={(e) => setC({ ...c, evolution_api_token: e.target.value })}
           />
         </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" onClick={testEvolutionConnection} disabled={testingEvolution}>
+            <RefreshCw className={`size-4 ${testingEvolution ? "animate-spin" : ""}`} />
+            {testingEvolution ? "Testando conexão..." : "Testar conexão da Evolution"}
+          </Button>
+          <span className="text-xs text-muted-foreground">Salve as configurações antes de testar. O teste não envia mensagem.</span>
+        </div>
+        {evolutionTestResult && (
+          <div className={`rounded-lg border p-3 text-sm ${evolutionTestResult.ok ? "border-emerald-300 bg-emerald-50 text-emerald-900" : "border-amber-300 bg-amber-50 text-amber-950"}`}>
+            <p className="font-semibold">{evolutionTestResult.ok ? "Conexão confirmada" : "Teste não concluído"}</p>
+            <p className="mt-1 text-xs">API: {evolutionTestResult.apiOk ? "respondendo" : "sem resposta"} · Instância: {evolutionTestResult.instanceOk ? "conectada" : "não conectada"}</p>
+            {evolutionTestResult.state && <p className="mt-1 text-xs">Estado informado: {evolutionTestResult.state}</p>}
+            {evolutionTestResult.error && <p className="mt-1 text-xs">{evolutionTestResult.error}</p>}
+            <p className="mt-2 text-xs">Este teste verifica somente a conexão de saída. Ele não testa o recebimento de mensagens nem corrige o webhook.</p>
+          </div>
+        )}
       </Card>
 
       <Card className="space-y-3 p-5" style={tabStyle("integracoes")}>
