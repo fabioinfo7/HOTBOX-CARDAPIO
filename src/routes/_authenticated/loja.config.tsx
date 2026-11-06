@@ -1239,15 +1239,29 @@ function ConfigPage() {
             <RefreshCw className={`size-4 ${testingEvolution ? "animate-spin" : ""}`} />
             {testingEvolution ? "Testando conexão..." : "Testar conexão da Evolution"}
           </Button>
-          <span className="text-xs text-muted-foreground">Salve as configurações antes de testar. O teste não envia mensagem.</span>
+          <span className="text-xs text-muted-foreground">Salve antes de testar. Verifica API, webhook, evento, banco e rota pública; não envia mensagem a clientes.</span>
         </div>
         {evolutionTestResult && (
           <div className={`rounded-lg border p-3 text-sm ${evolutionTestResult.ok ? "border-emerald-300 bg-emerald-50 text-emerald-900" : "border-amber-300 bg-amber-50 text-amber-950"}`}>
-            <p className="font-semibold">{evolutionTestResult.ok ? "Conexão confirmada" : "Teste não concluído"}</p>
-            <p className="mt-1 text-xs">API: {evolutionTestResult.apiOk ? "respondendo" : "sem resposta"} · Instância: {evolutionTestResult.instanceOk ? "conectada" : "não conectada"}</p>
-            {evolutionTestResult.state && <p className="mt-1 text-xs">Estado informado: {evolutionTestResult.state}</p>}
+            <p className="font-semibold">{evolutionTestResult.ok ? "Diagnóstico concluído sem falhas" : "Diagnóstico encontrou pontos de atenção"}</p>
+            <p className="mt-1 text-xs">API: {evolutionTestResult.apiOk ? "respondendo" : "sem resposta"} · Instância: {evolutionTestResult.instanceOk ? "conectada" : "não confirmada"}</p>
             {evolutionTestResult.error && <p className="mt-1 text-xs">{evolutionTestResult.error}</p>}
-            <p className="mt-2 text-xs">Este teste verifica somente a conexão de saída. Ele não testa o recebimento de mensagens nem corrige o webhook.</p>
+            {Array.isArray(evolutionTestResult.checks) && (
+              <div className="mt-3 space-y-2">
+                {evolutionTestResult.checks.map((check: any) => (
+                  <div key={check.id} className="flex items-start gap-2 border-t border-current/10 pt-2">
+                    <span className={check.ok ? "mt-0.5 text-emerald-600" : check.level === "warning" ? "mt-0.5 text-amber-600" : "mt-0.5 text-red-600"}>
+                      {check.ok ? "✓" : check.level === "warning" ? "!" : "✕"}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="font-medium">{check.label}</p>
+                      <p className="text-xs opacity-90">{check.detail}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="mt-3 text-xs">O teste não envia mensagens a clientes nem altera configurações. O POST sintético usa fromMe=true e deve ser ignorado pelo webhook sem criar conversa.</p>
           </div>
         )}
       </Card>
