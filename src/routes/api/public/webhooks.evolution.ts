@@ -7733,6 +7733,43 @@ export async function handleIncomingMessage(
       external_id: externalId,
     });
 
+    // MODO MANUAL: a mensagem já foi salva no histórico. Não execute o restante
+    // do pipeline de IA/ferramentas quando a conversa estiver pausada ou o
+    // atendimento automático estiver desligado globalmente. Isso mantém o
+    // recebimento independente da IA e evita que uma falha posterior no fluxo
+    // automático transforme uma mensagem manual válida em HTTP 500.
+    const { data: manualModeConfig, error: manualModeConfigError } = await supabaseAdmin
+      .from("store_config")
+      .select("bot_global_active")
+      .maybeSingle();
+    const manualOnly =
+      conversation.bot_paused === true ||
+      manualModeConfigError ||
+      manualModeConfig?.bot_global_active === false;
+
+    if (manualOnly) {
+      const { error: markManualError } = await supabaseAdmin
+        .from("whatsapp_messages")
+        .update({ ai_processed_at: new Date().toISOString() })
+        .eq("conversation_id", conversation.id)
+        .eq("direction", "in")
+        .is("ai_processed_at", null)
+        .gte("created_at", new Date(Date.now() - 5000).toISOString());
+      if (markManualError) {
+        console.warn("[evolution webhook] mensagem recebida em modo manual; não foi possível marcar como concluída:", markManualError.message);
+      }
+      console.info("[evolution webhook] mensagem recebida e salva para atendimento manual", {
+        conversationId: conversation.id,
+        phoneSuffix: phone.slice(-4),
+        reason: conversation.bot_paused === true
+          ? "conversation_paused"
+          : manualModeConfigError
+            ? "manual_mode_config_unavailable"
+            : "bot_globally_off",
+      });
+      return Response.json({ ok: true, action: "manual_message_logged" });
+    }
+
     // Debounce mínimo: agrupa apenas mensagens praticamente simultâneas sem
     // fazer o cliente esperar enquanto o atendente "digita".
     await new Promise((r) => setTimeout(r, 150));
